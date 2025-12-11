@@ -68,19 +68,19 @@ pub fn merge_branch<P: AsRef<Path>>(
 pub fn detect_conflicts<P: AsRef<Path>>(repo_path: P) -> Result<Vec<String>, git2::Error> {
     let repo = Repository::open(repo_path)?;
     let mut conflicts = Vec::new();
-    if let Ok(index) = repo.index() {
-        if index.has_conflicts() {
-            for conflict in index.conflicts()? {
-                if let Ok(conflict) = conflict {
-                    if let Some(name) = conflict
-                        .our
-                        .as_ref()
-                        .or(conflict.their.as_ref())
-                        .or(conflict.ancestor.as_ref())
-                        .and_then(|entry| std::str::from_utf8(&entry.path).ok())
-                    {
-                        conflicts.push(name.to_string());
-                    }
+    if let Ok(index) = repo.index()
+        && index.has_conflicts()
+    {
+        for conflict in index.conflicts()? {
+            if let Ok(conflict) = conflict {
+                if let Some(name) = conflict
+                    .our
+                    .as_ref()
+                    .or(conflict.their.as_ref())
+                    .or(conflict.ancestor.as_ref())
+                    .and_then(|entry| std::str::from_utf8(&entry.path).ok())
+                {
+                    conflicts.push(name.to_string());
                 }
             }
         }

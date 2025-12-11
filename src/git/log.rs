@@ -47,10 +47,10 @@ pub fn read_commit_log(
 
     if let Some(branch) = &filter.branch {
         let reference_name = format!("refs/heads/{branch}");
-        if let Ok(reference) = repo.find_reference(&reference_name) {
-            if let Some(oid) = reference.target() {
-                revwalk.push(oid)?;
-            }
+        if let Ok(reference) = repo.find_reference(&reference_name)
+            && let Some(oid) = reference.target()
+        {
+            revwalk.push(oid)?;
         }
     } else {
         revwalk.push_head()?;
@@ -84,16 +84,16 @@ pub fn read_commit_log(
         }
 
         let timestamp = commit.time().seconds();
-        if let Some(since) = filter.since {
-            if timestamp < since {
-                continue;
-            }
+        if let Some(since) = filter.since
+            && timestamp < since
+        {
+            continue;
         }
 
-        if let Some(until) = filter.until {
-            if timestamp > until {
-                continue;
-            }
+        if let Some(until) = filter.until
+            && timestamp > until
+        {
+            continue;
         }
 
         let parents = commit

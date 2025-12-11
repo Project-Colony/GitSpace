@@ -125,10 +125,10 @@ impl Default for Preferences {
 impl AppConfig {
     pub fn load() -> Self {
         let path = config_path();
-        if let Ok(contents) = fs::read_to_string(&path) {
-            if let Ok(config) = serde_json::from_str::<Self>(&contents) {
-                return config;
-            }
+        if let Ok(contents) = fs::read_to_string(&path)
+            && let Ok(config) = serde_json::from_str::<Self>(&contents)
+        {
+            return config;
         }
         Self::default()
     }
@@ -236,7 +236,7 @@ fn default_auto_check_updates() -> bool {
 
 impl Preferences {
     pub fn theme_mode(&self) -> ThemeMode {
-        self.theme.clone()
+        self.theme
     }
 
     pub fn set_theme_mode(&mut self, mode: ThemeMode) {

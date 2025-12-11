@@ -59,7 +59,7 @@ pub fn commit_diff(repo_path: &str, oid: &str) -> Result<Vec<FileDiff>, git2::Er
 
     // For files without textual output (e.g., binary), gather stats separately.
     let stats = diff.stats()?;
-    if stats.files_changed() as usize > files.len() {
+    if stats.files_changed() > files.len() {
         for delta in diff.deltas() {
             let path = delta
                 .new_file()

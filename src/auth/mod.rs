@@ -304,10 +304,10 @@ pub fn extract_host(target: &str) -> Option<String> {
         return Some(host.to_string());
     }
 
-    if let Some((user_host, _)) = target.split_once(':') {
-        if let Some((_, host)) = user_host.split_once('@') {
-            return Some(host.to_string());
-        }
+    if let Some((user_host, _)) = target.split_once(':')
+        && let Some((_, host)) = user_host.split_once('@')
+    {
+        return Some(host.to_string());
     }
 
     target

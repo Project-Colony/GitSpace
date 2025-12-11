@@ -1,0 +1,6 @@
+[alias]
+fmt-all = "fmt --all"
+clippy-all = "clippy --all-targets --workspace --all-features"
+
+[env]
+GITSPACE_LOG = { value = "gitspace=info", force = false }

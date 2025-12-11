@@ -410,12 +410,12 @@ impl StagePanel {
                 self.commit_message.push('\n');
             }
             self.commit_message.push_str(&self.signoff_line);
-        } else if !self.include_signoff {
-            if let Some(idx) = self.commit_message.find(&self.signoff_line) {
-                self.commit_message
-                    .replace_range(idx..idx + self.signoff_line.len(), "");
-                self.commit_message = self.commit_message.trim_end().to_string();
-            }
+        } else if !self.include_signoff
+            && let Some(idx) = self.commit_message.find(&self.signoff_line)
+        {
+            self.commit_message
+                .replace_range(idx..idx + self.signoff_line.len(), "");
+            self.commit_message = self.commit_message.trim_end().to_string();
         }
     }
 
