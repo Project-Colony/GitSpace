@@ -6,3 +6,6 @@ pub mod merge;
 pub mod remote;
 pub mod stash;
 pub mod status;
+
+#[cfg(test)]
+mod tests;

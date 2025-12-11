@@ -1,4 +1,5 @@
-use git2::{Repository, Signature};
+use git2::build::CheckoutBuilder;
+use git2::{Repository, Signature, StashApplyOptions};
 
 #[derive(Debug, Clone)]
 pub struct StashEntry {
@@ -39,7 +40,13 @@ pub fn create_stash(
 
 pub fn apply_stash(repo_path: &str, index: usize) -> Result<(), git2::Error> {
     let mut repo = Repository::open(repo_path)?;
-    repo.stash_apply(index, None)
+    let mut checkout = CheckoutBuilder::new();
+    checkout.force();
+
+    let mut options = StashApplyOptions::new();
+    options.checkout_options(checkout);
+
+    repo.stash_apply(index, Some(&mut options))
 }
 
 pub fn drop_stash(repo_path: &str, index: usize) -> Result<(), git2::Error> {

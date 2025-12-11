@@ -11,3 +11,6 @@ pub mod repo_overview;
 pub mod settings;
 pub mod stage;
 pub mod theme;
+
+#[cfg(test)]
+mod tests;
