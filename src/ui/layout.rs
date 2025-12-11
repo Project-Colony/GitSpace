@@ -1,6 +1,6 @@
 use eframe::egui::{self, Align, Layout, RichText, Sense, Ui};
 
-use crate::ui::{clone::ClonePanel, theme::Theme};
+use crate::ui::theme::Theme;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum MainTab {
@@ -145,12 +145,20 @@ impl<'a> ShellLayout<'a> {
         ui.separator();
     }
 
-    pub fn tab_content(&self, ui: &mut Ui, tab: MainTab, clone_panel: &mut ClonePanel) {
+    pub fn tab_content(&self, ui: &mut Ui, tab: MainTab) {
         let body_color = self.theme.palette.text_secondary;
         ui.add_space(8.0);
         match tab {
             MainTab::Clone => {
-                clone_panel.ui(ui);
+                ui.heading(
+                    RichText::new("Clone a repository").color(self.theme.palette.text_primary),
+                );
+                ui.label(
+                    RichText::new(
+                        "Provide a URL or select a template to clone into your workspace.",
+                    )
+                    .color(body_color),
+                );
             }
             MainTab::Open => {
                 ui.heading(
