@@ -174,6 +174,7 @@ impl<'a> ShellLayout<'a> {
         recent_list: &mut RecentList,
         config: &AppConfig,
         repo_overview: &mut RepoOverviewPanel,
+        history_panel: &mut crate::ui::history::HistoryPanel,
         repo: Option<&RepoContext>,
     ) -> Option<String> {
         let body_color = self.theme.palette.text_secondary;
@@ -189,8 +190,7 @@ impl<'a> ShellLayout<'a> {
                 None
             }
             MainTab::History => {
-                ui.heading(RichText::new("Commit history").color(self.theme.palette.text_primary));
-                ui.label(RichText::new("Visualize commit graphs and timelines.").color(body_color));
+                history_panel.ui(ui, repo);
                 None
             }
             MainTab::Branches => {

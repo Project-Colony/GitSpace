@@ -4,6 +4,7 @@ use crate::config::AppConfig;
 use crate::ui::{
     clone::ClonePanel,
     context::RepoContext,
+    history::HistoryPanel,
     layout::{MainTab, ShellLayout},
     recent::RecentList,
     repo_overview::RepoOverviewPanel,
@@ -17,6 +18,7 @@ pub struct GitSpaceApp {
     clone_panel: ClonePanel,
     recent_list: RecentList,
     repo_overview: RepoOverviewPanel,
+    history_panel: HistoryPanel,
     config: AppConfig,
     current_repo: Option<RepoContext>,
 }
@@ -33,6 +35,7 @@ impl GitSpaceApp {
             clone_panel: ClonePanel::new(theme.clone()),
             recent_list: RecentList::new(theme.clone()),
             repo_overview: RepoOverviewPanel::new(theme.clone()),
+            history_panel: HistoryPanel::new(theme.clone()),
             config,
             current_repo,
             theme,
@@ -77,6 +80,7 @@ impl eframe::App for GitSpaceApp {
                 &mut self.recent_list,
                 &self.config,
                 &mut self.repo_overview,
+                &mut self.history_panel,
                 self.current_repo.as_ref(),
             ) {
                 self.load_repo_context(selected);
