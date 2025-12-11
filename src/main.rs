@@ -1,3 +1,4 @@
+mod git;
 mod ui;
 
 use ui::app::GitSpaceApp;
