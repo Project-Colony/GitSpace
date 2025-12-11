@@ -6,4 +6,5 @@ pub mod history;
 pub mod layout;
 pub mod recent;
 pub mod repo_overview;
+pub mod stage;
 pub mod theme;

@@ -9,6 +9,7 @@ use crate::ui::{
     layout::{MainTab, ShellLayout},
     recent::RecentList,
     repo_overview::RepoOverviewPanel,
+    stage::StagePanel,
     theme::Theme,
 };
 
@@ -21,6 +22,7 @@ pub struct GitSpaceApp {
     repo_overview: RepoOverviewPanel,
     history_panel: HistoryPanel,
     branches_panel: BranchPanel,
+    stage_panel: StagePanel,
     config: AppConfig,
     current_repo: Option<RepoContext>,
 }
@@ -39,6 +41,7 @@ impl GitSpaceApp {
             repo_overview: RepoOverviewPanel::new(theme.clone()),
             history_panel: HistoryPanel::new(theme.clone()),
             branches_panel: BranchPanel::new(theme.clone()),
+            stage_panel: StagePanel::new(theme.clone()),
             config,
             current_repo,
             theme,
@@ -83,6 +86,7 @@ impl eframe::App for GitSpaceApp {
                 &mut self.recent_list,
                 &self.config,
                 &mut self.repo_overview,
+                &mut self.stage_panel,
                 &mut self.history_panel,
                 &mut self.branches_panel,
                 self.current_repo.as_ref(),

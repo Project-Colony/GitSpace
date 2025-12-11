@@ -3,7 +3,7 @@ use eframe::egui::{self, Align, Layout, RichText, Sense, Ui};
 use crate::config::AppConfig;
 use crate::ui::{
     branches::BranchPanel, clone::ClonePanel, context::RepoContext, recent::RecentList,
-    repo_overview::RepoOverviewPanel, theme::Theme,
+    repo_overview::RepoOverviewPanel, stage::StagePanel, theme::Theme,
 };
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -11,15 +11,17 @@ pub enum MainTab {
     Clone,
     Open,
     RepoOverview,
+    Stage,
     History,
     Branches,
 }
 
 impl MainTab {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Clone,
         Self::Open,
         Self::RepoOverview,
+        Self::Stage,
         Self::History,
         Self::Branches,
     ];
@@ -29,6 +31,7 @@ impl MainTab {
             Self::Clone => "Clone",
             Self::Open => "Open",
             Self::RepoOverview => "Repo Overview",
+            Self::Stage => "Stage",
             Self::History => "History",
             Self::Branches => "Branches",
         }
@@ -174,6 +177,7 @@ impl<'a> ShellLayout<'a> {
         recent_list: &mut RecentList,
         config: &AppConfig,
         repo_overview: &mut RepoOverviewPanel,
+        stage_panel: &mut StagePanel,
         history_panel: &mut crate::ui::history::HistoryPanel,
         branch_panel: &mut BranchPanel,
         repo: Option<&RepoContext>,
@@ -187,6 +191,10 @@ impl<'a> ShellLayout<'a> {
             MainTab::Open => recent_list.ui(ui, config).map(|entry| entry.path),
             MainTab::RepoOverview => {
                 repo_overview.ui(ui, repo);
+                None
+            }
+            MainTab::Stage => {
+                stage_panel.ui(ui, repo);
                 None
             }
             MainTab::History => {
