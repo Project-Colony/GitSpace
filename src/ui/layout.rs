@@ -2,8 +2,8 @@ use eframe::egui::{self, Align, Layout, RichText, Sense, Ui};
 
 use crate::config::AppConfig;
 use crate::ui::{
-    clone::ClonePanel, context::RepoContext, recent::RecentList, repo_overview::RepoOverviewPanel,
-    theme::Theme,
+    branches::BranchPanel, clone::ClonePanel, context::RepoContext, recent::RecentList,
+    repo_overview::RepoOverviewPanel, theme::Theme,
 };
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -175,9 +175,9 @@ impl<'a> ShellLayout<'a> {
         config: &AppConfig,
         repo_overview: &mut RepoOverviewPanel,
         history_panel: &mut crate::ui::history::HistoryPanel,
+        branch_panel: &mut BranchPanel,
         repo: Option<&RepoContext>,
     ) -> Option<String> {
-        let body_color = self.theme.palette.text_secondary;
         ui.add_space(8.0);
         match tab {
             MainTab::Clone => {
@@ -194,10 +194,7 @@ impl<'a> ShellLayout<'a> {
                 None
             }
             MainTab::Branches => {
-                ui.heading(
-                    RichText::new("Branch management").color(self.theme.palette.text_primary),
-                );
-                ui.label(RichText::new("Create, switch, and compare branches.").color(body_color));
+                branch_panel.ui(ui, repo);
                 None
             }
         }

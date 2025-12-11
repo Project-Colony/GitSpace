@@ -2,6 +2,7 @@ use eframe::egui;
 
 use crate::config::AppConfig;
 use crate::ui::{
+    branches::BranchPanel,
     clone::ClonePanel,
     context::RepoContext,
     history::HistoryPanel,
@@ -19,6 +20,7 @@ pub struct GitSpaceApp {
     recent_list: RecentList,
     repo_overview: RepoOverviewPanel,
     history_panel: HistoryPanel,
+    branches_panel: BranchPanel,
     config: AppConfig,
     current_repo: Option<RepoContext>,
 }
@@ -36,6 +38,7 @@ impl GitSpaceApp {
             recent_list: RecentList::new(theme.clone()),
             repo_overview: RepoOverviewPanel::new(theme.clone()),
             history_panel: HistoryPanel::new(theme.clone()),
+            branches_panel: BranchPanel::new(theme.clone()),
             config,
             current_repo,
             theme,
@@ -81,6 +84,7 @@ impl eframe::App for GitSpaceApp {
                 &self.config,
                 &mut self.repo_overview,
                 &mut self.history_panel,
+                &mut self.branches_panel,
                 self.current_repo.as_ref(),
             ) {
                 self.load_repo_context(selected);
