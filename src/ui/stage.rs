@@ -66,6 +66,10 @@ impl StagePanel {
         }
     }
 
+    pub fn set_theme(&mut self, theme: Theme) {
+        self.theme = theme;
+    }
+
     pub fn ui(&mut self, ui: &mut Ui, repo: Option<&RepoContext>) {
         ui.heading(RichText::new("Staging & commits").color(self.theme.palette.text_primary));
         ui.label(

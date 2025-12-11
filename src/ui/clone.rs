@@ -67,12 +67,7 @@ pub struct ClonePanel {
 }
 
 impl ClonePanel {
-    pub fn new(theme: Theme) -> Self {
-        let destination = std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .display()
-            .to_string();
-
+    pub fn new(theme: Theme, destination: String) -> Self {
         Self {
             theme,
             provider: Provider::GitHub,
@@ -93,6 +88,14 @@ impl ClonePanel {
             last_cloned_repo: None,
             token_source: None,
         }
+    }
+
+    pub fn set_theme(&mut self, theme: Theme) {
+        self.theme = theme;
+    }
+
+    pub fn set_default_destination<S: Into<String>>(&mut self, destination: S) {
+        self.destination = destination.into();
     }
 
     pub fn ui(&mut self, ui: &mut Ui, auth: &AuthManager) {

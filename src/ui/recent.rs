@@ -18,6 +18,10 @@ impl RecentList {
         }
     }
 
+    pub fn set_theme(&mut self, theme: Theme) {
+        self.theme = theme;
+    }
+
     pub fn ui(&mut self, ui: &mut Ui, config: &AppConfig) -> Option<RecentRepo> {
         ui.heading(RichText::new("Recently opened").color(self.theme.palette.text_primary));
         ui.label(

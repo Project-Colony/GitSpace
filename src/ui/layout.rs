@@ -4,7 +4,8 @@ use crate::auth::AuthManager;
 use crate::config::AppConfig;
 use crate::ui::{
     auth::AuthPanel, branches::BranchPanel, clone::ClonePanel, context::RepoContext,
-    recent::RecentList, repo_overview::RepoOverviewPanel, stage::StagePanel, theme::Theme,
+    recent::RecentList, repo_overview::RepoOverviewPanel, settings::SettingsPanel,
+    stage::StagePanel, theme::Theme,
 };
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -16,10 +17,11 @@ pub enum MainTab {
     History,
     Branches,
     Auth,
+    Settings,
 }
 
 impl MainTab {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Clone,
         Self::Open,
         Self::RepoOverview,
@@ -27,6 +29,7 @@ impl MainTab {
         Self::History,
         Self::Branches,
         Self::Auth,
+        Self::Settings,
     ];
 
     pub fn label(&self) -> &'static str {
@@ -38,6 +41,7 @@ impl MainTab {
             Self::History => "History",
             Self::Branches => "Branches",
             Self::Auth => "Auth",
+            Self::Settings => "Settings",
         }
     }
 }
@@ -185,6 +189,7 @@ impl<'a> ShellLayout<'a> {
         history_panel: &mut crate::ui::history::HistoryPanel,
         branch_panel: &mut BranchPanel,
         auth_panel: &mut AuthPanel,
+        settings_panel: &mut SettingsPanel,
         repo: Option<&RepoContext>,
         auth_manager: &AuthManager,
     ) -> Option<String> {
@@ -213,6 +218,10 @@ impl<'a> ShellLayout<'a> {
             }
             MainTab::Auth => {
                 auth_panel.ui(ui);
+                None
+            }
+            MainTab::Settings => {
+                settings_panel.ui(ui);
                 None
             }
         }

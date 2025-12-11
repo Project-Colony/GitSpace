@@ -1,5 +1,7 @@
 use egui::{Color32, TextStyle};
 
+use crate::config::ThemeMode;
+
 #[derive(Debug, Clone)]
 pub struct Palette {
     pub background: Color32,
@@ -21,6 +23,18 @@ impl Palette {
             text_secondary: Color32::from_rgb(0xb9, 0xc0, 0xcc),
             accent: Color32::from_rgb(0x7c, 0xd1, 0xff),
             accent_weak: Color32::from_rgb(0x4d, 0x9d, 0xe6),
+        }
+    }
+
+    pub fn light() -> Self {
+        Self {
+            background: Color32::from_rgb(0xf5, 0xf6, 0xf8),
+            surface: Color32::from_rgb(0xff, 0xff, 0xff),
+            surface_highlight: Color32::from_rgb(0xed, 0xf0, 0xf5),
+            text_primary: Color32::from_rgb(0x17, 0x1a, 0x22),
+            text_secondary: Color32::from_rgb(0x43, 0x48, 0x55),
+            accent: Color32::from_rgb(0x2b, 0x6c, 0xc4),
+            accent_weak: Color32::from_rgb(0x4d, 0x8c, 0xe6),
         }
     }
 }
@@ -55,6 +69,20 @@ impl Theme {
         Self {
             palette: Palette::dark(),
             typography: Typography::default(),
+        }
+    }
+
+    pub fn light() -> Self {
+        Self {
+            palette: Palette::light(),
+            typography: Typography::default(),
+        }
+    }
+
+    pub fn from_mode(mode: ThemeMode) -> Self {
+        match mode {
+            ThemeMode::Dark => Self::dark(),
+            ThemeMode::Light => Self::light(),
         }
     }
 
