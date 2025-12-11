@@ -1,4 +1,4 @@
-use eframe::egui::{CollapsingHeader, ComboBox, RichText, TextEdit, Ui};
+use eframe::egui::{ComboBox, RichText, TextEdit, Ui};
 use rfd::FileDialog;
 
 use crate::config::{Keybinding, Preferences, ReleaseChannel, ThemeMode};
@@ -80,52 +80,31 @@ impl SettingsPanel {
         );
         ui.add_space(12.0);
 
-        self.collapsible_section(
-            ui,
-            "Appearance",
-            "Switch between light and dark palettes.",
-            Self::theme_section,
-        );
-        self.collapsible_section(
-            ui,
-            "Repositories",
-            "Control defaults for new clones.",
-            Self::clone_section,
-        );
-        self.collapsible_section(
-            ui,
-            "Keybindings",
-            "Map your favorite shortcuts to frequent actions.",
-            Self::keybinding_section,
-        );
-        self.collapsible_section(
-            ui,
-            "Network",
-            "Control how GitSpace connects to providers and proxies.",
-            Self::network_section,
-        );
-        self.collapsible_section(
-            ui,
-            "Privacy",
-            "Opt in to anonymized diagnostics and decide what gets shared. Nothing leaves your machine unless enabled.",
-            Self::privacy_section,
-        );
-        self.collapsible_section(
-            ui,
-            "Updates",
-            "Control how GitSpace checks for new versions and which release channel you follow.",
-            Self::update_section,
-        );
-        self.collapsible_section(
-            ui,
-            "Import / Export",
-            "Move your GitSpace preferences between machines as JSON.",
-            Self::import_export,
-        );
+        self.theme_section(ui);
+        ui.add_space(12.0);
+        self.clone_section(ui);
+        ui.add_space(12.0);
+        self.keybinding_section(ui);
+        ui.add_space(12.0);
+        self.network_section(ui);
+        ui.add_space(12.0);
+        self.privacy_section(ui);
+        ui.add_space(12.0);
+        self.update_section(ui);
+        ui.add_space(12.0);
         self.actions(ui);
+        ui.add_space(12.0);
+        self.import_export(ui);
     }
 
     fn theme_section(&mut self, ui: &mut Ui) {
+        ui.heading(RichText::new("Appearance").color(self.theme.palette.text_primary));
+        ui.label(
+            RichText::new("Switch between light and dark palettes.")
+                .color(self.theme.palette.text_secondary),
+        );
+        ui.add_space(6.0);
+
         ComboBox::from_label(RichText::new("Theme mode").color(self.theme.palette.text_secondary))
             .selected_text(mode_label(self.preferences.theme_mode()))
             .show_ui(ui, |ui| {
@@ -138,6 +117,13 @@ impl SettingsPanel {
     }
 
     fn clone_section(&mut self, ui: &mut Ui) {
+        ui.heading(RichText::new("Repositories").color(self.theme.palette.text_primary));
+        ui.label(
+            RichText::new("Control defaults for new clones.")
+                .color(self.theme.palette.text_secondary),
+        );
+        ui.add_space(6.0);
+
         ui.horizontal(|ui| {
             ui.label(RichText::new("Default destination").color(self.theme.palette.text_secondary));
             ui.add_sized(
@@ -156,6 +142,13 @@ impl SettingsPanel {
     }
 
     fn keybinding_section(&mut self, ui: &mut Ui) {
+        ui.heading(RichText::new("Keybindings").color(self.theme.palette.text_primary));
+        ui.label(
+            RichText::new("Map your favorite shortcuts to frequent actions.")
+                .color(self.theme.palette.text_secondary),
+        );
+        ui.add_space(6.0);
+
         let mut remove_index: Option<usize> = None;
         for (idx, binding) in self.preferences.keybindings_mut().iter_mut().enumerate() {
             ui.horizontal(|ui| {
@@ -186,6 +179,13 @@ impl SettingsPanel {
     }
 
     fn network_section(&mut self, ui: &mut Ui) {
+        ui.heading(RichText::new("Network").color(self.theme.palette.text_primary));
+        ui.label(
+            RichText::new("Control how GitSpace connects to providers and proxies.")
+                .color(self.theme.palette.text_secondary),
+        );
+        ui.add_space(6.0);
+
         let network = self.preferences.network_mut();
         ui.horizontal(|ui| {
             ui.label(RichText::new("HTTP proxy").color(self.theme.palette.text_secondary));
@@ -225,6 +225,15 @@ impl SettingsPanel {
     }
 
     fn privacy_section(&mut self, ui: &mut Ui) {
+        ui.heading(RichText::new("Privacy").color(self.theme.palette.text_primary));
+        ui.label(
+            RichText::new(
+                "Opt in to anonymized diagnostics and decide what gets shared. Nothing leaves your machine unless enabled.",
+            )
+            .color(self.theme.palette.text_secondary),
+        );
+        ui.add_space(6.0);
+
         let mut telemetry_enabled = self.preferences.telemetry_enabled();
         ui.checkbox(
             &mut telemetry_enabled,
@@ -253,6 +262,15 @@ impl SettingsPanel {
     }
 
     fn update_section(&mut self, ui: &mut Ui) {
+        ui.heading(RichText::new("Updates").color(self.theme.palette.text_primary));
+        ui.label(
+            RichText::new(
+                "Control how GitSpace checks for new versions and which release channel you follow.",
+            )
+            .color(self.theme.palette.text_secondary),
+        );
+        ui.add_space(6.0);
+
         let mut auto_check = self.preferences.auto_check_updates();
         ui.checkbox(&mut auto_check, "Automatically check for updates on launch");
         self.preferences.set_auto_check_updates(auto_check);
@@ -302,6 +320,14 @@ impl SettingsPanel {
     }
 
     fn import_export(&mut self, ui: &mut Ui) {
+        ui.separator();
+        ui.heading(RichText::new("Import / Export").color(self.theme.palette.text_primary));
+        ui.label(
+            RichText::new("Move your GitSpace preferences between machines as JSON.")
+                .color(self.theme.palette.text_secondary),
+        );
+        ui.add_space(6.0);
+
         ui.horizontal(|ui| {
             if ui.button("Import settings").clicked()
                 && let Some(path) = FileDialog::new().add_filter("JSON", &["json"]).pick_file()
@@ -339,20 +365,6 @@ impl SettingsPanel {
             ui.add_space(6.0);
             ui.label(RichText::new(status).color(self.theme.palette.text_secondary));
         }
-    }
-
-    fn collapsible_section<F>(&mut self, ui: &mut Ui, title: &str, subtitle: &str, content: F)
-    where
-        F: FnOnce(&mut Self, &mut Ui),
-    {
-        CollapsingHeader::new(RichText::new(title).color(self.theme.palette.text_primary))
-            .default_open(true)
-            .show(ui, |ui| {
-                ui.label(RichText::new(subtitle).color(self.theme.palette.text_secondary));
-                ui.add_space(6.0);
-                content(self, ui);
-            });
-        ui.add_space(12.0);
     }
 }
 
