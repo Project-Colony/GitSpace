@@ -1,10 +1,14 @@
-use eframe::egui::{self, RichText};
+use eframe::egui;
 
-use crate::ui::theme::Theme;
+use crate::ui::{
+    layout::{MainTab, ShellLayout},
+    theme::Theme,
+};
 
 pub struct GitSpaceApp {
     theme: Theme,
     initialized: bool,
+    active_tab: MainTab,
 }
 
 impl GitSpaceApp {
@@ -12,6 +16,7 @@ impl GitSpaceApp {
         Self {
             theme: Theme::dark(),
             initialized: false,
+            active_tab: MainTab::Clone,
         }
     }
 
@@ -27,17 +32,15 @@ impl eframe::App for GitSpaceApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.initialize_if_needed(ctx);
 
+        let layout = ShellLayout::new(&self.theme);
+        layout.header(ctx);
+        layout.sidebar(ctx);
+        layout.right_panel(ctx);
+
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.vertical_centered(|ui| {
-                ui.add_space(12.0);
-                ui.heading(RichText::new("GitSpace").strong());
-                ui.label(RichText::new("Centralized Git workspace shell").color(self.theme.palette.text_secondary));
-                ui.add_space(12.0);
-                ui.colored_label(
-                    self.theme.palette.accent,
-                    "Theming: dark palette, accent colors, and shared typography tokens are active.",
-                );
-            });
+            ui.set_min_height(ui.available_height());
+            layout.tab_bar(ui, &mut self.active_tab);
+            layout.tab_content(ui, self.active_tab);
         });
     }
 }
