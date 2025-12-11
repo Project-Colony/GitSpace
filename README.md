@@ -27,6 +27,7 @@ GitSpace is a Git hub application that centralizes multiple repositories in one 
 ## Project Structure
 - `src/` – Rust source code for the application entry point and modules.
 - `docs/` – High-level documentation about architecture, design, and decisions (see `docs/docs.md`).
+- `docs/telemetry.md` – Details on optional diagnostics, collected fields, batching, and how to purge data.
 - `tasks/` – Task tracking and folder conventions (see `tasks/tasks.md`).
 
 As the project grows, new folders will include their own documentation files following the conventions described in `tasks/tasks.md`.

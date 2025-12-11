@@ -2,6 +2,7 @@ mod auth;
 mod config;
 mod error;
 mod git;
+mod telemetry;
 mod ui;
 mod update;
 
