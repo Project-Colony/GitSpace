@@ -1,4 +1,5 @@
 use eframe::egui;
+use poll_promise::Promise;
 
 use crate::auth::AuthManager;
 use crate::config::{AppConfig, Preferences};
@@ -9,13 +10,14 @@ use crate::ui::{
     context::RepoContext,
     history::HistoryPanel,
     layout::{MainTab, ShellLayout},
-    notifications::{NotificationAction, NotificationCenter},
+    notifications::{Notification, NotificationAction, NotificationCenter},
     recent::RecentList,
     repo_overview::RepoOverviewPanel,
     settings::SettingsPanel,
     stage::StagePanel,
     theme::Theme,
 };
+use crate::update;
 
 pub struct GitSpaceApp {
     theme: Theme,
@@ -33,6 +35,8 @@ pub struct GitSpaceApp {
     auth_panel: AuthPanel,
     settings_panel: SettingsPanel,
     notifications: NotificationCenter,
+    update_promise: Option<Promise<update::UpdateResult>>,
+    update_checked: bool,
 }
 
 impl GitSpaceApp {
@@ -63,6 +67,8 @@ impl GitSpaceApp {
             active_tab: MainTab::Clone,
             settings_panel: SettingsPanel::new(settings_theme, preferences),
             notifications: NotificationCenter::default(),
+            update_promise: None,
+            update_checked: false,
         }
     }
 
@@ -123,11 +129,35 @@ impl eframe::App for GitSpaceApp {
             self.load_repo_context(cloned_path);
         }
 
+        if self.settings_panel.take_update_request() {
+            self.trigger_update_check();
+        }
+
+        if !self.update_checked && self.config.preferences().auto_check_updates() {
+            self.trigger_update_check();
+            self.update_checked = true;
+        }
+
+        if let Some(promise) = &self.update_promise {
+            if let Some(result) = promise.ready() {
+                self.handle_update_result(result.clone());
+                self.update_promise = None;
+            }
+        }
+
         for action in self.notifications.show(ctx) {
             match action {
                 NotificationAction::RetryClone => self.clone_panel.retry_last_clone(),
                 NotificationAction::CopyLogPath(path) => {
                     ctx.output_mut(|o| o.copied_text = path.display().to_string());
+                }
+                NotificationAction::OpenRelease(url) => {
+                    ctx.output_mut(|o| {
+                        o.open_url = Some(egui::output::OpenUrl {
+                            url: url.clone(),
+                            new_tab: true,
+                        });
+                    });
                 }
             }
         }
@@ -153,5 +183,61 @@ impl GitSpaceApp {
         self.settings_panel.set_preferences(preferences);
 
         let _ = self.config.save();
+
+        // Allow update settings to take effect immediately on the next frame.
+        self.update_checked = false;
+    }
+
+    fn trigger_update_check(&mut self) {
+        if self.update_promise.is_some() {
+            return;
+        }
+
+        let channel = self.config.preferences().release_channel();
+        let feed_override = self
+            .config
+            .preferences()
+            .update_feed_override()
+            .map(str::to_string);
+
+        self.settings_panel
+            .set_update_status("Checking for updates...");
+
+        self.update_promise = Some(Promise::spawn_thread("update-check", move || {
+            update::check_for_updates(channel, feed_override.as_deref())
+        }));
+        self.update_checked = true;
+    }
+
+    fn handle_update_result(&mut self, result: update::UpdateResult) {
+        match result {
+            Ok(Some(release)) => {
+                let mut notification = Notification::success(
+                    format!("Update {} available", release.version),
+                    format!(
+                        "A {:?} channel build is ready to download.",
+                        release.channel
+                    ),
+                );
+                notification.detail = release.notes.clone();
+                notification =
+                    notification.with_action(NotificationAction::OpenRelease(release.url.clone()));
+                self.notifications.push(notification);
+                self.settings_panel.set_update_status(format!(
+                    "Update {} available on the {:?} channel",
+                    release.version, release.channel
+                ));
+            }
+            Ok(None) => {
+                self.settings_panel
+                    .set_update_status("You're already on the latest version.");
+            }
+            Err(err) => {
+                self.settings_panel
+                    .set_update_status(format!("Update check failed: {err}"));
+                self.notifications
+                    .push(Notification::error("Update check failed", err.to_string()));
+            }
+        }
     }
 }

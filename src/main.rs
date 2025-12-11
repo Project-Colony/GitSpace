@@ -3,6 +3,7 @@ mod config;
 mod error;
 mod git;
 mod ui;
+mod update;
 
 use ui::app::GitSpaceApp;
 

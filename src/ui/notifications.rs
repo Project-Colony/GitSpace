@@ -13,6 +13,7 @@ pub enum NotificationKind {
 pub enum NotificationAction {
     RetryClone,
     CopyLogPath(PathBuf),
+    OpenRelease(String),
 }
 
 #[derive(Debug, Clone)]
@@ -140,6 +141,13 @@ impl NotificationCenter {
                                                 if ui.button("Copy log path").clicked() {
                                                     actions.push(NotificationAction::CopyLogPath(
                                                         path.clone(),
+                                                    ));
+                                                }
+                                            }
+                                            NotificationAction::OpenRelease(url) => {
+                                                if ui.button("Open release").clicked() {
+                                                    actions.push(NotificationAction::OpenRelease(
+                                                        url.clone(),
                                                     ));
                                                 }
                                             }
