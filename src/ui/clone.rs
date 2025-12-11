@@ -53,6 +53,8 @@ pub struct ClonePanel {
     progress: Option<CloneProgress>,
     clone_status: Option<String>,
     cloning: bool,
+    active_destination: Option<PathBuf>,
+    last_cloned_repo: Option<PathBuf>,
 }
 
 impl ClonePanel {
@@ -78,6 +80,8 @@ impl ClonePanel {
             progress: None,
             clone_status: None,
             cloning: false,
+            active_destination: None,
+            last_cloned_repo: None,
         }
     }
 
@@ -318,6 +322,8 @@ impl ClonePanel {
             token,
         };
 
+        self.active_destination = Some(request.destination.clone());
+
         let (tx, rx) = mpsc::channel();
         self.progress_rx = Some(rx);
         self.progress = None;
@@ -378,13 +384,19 @@ impl ClonePanel {
                 match result {
                     Ok(()) => {
                         self.clone_status = Some("Clone completed successfully".to_string());
+                        self.last_cloned_repo = self.active_destination.take();
                     }
                     Err(err) => {
                         self.clone_status = Some(format!("Clone failed: {}", err));
+                        self.active_destination = None;
                     }
                 }
             }
         }
+    }
+
+    pub fn take_last_cloned_repo(&mut self) -> Option<PathBuf> {
+        self.last_cloned_repo.take()
     }
 }
 

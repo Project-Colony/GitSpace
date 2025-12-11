@@ -1,6 +1,7 @@
 use eframe::egui::{self, Align, Layout, RichText, Sense, Ui};
 
-use crate::ui::{clone::ClonePanel, theme::Theme};
+use crate::config::AppConfig;
+use crate::ui::{clone::ClonePanel, context::RepoContext, recent::RecentList, theme::Theme};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum MainTab {
@@ -91,7 +92,7 @@ impl<'a> ShellLayout<'a> {
             });
     }
 
-    pub fn right_panel(&self, ctx: &egui::Context) {
+    pub fn right_panel(&self, ctx: &egui::Context, repo: Option<&RepoContext>) {
         egui::SidePanel::right("context")
             .resizable(true)
             .default_width(260.0)
@@ -104,12 +105,29 @@ impl<'a> ShellLayout<'a> {
                 ui.add_space(12.0);
                 ui.heading(RichText::new("Context").color(self.theme.palette.text_primary));
                 ui.separator();
-                ui.label(
-                    RichText::new(
-                        "Resizable sidebars keep the layout responsive across window sizes.",
-                    )
-                    .color(self.theme.palette.text_secondary),
-                );
+                if let Some(repo) = repo {
+                    ui.label(
+                        RichText::new("Active repository")
+                            .color(self.theme.palette.text_secondary),
+                    );
+                    ui.label(
+                        RichText::new(&repo.name)
+                            .color(self.theme.palette.text_primary)
+                            .strong(),
+                    );
+                    ui.label(
+                        RichText::new(&repo.path)
+                            .color(self.theme.palette.text_secondary)
+                            .italics(),
+                    );
+                } else {
+                    ui.label(
+                        RichText::new(
+                            "Select a repository from Recent or finish cloning to load its context.",
+                        )
+                        .color(self.theme.palette.text_secondary),
+                    );
+                }
             });
     }
 
@@ -145,22 +163,22 @@ impl<'a> ShellLayout<'a> {
         ui.separator();
     }
 
-    pub fn tab_content(&self, ui: &mut Ui, tab: MainTab, clone_panel: &mut ClonePanel) {
+    pub fn tab_content(
+        &self,
+        ui: &mut Ui,
+        tab: MainTab,
+        clone_panel: &mut ClonePanel,
+        recent_list: &mut RecentList,
+        config: &AppConfig,
+    ) -> Option<String> {
         let body_color = self.theme.palette.text_secondary;
         ui.add_space(8.0);
         match tab {
             MainTab::Clone => {
                 clone_panel.ui(ui);
+                None
             }
-            MainTab::Open => {
-                ui.heading(
-                    RichText::new("Open a repository").color(self.theme.palette.text_primary),
-                );
-                ui.label(
-                    RichText::new("Browse your filesystem to open existing projects.")
-                        .color(body_color),
-                );
-            }
+            MainTab::Open => recent_list.ui(ui, config).map(|entry| entry.path),
             MainTab::RepoOverview => {
                 ui.heading(
                     RichText::new("Repository overview").color(self.theme.palette.text_primary),
@@ -169,16 +187,19 @@ impl<'a> ShellLayout<'a> {
                     RichText::new("Insights, README preview, and key metrics will appear here.")
                         .color(body_color),
                 );
+                None
             }
             MainTab::History => {
                 ui.heading(RichText::new("Commit history").color(self.theme.palette.text_primary));
                 ui.label(RichText::new("Visualize commit graphs and timelines.").color(body_color));
+                None
             }
             MainTab::Branches => {
                 ui.heading(
                     RichText::new("Branch management").color(self.theme.palette.text_primary),
                 );
                 ui.label(RichText::new("Create, switch, and compare branches.").color(body_color));
+                None
             }
         }
     }

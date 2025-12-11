@@ -1,3 +1,4 @@
+mod config;
 mod git;
 mod ui;
 
