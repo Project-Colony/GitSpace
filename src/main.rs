@@ -1,3 +1,14 @@
+mod ui;
+
+use ui::app::GitSpaceApp;
+
 fn main() {
-    println!("GitSpace: centralized Git workspace in Rust with planned .NET integration.");
+    let native_options = eframe::NativeOptions::default();
+
+    eframe::run_native(
+        "GitSpace",
+        native_options,
+        Box::new(|_cc| Box::new(GitSpaceApp::new())),
+    )
+    .expect("failed to start GitSpace UI");
 }
