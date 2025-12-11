@@ -1,7 +1,6 @@
 use eframe::egui;
 
 use crate::ui::{
-    clone::ClonePanel,
     layout::{MainTab, ShellLayout},
     theme::Theme,
 };
@@ -10,15 +9,12 @@ pub struct GitSpaceApp {
     theme: Theme,
     initialized: bool,
     active_tab: MainTab,
-    clone_panel: ClonePanel,
 }
 
 impl GitSpaceApp {
     pub fn new() -> Self {
-        let theme = Theme::dark();
         Self {
-            clone_panel: ClonePanel::new(theme.clone()),
-            theme,
+            theme: Theme::dark(),
             initialized: false,
             active_tab: MainTab::Clone,
         }
@@ -44,7 +40,7 @@ impl eframe::App for GitSpaceApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.set_min_height(ui.available_height());
             layout.tab_bar(ui, &mut self.active_tab);
-            layout.tab_content(ui, self.active_tab, &mut self.clone_panel);
+            layout.tab_content(ui, self.active_tab);
         });
     }
 }
