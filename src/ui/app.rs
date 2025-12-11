@@ -9,7 +9,6 @@ use crate::ui::{
     context::RepoContext,
     history::HistoryPanel,
     layout::{MainTab, ShellLayout},
-    notifications::{NotificationAction, NotificationCenter},
     recent::RecentList,
     repo_overview::RepoOverviewPanel,
     settings::SettingsPanel,
@@ -32,7 +31,6 @@ pub struct GitSpaceApp {
     auth_manager: AuthManager,
     auth_panel: AuthPanel,
     settings_panel: SettingsPanel,
-    notifications: NotificationCenter,
 }
 
 impl GitSpaceApp {
@@ -62,7 +60,6 @@ impl GitSpaceApp {
             initialized: false,
             active_tab: MainTab::Clone,
             settings_panel: SettingsPanel::new(settings_theme, preferences),
-            notifications: NotificationCenter::default(),
         }
     }
 
@@ -107,7 +104,6 @@ impl eframe::App for GitSpaceApp {
                 &mut self.branches_panel,
                 &mut self.auth_panel,
                 &mut self.settings_panel,
-                &mut self.notifications,
                 self.current_repo.as_ref(),
                 &self.auth_manager,
             ) {
@@ -121,15 +117,6 @@ impl eframe::App for GitSpaceApp {
 
         if let Some(cloned_path) = self.clone_panel.take_last_cloned_repo() {
             self.load_repo_context(cloned_path);
-        }
-
-        for action in self.notifications.show(ctx) {
-            match action {
-                NotificationAction::RetryClone => self.clone_panel.retry_last_clone(),
-                NotificationAction::CopyLogPath(path) => {
-                    ctx.output_mut(|o| o.copied_text = path.display().to_string());
-                }
-            }
         }
     }
 }
