@@ -14,6 +14,8 @@ pub enum NotificationAction {
     RetryClone,
     CopyLogPath(PathBuf),
     OpenRelease(String),
+    EnableTelemetry,
+    DeclineTelemetry,
 }
 
 #[derive(Debug, Clone)]
@@ -149,6 +151,18 @@ impl NotificationCenter {
                                                     actions.push(NotificationAction::OpenRelease(
                                                         url.clone(),
                                                     ));
+                                                }
+                                            }
+                                            NotificationAction::EnableTelemetry => {
+                                                if ui.button("Enable analytics").clicked() {
+                                                    actions
+                                                        .push(NotificationAction::EnableTelemetry);
+                                                }
+                                            }
+                                            NotificationAction::DeclineTelemetry => {
+                                                if ui.button("No thanks").clicked() {
+                                                    actions
+                                                        .push(NotificationAction::DeclineTelemetry);
                                                 }
                                             }
                                         }

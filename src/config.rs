@@ -13,6 +13,8 @@ pub struct AppConfig {
     recent_repos: Vec<RecentRepo>,
     #[serde(default)]
     preferences: Preferences,
+    #[serde(default)]
+    telemetry_prompt_shown: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -101,6 +103,8 @@ pub struct Preferences {
     release_channel: ReleaseChannel,
     #[serde(default)]
     update_feed_override: Option<String>,
+    #[serde(default)]
+    telemetry_enabled: bool,
 }
 
 impl Default for Preferences {
@@ -113,6 +117,7 @@ impl Default for Preferences {
             auto_check_updates: default_auto_check_updates(),
             release_channel: ReleaseChannel::default(),
             update_feed_override: None,
+            telemetry_enabled: false,
         }
     }
 }
@@ -167,11 +172,25 @@ impl AppConfig {
     pub fn set_preferences(&mut self, preferences: Preferences) {
         self.preferences = preferences;
     }
+
+    pub fn telemetry_prompt_shown(&self) -> bool {
+        self.telemetry_prompt_shown
+    }
+
+    pub fn mark_telemetry_prompt_shown(&mut self) {
+        self.telemetry_prompt_shown = true;
+    }
 }
 
 fn config_path() -> PathBuf {
     let base = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
     base.join(APP_CONFIG_DIR).join(CONFIG_FILE_NAME)
+}
+
+pub fn app_data_dir() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(APP_CONFIG_DIR)
 }
 
 fn default_clone_path() -> String {
@@ -262,6 +281,14 @@ impl Preferences {
 
     pub fn update_feed_override(&self) -> Option<&str> {
         self.update_feed_override.as_deref()
+    }
+
+    pub fn telemetry_enabled(&self) -> bool {
+        self.telemetry_enabled
+    }
+
+    pub fn set_telemetry_enabled(&mut self, enabled: bool) {
+        self.telemetry_enabled = enabled;
     }
 
     pub fn save_to_path<P: AsRef<Path>>(&self, path: P) -> std::io::Result<()> {

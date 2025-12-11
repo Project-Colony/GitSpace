@@ -12,6 +12,8 @@ pub struct SettingsPanel {
     export_status: Option<String>,
     update_request: bool,
     update_status: Option<String>,
+    telemetry_status: Option<String>,
+    telemetry_purge_requested: bool,
 }
 
 impl SettingsPanel {
@@ -24,6 +26,8 @@ impl SettingsPanel {
             export_status: None,
             update_request: false,
             update_status: None,
+            telemetry_status: None,
+            telemetry_purge_requested: false,
         }
     }
 
@@ -52,6 +56,19 @@ impl SettingsPanel {
         self.update_status = Some(status.into());
     }
 
+    pub fn set_telemetry_status<S: Into<String>>(&mut self, status: S) {
+        self.telemetry_status = Some(status.into());
+    }
+
+    pub fn take_telemetry_purge_request(&mut self) -> bool {
+        if self.telemetry_purge_requested {
+            self.telemetry_purge_requested = false;
+            return true;
+        }
+
+        false
+    }
+
     pub fn ui(&mut self, ui: &mut Ui) {
         ui.add_space(8.0);
         ui.heading(RichText::new("Settings").color(self.theme.palette.text_primary));
@@ -70,6 +87,8 @@ impl SettingsPanel {
         self.keybinding_section(ui);
         ui.add_space(12.0);
         self.network_section(ui);
+        ui.add_space(12.0);
+        self.privacy_section(ui);
         ui.add_space(12.0);
         self.update_section(ui);
         ui.add_space(12.0);
@@ -204,6 +223,43 @@ impl SettingsPanel {
             ui.checkbox(&mut network.use_https, "Prefer HTTPS");
             ui.checkbox(&mut network.allow_ssh, "Allow SSH");
         });
+    }
+
+    fn privacy_section(&mut self, ui: &mut Ui) {
+        ui.heading(RichText::new("Privacy").color(self.theme.palette.text_primary));
+        ui.label(
+            RichText::new(
+                "Opt in to anonymized diagnostics and decide what gets shared. Nothing leaves your machine unless enabled.",
+            )
+            .color(self.theme.palette.text_secondary),
+        );
+        ui.add_space(6.0);
+
+        let mut telemetry_enabled = self.preferences.telemetry_enabled();
+        ui.checkbox(
+            &mut telemetry_enabled,
+            "Share anonymized events (feature usage, performance)",
+        );
+        self.preferences.set_telemetry_enabled(telemetry_enabled);
+
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(
+                "Collected: launch/session counts, tab switches, hashed repository identifiers. Excludes content or credentials.",
+            )
+            .color(self.theme.palette.text_secondary),
+        );
+
+        ui.add_space(6.0);
+        if ui.button("Purge collected diagnostics").clicked() {
+            self.telemetry_purge_requested = true;
+            self.telemetry_status = Some("Queued telemetry purge".to_string());
+        }
+
+        if let Some(status) = &self.telemetry_status {
+            ui.add_space(4.0);
+            ui.label(RichText::new(status).color(self.theme.palette.text_secondary));
+        }
     }
 
     fn update_section(&mut self, ui: &mut Ui) {
