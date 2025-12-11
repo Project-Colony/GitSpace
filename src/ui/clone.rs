@@ -8,6 +8,7 @@ use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, USER_AGENT};
 use serde::Deserialize;
 
+use crate::auth::{AuthManager, extract_host};
 use crate::git::clone::{CloneProgress, CloneRequest, clone_repository};
 use crate::ui::theme::Theme;
 
@@ -22,6 +23,13 @@ impl Provider {
         match self {
             Provider::GitHub => "GitHub",
             Provider::GitLab => "GitLab",
+        }
+    }
+
+    fn host(&self) -> &'static str {
+        match self {
+            Provider::GitHub => "github.com",
+            Provider::GitLab => "gitlab.com",
         }
     }
 }
@@ -55,6 +63,7 @@ pub struct ClonePanel {
     cloning: bool,
     active_destination: Option<PathBuf>,
     last_cloned_repo: Option<PathBuf>,
+    token_source: Option<String>,
 }
 
 impl ClonePanel {
@@ -82,10 +91,11 @@ impl ClonePanel {
             cloning: false,
             active_destination: None,
             last_cloned_repo: None,
+            token_source: None,
         }
     }
 
-    pub fn ui(&mut self, ui: &mut Ui) {
+    pub fn ui(&mut self, ui: &mut Ui, auth: &AuthManager) {
         self.poll_search();
         self.poll_clone_progress();
         self.poll_clone_result();
@@ -111,13 +121,13 @@ impl ClonePanel {
         ui.separator();
         ui.add_space(8.0);
 
-        self.search_section(ui);
+        self.search_section(ui, auth);
         ui.add_space(12.0);
         self.destination_section(ui);
         ui.add_space(12.0);
-        self.token_section(ui);
+        self.token_section(ui, auth);
         ui.add_space(12.0);
-        self.action_bar(ui);
+        self.action_bar(ui, auth);
         self.progress_section(ui);
     }
 
@@ -156,7 +166,7 @@ impl ClonePanel {
         });
     }
 
-    fn search_section(&mut self, ui: &mut Ui) {
+    fn search_section(&mut self, ui: &mut Ui, auth: &AuthManager) {
         ui.vertical(|ui| {
             ui.heading(RichText::new("Remote repository search").color(self.theme.palette.text_primary));
             ui.label(
@@ -178,7 +188,7 @@ impl ClonePanel {
                 let search_enabled = self.repo_query.trim().len() >= 2 && !self.cloning;
                 let button = ui.add_enabled(search_enabled, egui::Button::new("Search"));
                 if button.clicked() {
-                    self.start_search();
+                    self.start_search(auth);
                 }
 
                 if let Some(status) = &self.search_status {
@@ -233,7 +243,7 @@ impl ClonePanel {
         });
     }
 
-    fn token_section(&mut self, ui: &mut Ui) {
+    fn token_section(&mut self, ui: &mut Ui, auth: &AuthManager) {
         ui.heading(
             RichText::new("Authentication (optional)").color(self.theme.palette.text_primary),
         );
@@ -249,9 +259,26 @@ impl ClonePanel {
                     .color(self.theme.palette.text_secondary),
             );
         });
+
+        if self.token.trim().is_empty() {
+            let host_hint = extract_host(self.repo_url.trim())
+                .or_else(|| Some(self.provider_host().to_string()));
+            if let Some(host) = host_hint {
+                if auth.resolve_for_host(&host).is_some() {
+                    ui.colored_label(
+                        self.theme.palette.text_secondary,
+                        format!("Saved token detected for {}.", host),
+                    );
+                }
+            }
+        }
+
+        if let Some(source) = &self.token_source {
+            ui.colored_label(self.theme.palette.text_secondary, source);
+        }
     }
 
-    fn action_bar(&mut self, ui: &mut Ui) {
+    fn action_bar(&mut self, ui: &mut Ui, auth: &AuthManager) {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             let can_clone = !self.repo_url.trim().is_empty()
                 && !self.destination.trim().is_empty()
@@ -260,7 +287,7 @@ impl ClonePanel {
                 .add_enabled(can_clone, egui::Button::new("Clone repository"))
                 .clicked()
             {
-                self.start_clone();
+                self.start_clone(auth);
             }
         });
     }
@@ -290,14 +317,14 @@ impl ClonePanel {
         }
     }
 
-    fn start_search(&mut self) {
+    fn start_search(&mut self, auth: &AuthManager) {
         let query = self.repo_query.trim().to_string();
         if query.len() < 2 {
             return;
         }
         let provider = self.provider;
         let token = if self.token.trim().is_empty() {
-            None
+            auth.resolve_for_host(self.provider_host())
         } else {
             Some(self.token.clone())
         };
@@ -307,14 +334,23 @@ impl ClonePanel {
         }));
     }
 
-    fn start_clone(&mut self) {
+    fn start_clone(&mut self, auth: &AuthManager) {
         let url = self.repo_url.trim().to_string();
         let destination = PathBuf::from(self.destination.trim());
-        let token = if self.token.trim().is_empty() {
+        let mut token = if self.token.trim().is_empty() {
             None
         } else {
             Some(self.token.clone())
         };
+
+        self.token_source = None;
+        if token.is_none() {
+            if let Some(saved) = auth.resolve_for_url(&url) {
+                let host = extract_host(&url).unwrap_or_else(|| "remote".to_string());
+                self.token_source = Some(format!("Using stored token for {}", host));
+                token = Some(saved);
+            }
+        }
 
         let request = CloneRequest {
             url,
@@ -337,6 +373,10 @@ impl ClonePanel {
             });
             result
         }));
+    }
+
+    fn provider_host(&self) -> &str {
+        self.provider.host()
     }
 
     fn poll_search(&mut self) {

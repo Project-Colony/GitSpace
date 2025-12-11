@@ -1,7 +1,9 @@
 use eframe::egui;
 
+use crate::auth::AuthManager;
 use crate::config::AppConfig;
 use crate::ui::{
+    auth::AuthPanel,
     branches::BranchPanel,
     clone::ClonePanel,
     context::RepoContext,
@@ -25,12 +27,15 @@ pub struct GitSpaceApp {
     stage_panel: StagePanel,
     config: AppConfig,
     current_repo: Option<RepoContext>,
+    auth_manager: AuthManager,
+    auth_panel: AuthPanel,
 }
 
 impl GitSpaceApp {
     pub fn new() -> Self {
         let theme = Theme::dark();
         let config = AppConfig::load();
+        let auth_manager = AuthManager::new();
         let current_repo = config
             .recent_repos()
             .first()
@@ -44,6 +49,8 @@ impl GitSpaceApp {
             stage_panel: StagePanel::new(theme.clone()),
             config,
             current_repo,
+            auth_panel: AuthPanel::new(theme.clone(), auth_manager.clone()),
+            auth_manager,
             theme,
             initialized: false,
             active_tab: MainTab::Clone,
@@ -89,7 +96,9 @@ impl eframe::App for GitSpaceApp {
                 &mut self.stage_panel,
                 &mut self.history_panel,
                 &mut self.branches_panel,
+                &mut self.auth_panel,
                 self.current_repo.as_ref(),
+                &self.auth_manager,
             ) {
                 self.load_repo_context(selected);
             }
