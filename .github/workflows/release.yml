@@ -1,0 +1,61 @@
+name: Build release artifacts
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary_name="gitspace"
+          ext=""
+          archive_ext="tar.gz"
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            ext=".exe"
+            archive_ext="zip"
+          fi
+
+          mkdir -p dist
+          cp "target/release/${binary_name}${ext}" "dist/${binary_name}${ext}"
+
+          cd dist
+          archive_name="gitspace-${{ runner.os }}.${archive_ext}"
+          if [[ "${archive_ext}" == "zip" ]]; then
+            powershell -Command "Compress-Archive -Path ${binary_name}${ext} -DestinationPath ${archive_name}"
+          else
+            tar -czf "${archive_name}" "${binary_name}${ext}"
+          fi
+          echo "ARTIFACT_PATH=$(pwd)/${archive_name}" >> $GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitspace-${{ matrix.os }}
+          path: ${{ env.ARTIFACT_PATH }}
+          if-no-files-found: error

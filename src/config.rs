@@ -61,6 +61,18 @@ pub struct NetworkOptions {
     pub allow_ssh: bool,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ReleaseChannel {
+    Stable,
+    Preview,
+}
+
+impl Default for ReleaseChannel {
+    fn default() -> Self {
+        Self::Stable
+    }
+}
+
 impl Default for NetworkOptions {
     fn default() -> Self {
         Self {
@@ -83,6 +95,12 @@ pub struct Preferences {
     keybindings: Vec<Keybinding>,
     #[serde(default)]
     network: NetworkOptions,
+    #[serde(default = "default_auto_check_updates")]
+    auto_check_updates: bool,
+    #[serde(default)]
+    release_channel: ReleaseChannel,
+    #[serde(default)]
+    update_feed_override: Option<String>,
 }
 
 impl Default for Preferences {
@@ -92,6 +110,9 @@ impl Default for Preferences {
             default_clone_path: default_clone_path(),
             keybindings: default_keybindings(),
             network: NetworkOptions::default(),
+            auto_check_updates: default_auto_check_updates(),
+            release_channel: ReleaseChannel::default(),
+            update_feed_override: None,
         }
     }
 }
@@ -190,6 +211,10 @@ fn default_allow_ssh() -> bool {
     true
 }
 
+fn default_auto_check_updates() -> bool {
+    true
+}
+
 impl Preferences {
     pub fn theme_mode(&self) -> ThemeMode {
         self.theme.clone()
@@ -217,6 +242,26 @@ impl Preferences {
 
     pub fn network_mut(&mut self) -> &mut NetworkOptions {
         &mut self.network
+    }
+
+    pub fn auto_check_updates(&self) -> bool {
+        self.auto_check_updates
+    }
+
+    pub fn set_auto_check_updates(&mut self, enabled: bool) {
+        self.auto_check_updates = enabled;
+    }
+
+    pub fn release_channel(&self) -> ReleaseChannel {
+        self.release_channel
+    }
+
+    pub fn set_release_channel(&mut self, channel: ReleaseChannel) {
+        self.release_channel = channel;
+    }
+
+    pub fn update_feed_override(&self) -> Option<&str> {
+        self.update_feed_override.as_deref()
     }
 
     pub fn save_to_path<P: AsRef<Path>>(&self, path: P) -> std::io::Result<()> {

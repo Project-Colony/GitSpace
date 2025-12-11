@@ -1,7 +1,7 @@
 use eframe::egui::{ComboBox, RichText, TextEdit, Ui};
 use rfd::FileDialog;
 
-use crate::config::{Keybinding, Preferences, ThemeMode};
+use crate::config::{Keybinding, Preferences, ReleaseChannel, ThemeMode};
 use crate::ui::theme::Theme;
 
 pub struct SettingsPanel {
@@ -10,6 +10,8 @@ pub struct SettingsPanel {
     pending_preferences: Option<Preferences>,
     import_status: Option<String>,
     export_status: Option<String>,
+    update_request: bool,
+    update_status: Option<String>,
 }
 
 impl SettingsPanel {
@@ -20,6 +22,8 @@ impl SettingsPanel {
             pending_preferences: None,
             import_status: None,
             export_status: None,
+            update_request: false,
+            update_status: None,
         }
     }
 
@@ -33,6 +37,19 @@ impl SettingsPanel {
 
     pub fn take_changes(&mut self) -> Option<Preferences> {
         self.pending_preferences.take()
+    }
+
+    pub fn take_update_request(&mut self) -> bool {
+        if self.update_request {
+            self.update_request = false;
+            return true;
+        }
+
+        false
+    }
+
+    pub fn set_update_status<S: Into<String>>(&mut self, status: S) {
+        self.update_status = Some(status.into());
     }
 
     pub fn ui(&mut self, ui: &mut Ui) {
@@ -53,6 +70,8 @@ impl SettingsPanel {
         self.keybinding_section(ui);
         ui.add_space(12.0);
         self.network_section(ui);
+        ui.add_space(12.0);
+        self.update_section(ui);
         ui.add_space(12.0);
         self.actions(ui);
         ui.add_space(12.0);
@@ -187,6 +206,46 @@ impl SettingsPanel {
         });
     }
 
+    fn update_section(&mut self, ui: &mut Ui) {
+        ui.heading(RichText::new("Updates").color(self.theme.palette.text_primary));
+        ui.label(
+            RichText::new(
+                "Control how GitSpace checks for new versions and which release channel you follow.",
+            )
+            .color(self.theme.palette.text_secondary),
+        );
+        ui.add_space(6.0);
+
+        let mut auto_check = self.preferences.auto_check_updates();
+        ui.checkbox(&mut auto_check, "Automatically check for updates on launch");
+        self.preferences.set_auto_check_updates(auto_check);
+
+        ui.add_space(4.0);
+        ComboBox::from_label(
+            RichText::new("Release channel").color(self.theme.palette.text_secondary),
+        )
+        .selected_text(channel_label(self.preferences.release_channel()))
+        .show_ui(ui, |ui| {
+            let mut selected_channel = self.preferences.release_channel();
+            for channel in [ReleaseChannel::Stable, ReleaseChannel::Preview] {
+                ui.selectable_value(&mut selected_channel, channel, channel_label(channel));
+            }
+            self.preferences.set_release_channel(selected_channel);
+        });
+
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            if ui.button("Check for updates now").clicked() {
+                self.update_request = true;
+                self.update_status = Some("Checking for updates...".to_string());
+            }
+
+            if let Some(status) = &self.update_status {
+                ui.label(RichText::new(status).color(self.theme.palette.text_secondary));
+            }
+        });
+    }
+
     fn actions(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
             if ui.button("Save preferences").clicked() {
@@ -259,5 +318,12 @@ fn mode_label(mode: ThemeMode) -> &'static str {
     match mode {
         ThemeMode::Dark => "Dark",
         ThemeMode::Light => "Light",
+    }
+}
+
+fn channel_label(channel: ReleaseChannel) -> &'static str {
+    match channel {
+        ReleaseChannel::Stable => "Stable",
+        ReleaseChannel::Preview => "Preview",
     }
 }
