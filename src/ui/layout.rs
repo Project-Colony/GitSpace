@@ -1,9 +1,10 @@
 use eframe::egui::{self, Align, Layout, RichText, Sense, Ui};
 
+use crate::auth::AuthManager;
 use crate::config::AppConfig;
 use crate::ui::{
-    branches::BranchPanel, clone::ClonePanel, context::RepoContext, recent::RecentList,
-    repo_overview::RepoOverviewPanel, stage::StagePanel, theme::Theme,
+    auth::AuthPanel, branches::BranchPanel, clone::ClonePanel, context::RepoContext,
+    recent::RecentList, repo_overview::RepoOverviewPanel, stage::StagePanel, theme::Theme,
 };
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -14,16 +15,18 @@ pub enum MainTab {
     Stage,
     History,
     Branches,
+    Auth,
 }
 
 impl MainTab {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Clone,
         Self::Open,
         Self::RepoOverview,
         Self::Stage,
         Self::History,
         Self::Branches,
+        Self::Auth,
     ];
 
     pub fn label(&self) -> &'static str {
@@ -34,6 +37,7 @@ impl MainTab {
             Self::Stage => "Stage",
             Self::History => "History",
             Self::Branches => "Branches",
+            Self::Auth => "Auth",
         }
     }
 }
@@ -180,12 +184,14 @@ impl<'a> ShellLayout<'a> {
         stage_panel: &mut StagePanel,
         history_panel: &mut crate::ui::history::HistoryPanel,
         branch_panel: &mut BranchPanel,
+        auth_panel: &mut AuthPanel,
         repo: Option<&RepoContext>,
+        auth_manager: &AuthManager,
     ) -> Option<String> {
         ui.add_space(8.0);
         match tab {
             MainTab::Clone => {
-                clone_panel.ui(ui);
+                clone_panel.ui(ui, auth_manager);
                 None
             }
             MainTab::Open => recent_list.ui(ui, config).map(|entry| entry.path),
@@ -203,6 +209,10 @@ impl<'a> ShellLayout<'a> {
             }
             MainTab::Branches => {
                 branch_panel.ui(ui, repo);
+                None
+            }
+            MainTab::Auth => {
+                auth_panel.ui(ui);
                 None
             }
         }
