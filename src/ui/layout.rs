@@ -4,8 +4,8 @@ use crate::auth::AuthManager;
 use crate::config::AppConfig;
 use crate::ui::{
     auth::AuthPanel, branches::BranchPanel, clone::ClonePanel, context::RepoContext,
-    recent::RecentList, repo_overview::RepoOverviewPanel, settings::SettingsPanel,
-    stage::StagePanel, theme::Theme,
+    notifications::NotificationCenter, recent::RecentList, repo_overview::RepoOverviewPanel,
+    settings::SettingsPanel, stage::StagePanel, theme::Theme,
 };
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -190,13 +190,14 @@ impl<'a> ShellLayout<'a> {
         branch_panel: &mut BranchPanel,
         auth_panel: &mut AuthPanel,
         settings_panel: &mut SettingsPanel,
+        notifications: &mut NotificationCenter,
         repo: Option<&RepoContext>,
         auth_manager: &AuthManager,
     ) -> Option<String> {
         ui.add_space(8.0);
         match tab {
             MainTab::Clone => {
-                clone_panel.ui(ui, auth_manager);
+                clone_panel.ui(ui, auth_manager, notifications);
                 None
             }
             MainTab::Open => recent_list.ui(ui, config).map(|entry| entry.path),
