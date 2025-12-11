@@ -1,4 +1,5 @@
 pub mod app;
+pub mod branches;
 pub mod clone;
 pub mod context;
 pub mod history;
