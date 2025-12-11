@@ -11,11 +11,89 @@ const APP_CONFIG_DIR: &str = "gitspace";
 pub struct AppConfig {
     #[serde(default)]
     recent_repos: Vec<RecentRepo>,
+    #[serde(default)]
+    preferences: Preferences,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RecentRepo {
     pub path: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ThemeMode {
+    Dark,
+    Light,
+}
+
+impl Default for ThemeMode {
+    fn default() -> Self {
+        Self::Dark
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Keybinding {
+    pub action: String,
+    pub binding: String,
+}
+
+impl Default for Keybinding {
+    fn default() -> Self {
+        Self {
+            action: "Open settings".to_string(),
+            binding: "Ctrl+,".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NetworkOptions {
+    #[serde(default = "default_network_timeout")]
+    pub network_timeout_secs: u64,
+    #[serde(default)]
+    pub http_proxy: String,
+    #[serde(default)]
+    pub https_proxy: String,
+    #[serde(default = "default_use_https")]
+    pub use_https: bool,
+    #[serde(default = "default_allow_ssh")]
+    pub allow_ssh: bool,
+}
+
+impl Default for NetworkOptions {
+    fn default() -> Self {
+        Self {
+            network_timeout_secs: default_network_timeout(),
+            http_proxy: String::new(),
+            https_proxy: String::new(),
+            use_https: default_use_https(),
+            allow_ssh: default_allow_ssh(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Preferences {
+    #[serde(default)]
+    theme: ThemeMode,
+    #[serde(default = "default_clone_path")]
+    default_clone_path: String,
+    #[serde(default = "default_keybindings")]
+    keybindings: Vec<Keybinding>,
+    #[serde(default)]
+    network: NetworkOptions,
+}
+
+impl Default for Preferences {
+    fn default() -> Self {
+        Self {
+            theme: ThemeMode::Dark,
+            default_clone_path: default_clone_path(),
+            keybindings: default_keybindings(),
+            network: NetworkOptions::default(),
+        }
+    }
 }
 
 impl AppConfig {
@@ -60,9 +138,102 @@ impl AppConfig {
     pub fn recent_repos(&self) -> &[RecentRepo] {
         &self.recent_repos
     }
+
+    pub fn preferences(&self) -> &Preferences {
+        &self.preferences
+    }
+
+    pub fn set_preferences(&mut self, preferences: Preferences) {
+        self.preferences = preferences;
+    }
 }
 
 fn config_path() -> PathBuf {
     let base = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
     base.join(APP_CONFIG_DIR).join(CONFIG_FILE_NAME)
+}
+
+fn default_clone_path() -> String {
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .display()
+        .to_string()
+}
+
+fn default_keybindings() -> Vec<Keybinding> {
+    vec![
+        Keybinding {
+            action: "Clone repository".to_string(),
+            binding: "Ctrl+Shift+C".to_string(),
+        },
+        Keybinding {
+            action: "Open recent".to_string(),
+            binding: "Ctrl+O".to_string(),
+        },
+        Keybinding {
+            action: "Stage changes".to_string(),
+            binding: "Ctrl+S".to_string(),
+        },
+        Keybinding::default(),
+    ]
+}
+
+fn default_network_timeout() -> u64 {
+    30
+}
+
+fn default_use_https() -> bool {
+    true
+}
+
+fn default_allow_ssh() -> bool {
+    true
+}
+
+impl Preferences {
+    pub fn theme_mode(&self) -> ThemeMode {
+        self.theme.clone()
+    }
+
+    pub fn set_theme_mode(&mut self, mode: ThemeMode) {
+        self.theme = mode;
+    }
+
+    pub fn default_clone_path(&self) -> &str {
+        &self.default_clone_path
+    }
+
+    pub fn set_default_clone_path<S: Into<String>>(&mut self, path: S) {
+        self.default_clone_path = path.into();
+    }
+
+    pub fn default_clone_path_mut(&mut self) -> &mut String {
+        &mut self.default_clone_path
+    }
+
+    pub fn keybindings_mut(&mut self) -> &mut Vec<Keybinding> {
+        &mut self.keybindings
+    }
+
+    pub fn network_mut(&mut self) -> &mut NetworkOptions {
+        &mut self.network
+    }
+
+    pub fn save_to_path<P: AsRef<Path>>(&self, path: P) -> std::io::Result<()> {
+        let contents = serde_json::to_string_pretty(self).unwrap_or_else(|_| "{}".to_string());
+        if let Some(parent) = path.as_ref().parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(path, contents)
+    }
+
+    pub fn from_path<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
+        let contents = fs::read_to_string(path)?;
+        serde_json::from_str(&contents).map_err(|err| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Failed to parse preferences: {err}"),
+            )
+        })
+    }
 }

@@ -30,6 +30,10 @@ impl RepoOverviewPanel {
         }
     }
 
+    pub fn set_theme(&mut self, theme: Theme) {
+        self.theme = theme;
+    }
+
     pub fn ui(&mut self, ui: &mut Ui, repo: Option<&RepoContext>) {
         ui.add_space(8.0);
         ui.horizontal(|ui| {
