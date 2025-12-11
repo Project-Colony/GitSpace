@@ -1,7 +1,10 @@
 use eframe::egui::{self, Align, Layout, RichText, Sense, Ui};
 
 use crate::config::AppConfig;
-use crate::ui::{clone::ClonePanel, context::RepoContext, recent::RecentList, theme::Theme};
+use crate::ui::{
+    clone::ClonePanel, context::RepoContext, recent::RecentList, repo_overview::RepoOverviewPanel,
+    theme::Theme,
+};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum MainTab {
@@ -170,6 +173,8 @@ impl<'a> ShellLayout<'a> {
         clone_panel: &mut ClonePanel,
         recent_list: &mut RecentList,
         config: &AppConfig,
+        repo_overview: &mut RepoOverviewPanel,
+        repo: Option<&RepoContext>,
     ) -> Option<String> {
         let body_color = self.theme.palette.text_secondary;
         ui.add_space(8.0);
@@ -180,13 +185,7 @@ impl<'a> ShellLayout<'a> {
             }
             MainTab::Open => recent_list.ui(ui, config).map(|entry| entry.path),
             MainTab::RepoOverview => {
-                ui.heading(
-                    RichText::new("Repository overview").color(self.theme.palette.text_primary),
-                );
-                ui.label(
-                    RichText::new("Insights, README preview, and key metrics will appear here.")
-                        .color(body_color),
-                );
+                repo_overview.ui(ui, repo);
                 None
             }
             MainTab::History => {

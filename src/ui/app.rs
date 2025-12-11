@@ -6,6 +6,7 @@ use crate::ui::{
     context::RepoContext,
     layout::{MainTab, ShellLayout},
     recent::RecentList,
+    repo_overview::RepoOverviewPanel,
     theme::Theme,
 };
 
@@ -15,6 +16,7 @@ pub struct GitSpaceApp {
     active_tab: MainTab,
     clone_panel: ClonePanel,
     recent_list: RecentList,
+    repo_overview: RepoOverviewPanel,
     config: AppConfig,
     current_repo: Option<RepoContext>,
 }
@@ -30,6 +32,7 @@ impl GitSpaceApp {
         Self {
             clone_panel: ClonePanel::new(theme.clone()),
             recent_list: RecentList::new(theme.clone()),
+            repo_overview: RepoOverviewPanel::new(theme.clone()),
             config,
             current_repo,
             theme,
@@ -73,6 +76,8 @@ impl eframe::App for GitSpaceApp {
                 &mut self.clone_panel,
                 &mut self.recent_list,
                 &self.config,
+                &mut self.repo_overview,
+                self.current_repo.as_ref(),
             ) {
                 self.load_repo_context(selected);
             }
