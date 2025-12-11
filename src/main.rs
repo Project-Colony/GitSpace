@@ -1,6 +1,5 @@
 mod auth;
 mod config;
-mod error;
 mod git;
 mod ui;
 

@@ -9,9 +9,7 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue, USER_AGENT};
 use serde::Deserialize;
 
 use crate::auth::{AuthManager, extract_host};
-use crate::error::{AppError, logs_directory};
 use crate::git::clone::{CloneProgress, CloneRequest, clone_repository};
-use crate::ui::notifications::{Notification, NotificationAction, NotificationCenter};
 use crate::ui::theme::Theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,9 +54,9 @@ pub struct ClonePanel {
     token: String,
     search_results: Vec<RemoteRepo>,
     selected_repo: Option<usize>,
-    search_promise: Option<Promise<Result<Vec<RemoteRepo>, AppError>>>,
+    search_promise: Option<Promise<Result<Vec<RemoteRepo>, String>>>,
     search_status: Option<String>,
-    clone_promise: Option<Promise<Result<(), AppError>>>,
+    clone_promise: Option<Promise<Result<(), String>>>,
     progress_rx: Option<Receiver<CloneEvent>>,
     progress: Option<CloneProgress>,
     clone_status: Option<String>,
@@ -66,7 +64,6 @@ pub struct ClonePanel {
     active_destination: Option<PathBuf>,
     last_cloned_repo: Option<PathBuf>,
     token_source: Option<String>,
-    last_request: Option<CloneRequest>,
 }
 
 impl ClonePanel {
@@ -90,7 +87,6 @@ impl ClonePanel {
             active_destination: None,
             last_cloned_repo: None,
             token_source: None,
-            last_request: None,
         }
     }
 
@@ -102,10 +98,10 @@ impl ClonePanel {
         self.destination = destination.into();
     }
 
-    pub fn ui(&mut self, ui: &mut Ui, auth: &AuthManager, notifications: &mut NotificationCenter) {
-        self.poll_search(notifications);
+    pub fn ui(&mut self, ui: &mut Ui, auth: &AuthManager) {
+        self.poll_search();
         self.poll_clone_progress();
-        self.poll_clone_result(notifications);
+        self.poll_clone_result();
 
         ui.add_space(8.0);
         ui.horizontal(|ui| {
@@ -364,20 +360,7 @@ impl ClonePanel {
             destination,
             token,
         };
-        self.begin_clone(request);
-    }
 
-    pub fn retry_last_clone(&mut self) {
-        if self.cloning {
-            return;
-        }
-        if let Some(request) = self.last_request.clone() {
-            self.begin_clone(request);
-        }
-    }
-
-    fn begin_clone(&mut self, request: CloneRequest) {
-        self.last_request = Some(request.clone());
         self.active_destination = Some(request.destination.clone());
 
         let (tx, rx) = mpsc::channel();
@@ -399,7 +382,7 @@ impl ClonePanel {
         self.provider.host()
     }
 
-    fn poll_search(&mut self, notifications: &mut NotificationCenter) {
+    fn poll_search(&mut self) {
         if let Some(promise) = &self.search_promise {
             if let Some(result) = promise.ready() {
                 let result = result.clone();
@@ -415,14 +398,7 @@ impl ClonePanel {
                         }
                     }
                     Err(err) => {
-                        let log_path = logs_directory();
-                        self.search_status = Some(err.user_message());
-                        let mut notification =
-                            Notification::error("Search failed", err.user_message())
-                                .with_log_path(log_path.clone())
-                                .with_action(NotificationAction::CopyLogPath(log_path));
-                        notification.detail = Some(err.detail().to_string());
-                        notifications.push(notification);
+                        self.search_status = Some(format!("Search failed: {}", err));
                     }
                 }
             }
@@ -441,7 +417,7 @@ impl ClonePanel {
         }
     }
 
-    fn poll_clone_result(&mut self, notifications: &mut NotificationCenter) {
+    fn poll_clone_result(&mut self) {
         if let Some(promise) = &self.clone_promise {
             if let Some(result) = promise.ready() {
                 let result = result.clone();
@@ -452,26 +428,9 @@ impl ClonePanel {
                     Ok(()) => {
                         self.clone_status = Some("Clone completed successfully".to_string());
                         self.last_cloned_repo = self.active_destination.take();
-                        if let Some(repo) = &self.last_cloned_repo {
-                            notifications.push(
-                                Notification::success(
-                                    "Repository cloned",
-                                    format!("Saved to {}", repo.display()),
-                                )
-                                .with_log_path(logs_directory()),
-                            );
-                        }
                     }
                     Err(err) => {
-                        let log_path = logs_directory();
-                        self.clone_status = Some(err.user_message());
-                        let mut notification =
-                            Notification::error("Clone failed", err.user_message())
-                                .with_action(NotificationAction::RetryClone)
-                                .with_action(NotificationAction::CopyLogPath(log_path.clone()))
-                                .with_log_path(log_path);
-                        notification.detail = Some(err.detail().to_string());
-                        notifications.push(notification);
+                        self.clone_status = Some(format!("Clone failed: {}", err));
                         self.active_destination = None;
                     }
                 }
@@ -488,7 +447,7 @@ fn search_repositories(
     provider: Provider,
     query: &str,
     token: Option<&str>,
-) -> Result<Vec<RemoteRepo>, AppError> {
+) -> Result<Vec<RemoteRepo>, String> {
     match provider {
         Provider::GitHub => search_github(query, token),
         Provider::GitLab => search_gitlab(query, token),
@@ -499,12 +458,11 @@ fn client_with_headers(
     token: Option<&str>,
     token_header: Option<&str>,
     header: Option<(&'static str, &'static str)>,
-) -> Result<Client, AppError> {
+) -> Result<Client, String> {
     let mut headers = HeaderMap::new();
     headers.insert(
         USER_AGENT,
-        HeaderValue::from_str("gitspace-ui/0.1")
-            .map_err(|err| AppError::Validation(err.to_string()))?,
+        HeaderValue::from_str("gitspace-ui/0.1").map_err(|e| e.to_string())?,
     );
     if let Some(token) = token {
         let header_name = token_header.unwrap_or("Authorization");
@@ -513,22 +471,20 @@ fn client_with_headers(
         } else {
             token.to_string()
         };
-        let name = HeaderName::from_str(header_name)
-            .map_err(|err| AppError::Validation(err.to_string()))?;
-        let auth_value =
-            HeaderValue::from_str(&value).map_err(|err| AppError::Validation(err.to_string()))?;
+        let name = HeaderName::from_str(header_name).map_err(|e| e.to_string())?;
+        let auth_value = HeaderValue::from_str(&value).map_err(|e| e.to_string())?;
         headers.insert(name, auth_value);
     }
     if let Some((key, value)) = header {
         headers.insert(
             key,
-            HeaderValue::from_str(value).map_err(|err| AppError::Validation(err.to_string()))?,
+            HeaderValue::from_str(value).map_err(|e| e.to_string())?,
         );
     }
     Client::builder()
         .default_headers(headers)
         .build()
-        .map_err(AppError::from)
+        .map_err(|e| e.to_string())
 }
 
 #[derive(Debug, Deserialize)]
@@ -543,18 +499,18 @@ struct GithubSearchResponse {
     items: Vec<GithubRepoItem>,
 }
 
-fn search_github(query: &str, token: Option<&str>) -> Result<Vec<RemoteRepo>, AppError> {
+fn search_github(query: &str, token: Option<&str>) -> Result<Vec<RemoteRepo>, String> {
     let client = client_with_headers(token, None, None)?;
     let url = "https://api.github.com/search/repositories";
     let response: GithubSearchResponse = client
         .get(url)
         .query(&[("q", query), ("per_page", "6")])
         .send()
-        .map_err(AppError::from)?
+        .map_err(|e| e.to_string())?
         .error_for_status()
-        .map_err(AppError::from)?
+        .map_err(|e| e.to_string())?
         .json()
-        .map_err(AppError::from)?;
+        .map_err(|e| e.to_string())?;
 
     Ok(response
         .items
@@ -574,7 +530,7 @@ struct GitlabProject {
     http_url_to_repo: String,
 }
 
-fn search_gitlab(query: &str, token: Option<&str>) -> Result<Vec<RemoteRepo>, AppError> {
+fn search_gitlab(query: &str, token: Option<&str>) -> Result<Vec<RemoteRepo>, String> {
     let client = client_with_headers(
         token,
         Some("PRIVATE-TOKEN"),
@@ -585,11 +541,11 @@ fn search_gitlab(query: &str, token: Option<&str>) -> Result<Vec<RemoteRepo>, Ap
         .get(url)
         .query(&[("search", query), ("per_page", "6"), ("simple", "true")])
         .send()
-        .map_err(AppError::from)?
+        .map_err(|e| e.to_string())?
         .error_for_status()
-        .map_err(AppError::from)?
+        .map_err(|e| e.to_string())?
         .json()
-        .map_err(AppError::from)?;
+        .map_err(|e| e.to_string())?;
 
     Ok(response
         .into_iter()

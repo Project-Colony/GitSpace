@@ -1,8 +1,6 @@
 use git2::{Cred, FetchOptions, RemoteCallbacks, build::RepoBuilder};
 use std::path::PathBuf;
 
-use crate::error::AppError;
-
 #[derive(Debug, Clone)]
 pub struct CloneRequest {
     pub url: String,
@@ -22,7 +20,7 @@ pub struct CloneProgress {
 pub fn clone_repository(
     request: CloneRequest,
     mut on_progress: impl FnMut(CloneProgress) + Send + 'static,
-) -> Result<(), AppError> {
+) -> Result<(), String> {
     let mut callbacks = RemoteCallbacks::new();
     let token = request.token.clone();
 
@@ -54,7 +52,7 @@ pub fn clone_repository(
 
     builder
         .clone(&request.url, &request.destination)
-        .map_err(AppError::from)?;
+        .map_err(|e| e.message().to_string())?;
 
     Ok(())
 }
