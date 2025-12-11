@@ -132,11 +132,11 @@ impl SettingsPanel {
                     .hint_text("/home/me/code"),
             );
 
-            if ui.button("Choose folder").clicked() {
-                if let Some(path) = FileDialog::new().pick_folder() {
-                    self.preferences
-                        .set_default_clone_path(path.display().to_string());
-                }
+            if ui.button("Choose folder").clicked()
+                && let Some(path) = FileDialog::new().pick_folder()
+            {
+                self.preferences
+                    .set_default_clone_path(path.display().to_string());
             }
         });
     }
@@ -211,10 +211,9 @@ impl SettingsPanel {
             if ui
                 .add_sized([90.0, 26.0], TextEdit::singleline(&mut timeout_str))
                 .changed()
+                && let Ok(parsed) = timeout_str.parse()
             {
-                if let Ok(parsed) = timeout_str.parse() {
-                    network.network_timeout_secs = parsed;
-                }
+                network.network_timeout_secs = parsed;
             }
         });
 
@@ -330,35 +329,34 @@ impl SettingsPanel {
         ui.add_space(6.0);
 
         ui.horizontal(|ui| {
-            if ui.button("Import settings").clicked() {
-                if let Some(path) = FileDialog::new().add_filter("JSON", &["json"]).pick_file() {
-                    match Preferences::from_path(&path) {
-                        Ok(prefs) => {
-                            self.preferences = prefs.clone();
-                            self.pending_preferences = Some(prefs);
-                            self.import_status =
-                                Some(format!("Imported preferences from {}", path.display()));
-                        }
-                        Err(err) => {
-                            self.import_status = Some(err.to_string());
-                        }
+            if ui.button("Import settings").clicked()
+                && let Some(path) = FileDialog::new().add_filter("JSON", &["json"]).pick_file()
+            {
+                match Preferences::from_path(&path) {
+                    Ok(prefs) => {
+                        self.preferences = prefs.clone();
+                        self.pending_preferences = Some(prefs);
+                        self.import_status =
+                            Some(format!("Imported preferences from {}", path.display()));
+                    }
+                    Err(err) => {
+                        self.import_status = Some(err.to_string());
                     }
                 }
             }
 
-            if ui.button("Export settings").clicked() {
-                if let Some(path) = FileDialog::new()
+            if ui.button("Export settings").clicked()
+                && let Some(path) = FileDialog::new()
                     .add_filter("JSON", &["json"])
                     .set_file_name("gitspace-preferences.json")
                     .save_file()
-                {
-                    match self.preferences.save_to_path(&path) {
-                        Ok(_) => {
-                            self.export_status =
-                                Some(format!("Saved preferences to {}", path.display()));
-                        }
-                        Err(err) => self.export_status = Some(err.to_string()),
+            {
+                match self.preferences.save_to_path(&path) {
+                    Ok(_) => {
+                        self.export_status =
+                            Some(format!("Saved preferences to {}", path.display()));
                     }
+                    Err(err) => self.export_status = Some(err.to_string()),
                 }
             }
         });

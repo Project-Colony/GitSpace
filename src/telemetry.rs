@@ -8,6 +8,7 @@ use rand::{Rng, distributions::Alphanumeric};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
+use tracing::{debug, error};
 
 use crate::config;
 
@@ -135,11 +136,16 @@ impl TelemetryEmitter {
                 drained.append(&mut self.queue);
                 self.queue = drained;
                 self.persist_offline();
-                eprintln!("telemetry flush failed: {err}");
+                error!(target: "gitspace::telemetry", error = %err, "telemetry flush failed; queued events persisted locally");
                 return;
             }
 
             self.last_flush = Instant::now();
+            debug!(
+                target: "gitspace::telemetry",
+                queued = self.queue.len(),
+                "telemetry batch flushed"
+            );
         }
 
         if self.queue.is_empty() {
@@ -150,7 +156,7 @@ impl TelemetryEmitter {
     fn persist_offline(&self) {
         if let Some(parent) = self.offline_path.parent() {
             if let Err(err) = fs::create_dir_all(parent) {
-                eprintln!("telemetry queue dir error: {err}");
+                error!(target: "gitspace::telemetry", error = %err, "telemetry queue dir error");
                 return;
             }
         }
@@ -159,7 +165,7 @@ impl TelemetryEmitter {
             &self.offline_path,
             serde_json::to_string(&self.queue).unwrap_or_default(),
         ) {
-            eprintln!("telemetry queue write error: {err}");
+            error!(target: "gitspace::telemetry", error = %err, "telemetry queue write error");
         }
     }
 
