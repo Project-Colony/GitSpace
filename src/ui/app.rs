@@ -126,26 +126,32 @@ impl eframe::App for GitSpaceApp {
         layout.right_panel(ctx, self.current_repo.as_ref());
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.set_min_height(ui.available_height());
             layout.tab_bar(ui, &mut self.active_tab);
-            if let Some(selected) = layout.tab_content(
-                ui,
-                self.active_tab,
-                &mut self.clone_panel,
-                &mut self.recent_list,
-                &self.config,
-                &mut self.repo_overview,
-                &mut self.stage_panel,
-                &mut self.history_panel,
-                &mut self.branches_panel,
-                &mut self.auth_panel,
-                &mut self.settings_panel,
-                &mut self.notifications,
-                self.current_repo.as_ref(),
-                &self.auth_manager,
-            ) {
-                self.load_repo_context(selected);
-            }
+            let available_height = ui.available_height();
+            egui::ScrollArea::vertical()
+                .id_source("main_tab_content")
+                .max_height(available_height)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    if let Some(selected) = layout.tab_content(
+                        ui,
+                        self.active_tab,
+                        &mut self.clone_panel,
+                        &mut self.recent_list,
+                        &self.config,
+                        &mut self.repo_overview,
+                        &mut self.stage_panel,
+                        &mut self.history_panel,
+                        &mut self.branches_panel,
+                        &mut self.auth_panel,
+                        &mut self.settings_panel,
+                        &mut self.notifications,
+                        self.current_repo.as_ref(),
+                        &self.auth_manager,
+                    ) {
+                        self.load_repo_context(selected);
+                    }
+                });
         });
 
         if let Some(updated_preferences) = self.settings_panel.take_changes() {
