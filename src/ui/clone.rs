@@ -1,9 +1,11 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::mpsc::{self, Receiver};
 
 use eframe::egui::{self, Align, ComboBox, Layout, RichText, Sense, TextEdit, Ui};
 use poll_promise::Promise;
+use reqwest::StatusCode;
 use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, USER_AGENT};
 use serde::Deserialize;
@@ -596,15 +598,21 @@ fn enforce_https_policy(url: &str, network: &NetworkOptions) -> Result<(), AppEr
 }
 
 #[derive(Debug, Deserialize)]
+struct GithubRepoOwner {
+    login: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct GithubRepoItem {
     full_name: String,
     description: Option<String>,
     html_url: String,
+    owner: GithubRepoOwner,
 }
 
 #[derive(Debug, Deserialize)]
-struct GithubSearchResponse {
-    items: Vec<GithubRepoItem>,
+struct GithubUserProfile {
+    login: String,
 }
 
 fn search_github(
@@ -612,28 +620,60 @@ fn search_github(
     token: Option<&str>,
     network: &NetworkOptions,
 ) -> Result<Vec<RemoteRepo>, AppError> {
-    let url = "https://api.github.com/search/repositories";
-    enforce_https_policy(url, network)?;
-    let client = client_with_headers(token, None, None, network)?;
-    let response: GithubSearchResponse = client
-        .get(url)
-        .query(&[("q", query), ("per_page", "6")])
-        .send()
-        .map_err(AppError::from)?
-        .error_for_status()
-        .map_err(AppError::from)?
-        .json()
-        .map_err(AppError::from)?;
+    let account = query.trim();
+    if account.is_empty() {
+        return Ok(Vec::new());
+    }
 
-    Ok(response
-        .items
+    let client = client_with_headers(token, None, None, network)?;
+    let mut unique = HashSet::new();
+    let mut repositories = Vec::new();
+
+    let public_user_url = format!("https://api.github.com/users/{}/repos", account);
+    repositories.extend(
+        fetch_github_repos(&client, &public_user_url, &[("type", "public")], network)
+            .unwrap_or_default(),
+    );
+
+    let public_org_url = format!("https://api.github.com/orgs/{}/repos", account);
+    repositories.extend(
+        fetch_github_repos(&client, &public_org_url, &[("type", "public")], network)
+            .unwrap_or_default(),
+    );
+
+    if token.is_some() {
+        if let Some(login) = fetch_github_login(&client, network)? {
+            if login.eq_ignore_ascii_case(account) {
+                let private_repos = fetch_github_repos(
+                    &client,
+                    "https://api.github.com/user/repos",
+                    &[
+                        ("visibility", "all"),
+                        ("affiliation", "owner,collaborator,organization_member"),
+                    ],
+                    network,
+                )?;
+
+                repositories.extend(
+                    private_repos
+                        .into_iter()
+                        .filter(|repo| repo.owner.login.eq_ignore_ascii_case(account)),
+                );
+            }
+        }
+    }
+
+    let results = repositories
         .into_iter()
+        .filter(|repo| unique.insert(repo.full_name.clone()))
         .map(|item| RemoteRepo {
             name: item.full_name,
             description: item.description.unwrap_or_default(),
             url: item.html_url,
         })
-        .collect())
+        .collect();
+
+    Ok(results)
 }
 
 #[derive(Debug, Deserialize)]
@@ -674,4 +714,60 @@ fn search_gitlab(
             url: project.http_url_to_repo,
         })
         .collect())
+}
+
+fn fetch_github_login(
+    client: &Client,
+    network: &NetworkOptions,
+) -> Result<Option<String>, AppError> {
+    let url = "https://api.github.com/user";
+    enforce_https_policy(url, network)?;
+    let response = client.get(url).send().map_err(AppError::from)?;
+    if response.status() == StatusCode::UNAUTHORIZED {
+        return Ok(None);
+    }
+    let profile: GithubUserProfile = response
+        .error_for_status()?
+        .json()
+        .map_err(AppError::from)?;
+    Ok(Some(profile.login))
+}
+
+fn fetch_github_repos(
+    client: &Client,
+    base_url: &str,
+    params: &[(&str, &str)],
+    network: &NetworkOptions,
+) -> Result<Vec<GithubRepoItem>, AppError> {
+    enforce_https_policy(base_url, network)?;
+    let mut all_repos = Vec::new();
+    let per_page = 100;
+
+    for page in 1..=10 {
+        let mut query_params: Vec<(&str, String)> =
+            params.iter().map(|(k, v)| (*k, (*v).to_string())).collect();
+        query_params.push(("per_page", per_page.to_string()));
+        query_params.push(("page", page.to_string()));
+
+        let response = client
+            .get(base_url)
+            .query(&query_params)
+            .send()
+            .map_err(AppError::from)?;
+
+        if response.status() == StatusCode::NOT_FOUND {
+            break;
+        }
+
+        let response = response.error_for_status().map_err(AppError::from)?;
+        let mut repos: Vec<GithubRepoItem> = response.json().map_err(AppError::from)?;
+        let count = repos.len();
+        all_repos.append(&mut repos);
+
+        if count < per_page {
+            break;
+        }
+    }
+
+    Ok(all_repos)
 }
