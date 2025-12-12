@@ -29,7 +29,11 @@ fn build_layout_components() -> (
     let auth_manager = AuthManager::default();
     (
         theme.clone(),
-        ClonePanel::new(theme.clone(), preferences.default_clone_path().to_string()),
+        ClonePanel::new(
+            theme.clone(),
+            preferences.default_clone_path().to_string(),
+            preferences.network().clone(),
+        ),
         RecentList::new(theme.clone()),
         AppConfig::default(),
         RepoOverviewPanel::new(theme.clone()),

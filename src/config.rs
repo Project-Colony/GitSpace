@@ -266,6 +266,10 @@ impl Preferences {
         &mut self.network
     }
 
+    pub fn network(&self) -> &NetworkOptions {
+        &self.network
+    }
+
     pub fn auto_check_updates(&self) -> bool {
         self.auto_check_updates
     }
