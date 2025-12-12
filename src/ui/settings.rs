@@ -250,6 +250,19 @@ impl SettingsPanel {
                 );
                 panel.preferences.set_telemetry_enabled(telemetry_enabled);
 
+                ui.add_space(6.0);
+                let mut encrypted_tokens = panel.preferences.allow_encrypted_tokens();
+                ui.checkbox(
+                    &mut encrypted_tokens,
+                    "Allow encrypted file storage if the native keyring is unavailable",
+                )
+                .on_hover_text(
+                    "GitSpace uses the OS keyring by default. Enable this to fall back to a locally encrypted file when keyring access fails.",
+                );
+                panel
+                    .preferences
+                    .set_allow_encrypted_tokens(encrypted_tokens);
+
                 ui.add_space(4.0);
                 ui.label(
                     RichText::new(

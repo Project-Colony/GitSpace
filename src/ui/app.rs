@@ -51,7 +51,8 @@ impl GitSpaceApp {
         let default_clone_path = preferences.default_clone_path().to_string();
         let theme = Theme::from_mode(preferences.theme_mode());
         let settings_theme = theme.clone();
-        let auth_manager = AuthManager::new();
+        let auth_manager =
+            AuthManager::with_encrypted_fallback(preferences.allow_encrypted_tokens());
         let current_repo = config
             .recent_repos()
             .first()
@@ -231,6 +232,9 @@ impl GitSpaceApp {
         self.stage_panel.set_theme(self.theme.clone());
         self.auth_panel.set_theme(self.theme.clone());
         self.settings_panel.set_theme(self.theme.clone());
+        self.auth_manager
+            .set_encrypted_fallback(preferences.allow_encrypted_tokens());
+        self.auth_panel.set_auth_manager(self.auth_manager.clone());
         self.settings_panel.set_preferences(preferences.clone());
 
         self.telemetry.set_enabled(preferences.telemetry_enabled());
