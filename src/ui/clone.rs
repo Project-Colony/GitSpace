@@ -214,9 +214,7 @@ impl ClonePanel {
                     self.search_status = None;
                 }
 
-                let has_query = self.repo_query.trim().len() >= 2;
-                let has_token = self.resolve_token_for_provider(auth).is_some();
-                let search_enabled = (has_query || has_token) && !self.cloning;
+                let search_enabled = self.repo_query.trim().len() >= 2 && !self.cloning;
                 let button = ui.add_enabled(search_enabled, egui::Button::new("Search"));
                 if button.clicked() {
                     self.start_search(auth);
@@ -354,35 +352,20 @@ impl ClonePanel {
 
     fn start_search(&mut self, auth: &AuthManager) {
         let query = self.repo_query.trim().to_string();
-        let provider = self.provider;
-        let token = self.resolve_token_for_provider(auth);
-        let network = self.network.clone();
-        let has_query = query.len() >= 2;
-
-        if !has_query && token.is_none() {
-            self.search_status = Some(
-                "Enter at least 2 characters or provide a saved token to list your repositories."
-                    .to_string(),
-            );
+        if query.len() < 2 {
             return;
         }
-
-        self.search_status = Some("Searching...".to_string());
-        self.search_promise = Some(Promise::spawn_thread("search_repos", move || {
-            if has_query {
-                search_repositories(provider, &query, token.as_deref(), network)
-            } else {
-                list_repositories(provider, token.as_deref(), network)
-            }
-        }));
-    }
-
-    fn resolve_token_for_provider(&self, auth: &AuthManager) -> Option<String> {
-        if self.token.trim().is_empty() {
+        let provider = self.provider;
+        let token = if self.token.trim().is_empty() {
             auth.resolve_for_host(self.provider_host())
         } else {
             Some(self.token.clone())
-        }
+        };
+        let network = self.network.clone();
+        self.search_status = Some("Searching...".to_string());
+        self.search_promise = Some(Promise::spawn_thread("search_repos", move || {
+            search_repositories(provider, &query, token.as_deref(), network)
+        }));
     }
 
     fn start_clone(&mut self, auth: &AuthManager) {
@@ -541,17 +524,6 @@ fn search_repositories(
     }
 }
 
-fn list_repositories(
-    provider: Provider,
-    token: Option<&str>,
-    network: NetworkOptions,
-) -> Result<Vec<RemoteRepo>, AppError> {
-    match provider {
-        Provider::GitHub => list_github_repositories(token, &network),
-        Provider::GitLab => list_gitlab_repositories(token, &network),
-    }
-}
-
 fn client_with_headers(
     token: Option<&str>,
     token_header: Option<&str>,
@@ -664,39 +636,6 @@ fn search_github(
         .collect())
 }
 
-fn list_github_repositories(
-    token: Option<&str>,
-    network: &NetworkOptions,
-) -> Result<Vec<RemoteRepo>, AppError> {
-    let token = token.ok_or_else(|| {
-        AppError::Validation(
-            "A GitHub token is required to list your repositories. Add one in Auth or the Clone tab.".to_string(),
-        )
-    })?;
-
-    let url = "https://api.github.com/user/repos";
-    enforce_https_policy(url, network)?;
-    let client = client_with_headers(Some(token), None, None, network)?;
-    let response: Vec<GithubRepoItem> = client
-        .get(url)
-        .query(&[("per_page", "50"), ("type", "all"), ("sort", "updated")])
-        .send()
-        .map_err(AppError::from)?
-        .error_for_status()
-        .map_err(AppError::from)?
-        .json()
-        .map_err(AppError::from)?;
-
-    Ok(response
-        .into_iter()
-        .map(|item| RemoteRepo {
-            name: item.full_name,
-            description: item.description.unwrap_or_default(),
-            url: item.html_url,
-        })
-        .collect())
-}
-
 #[derive(Debug, Deserialize)]
 struct GitlabProject {
     name_with_namespace: String,
@@ -720,48 +659,6 @@ fn search_gitlab(
     let response: Vec<GitlabProject> = client
         .get(url)
         .query(&[("search", query), ("per_page", "6"), ("simple", "true")])
-        .send()
-        .map_err(AppError::from)?
-        .error_for_status()
-        .map_err(AppError::from)?
-        .json()
-        .map_err(AppError::from)?;
-
-    Ok(response
-        .into_iter()
-        .map(|project| RemoteRepo {
-            name: project.name_with_namespace,
-            description: project.description.unwrap_or_default(),
-            url: project.http_url_to_repo,
-        })
-        .collect())
-}
-
-fn list_gitlab_repositories(
-    token: Option<&str>,
-    network: &NetworkOptions,
-) -> Result<Vec<RemoteRepo>, AppError> {
-    let token = token.ok_or_else(|| {
-        AppError::Validation(
-            "A GitLab token is required to list your repositories. Add one in Auth or the Clone tab.".to_string(),
-        )
-    })?;
-
-    let url = "https://gitlab.com/api/v4/projects";
-    enforce_https_policy(url, network)?;
-    let client = client_with_headers(
-        Some(token),
-        Some("PRIVATE-TOKEN"),
-        Some(("Accept", "application/json")),
-        network,
-    )?;
-    let response: Vec<GitlabProject> = client
-        .get(url)
-        .query(&[
-            ("per_page", "50"),
-            ("simple", "true"),
-            ("membership", "true"),
-        ])
         .send()
         .map_err(AppError::from)?
         .error_for_status()
