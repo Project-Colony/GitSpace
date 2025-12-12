@@ -13,7 +13,10 @@ fn main() {
     logging::init_tracing();
     log_dev_feature_flags();
 
-    let native_options = eframe::NativeOptions::default();
+    let native_options = eframe::NativeOptions {
+        renderer: eframe::Renderer::Glow,
+        ..Default::default()
+    };
 
     eframe::run_native(
         "GitSpace",
