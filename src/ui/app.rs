@@ -11,6 +11,7 @@ use crate::ui::{
     branches::BranchPanel,
     clone::ClonePanel,
     context::RepoContext,
+    fonts,
     history::HistoryPanel,
     layout::{MainTab, ShellLayout},
     notifications::{Notification, NotificationAction, NotificationCenter},
@@ -96,6 +97,7 @@ impl GitSpaceApp {
 
     fn initialize_if_needed(&mut self, ctx: &egui::Context) {
         if !self.initialized {
+            fonts::install_fonts(ctx);
             self.theme.apply(ctx);
             self.initialized = true;
         }
