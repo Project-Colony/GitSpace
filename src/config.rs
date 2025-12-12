@@ -105,6 +105,8 @@ pub struct Preferences {
     update_feed_override: Option<String>,
     #[serde(default)]
     telemetry_enabled: bool,
+    #[serde(default)]
+    allow_encrypted_tokens: bool,
 }
 
 impl Default for Preferences {
@@ -118,6 +120,7 @@ impl Default for Preferences {
             release_channel: ReleaseChannel::default(),
             update_feed_override: None,
             telemetry_enabled: false,
+            allow_encrypted_tokens: false,
         }
     }
 }
@@ -289,6 +292,14 @@ impl Preferences {
 
     pub fn set_telemetry_enabled(&mut self, enabled: bool) {
         self.telemetry_enabled = enabled;
+    }
+
+    pub fn allow_encrypted_tokens(&self) -> bool {
+        self.allow_encrypted_tokens
+    }
+
+    pub fn set_allow_encrypted_tokens(&mut self, allowed: bool) {
+        self.allow_encrypted_tokens = allowed;
     }
 
     pub fn save_to_path<P: AsRef<Path>>(&self, path: P) -> std::io::Result<()> {

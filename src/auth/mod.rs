@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
+use argon2::{Algorithm, Argon2, Params, Version};
 use base64::{Engine as _, engine::general_purpose};
 use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
@@ -13,20 +14,30 @@ use reqwest::blocking::Client;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tracing::{error, warn};
 use url::Url;
 
 const SERVICE_NAME: &str = "gitspace";
 const TOKEN_FILE_NAME: &str = "tokens.enc";
+const TOKEN_SALT_FILE: &str = "token-salt.bin";
+const TOKEN_PEPPER_FILE: &str = "token-pepper.bin";
+const MASTER_PASSWORD_ENV: &str = "GITSPACE_TOKEN_MASTER_PASSWORD";
 
 #[derive(Debug, Clone)]
 pub struct AuthManager {
     storage: TokenStorage,
 }
 
+impl Default for AuthManager {
+    fn default() -> Self {
+        Self::with_encrypted_fallback(false)
+    }
+}
+
 impl AuthManager {
-    pub fn new() -> Self {
+    pub fn with_encrypted_fallback(allow_encrypted_fallback: bool) -> Self {
         Self {
-            storage: TokenStorage::new(),
+            storage: TokenStorage::new(allow_encrypted_fallback),
         }
     }
 
@@ -74,12 +85,16 @@ impl AuthManager {
         self.validate_token(host, token)?;
         self.storage.set_token(host, token)
     }
+    pub fn set_encrypted_fallback(&mut self, allowed: bool) {
+        self.storage.set_allow_encrypted_fallback(allowed);
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct TokenStorage {
     key: [u8; 32],
     path: PathBuf,
+    allow_encrypted_fallback: bool,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -94,39 +109,74 @@ struct EncryptedTokenFile {
 }
 
 impl TokenStorage {
-    pub fn new() -> Self {
+    pub fn new(allow_encrypted_fallback: bool) -> Self {
         let key = derive_local_key();
         let path = dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join(SERVICE_NAME)
             .join(TOKEN_FILE_NAME);
-        Self { key, path }
+        Self {
+            key,
+            path,
+            allow_encrypted_fallback,
+        }
     }
 
     pub fn set_token(&self, host: &str, token: &str) -> Result<(), String> {
-        let _ = self.store_in_keyring(host, token);
-        self.persist_fallback(host, token)
+        let keyring_result = self.store_in_keyring(host, token);
+        if let Err(ref err) = keyring_result {
+            warn!(target: "gitspace::auth", error = %err, "failed to store token in native keyring");
+        }
+
+        if self.allow_encrypted_fallback {
+            self.persist_fallback(host, token)
+        } else if keyring_result.is_err() {
+            Err("Native keyring unavailable and encrypted storage is disabled".to_string())
+        } else {
+            Ok(())
+        }
     }
 
     pub fn get_token(&self, host: &str) -> Result<Option<String>, String> {
-        if let Some(token) = self.fetch_from_keyring(host)? {
-            return Ok(Some(token));
+        match self.fetch_from_keyring(host) {
+            Ok(Some(token)) => return Ok(Some(token)),
+            Ok(None) => {}
+            Err(err) => {
+                warn!(target: "gitspace::auth", error = %err, host, "failed to read keyring");
+                if !self.allow_encrypted_fallback {
+                    return Err(err);
+                }
+            }
         }
-        let tokens = self.read_fallback()?;
-        Ok(tokens.tokens.get(host).cloned())
+        if self.allow_encrypted_fallback {
+            let tokens = self.read_fallback()?;
+            Ok(tokens.tokens.get(host).cloned())
+        } else {
+            Ok(None)
+        }
     }
 
     pub fn clear_token(&self, host: &str) -> Result<(), String> {
-        let _ = self.remove_from_keyring(host);
-        let mut map = self.read_fallback()?;
-        map.tokens.remove(host);
-        self.write_fallback(&map)
+        if let Err(err) = self.remove_from_keyring(host) {
+            warn!(target: "gitspace::auth", error = %err, "failed to clear token from native keyring");
+        }
+        if self.allow_encrypted_fallback {
+            let mut map = self.read_fallback()?;
+            map.tokens.remove(host);
+            self.write_fallback(&map)
+        } else {
+            Ok(())
+        }
     }
 
     pub fn known_hosts(&self) -> Vec<String> {
-        self.read_fallback()
-            .map(|map| map.tokens.keys().cloned().collect())
-            .unwrap_or_default()
+        if self.allow_encrypted_fallback {
+            self.read_fallback()
+                .map(|map| map.tokens.keys().cloned().collect())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        }
     }
 
     fn store_in_keyring(&self, host: &str, token: &str) -> Result<(), String> {
@@ -185,6 +235,10 @@ impl TokenStorage {
             .map_err(|err| format!("Failed to parse credential file: {err}"))?;
         decrypt_tokens(&blob, &self.key)
     }
+
+    pub fn set_allow_encrypted_fallback(&mut self, allowed: bool) {
+        self.allow_encrypted_fallback = allowed;
+    }
 }
 
 fn encrypt_tokens(map: &TokenMap, key: &[u8; 32]) -> Result<EncryptedTokenFile, String> {
@@ -232,14 +286,50 @@ fn derive_local_key() -> [u8; 32] {
         .ok()
         .and_then(|h| h.into_string().ok())
         .unwrap_or_else(|| "localhost".to_string());
-    let mut hasher = Sha256::new();
-    hasher.update(user.as_bytes());
-    hasher.update(host.as_bytes());
-    hasher.update(std::env::consts::OS.as_bytes());
-    let digest = hasher.finalize();
+    let master_password = std::env::var(MASTER_PASSWORD_ENV)
+        .unwrap_or_else(|_| format!("{}:{}:{}", user, host, std::env::consts::OS));
+
+    let salt = load_or_create_secret(TOKEN_SALT_FILE, 16);
+    let pepper = load_or_create_secret(TOKEN_PEPPER_FILE, 32);
+
+    let mut keyed = Sha256::new();
+    keyed.update(master_password.as_bytes());
+    keyed.update(&pepper);
+    let password_material = keyed.finalize();
+
+    let params = Params::new(32, 3, 1, None).unwrap_or_else(|_| Params::DEFAULT);
+    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+
     let mut key = [0u8; 32];
-    key.copy_from_slice(&digest[..32]);
+    if let Err(err) = argon2.hash_password_into(&password_material, &salt, &mut key) {
+        error!(target: "gitspace::auth", error = %err, "failed to derive local token key");
+        let fallback = Sha256::digest(&password_material);
+        key.copy_from_slice(&fallback[..32]);
+    }
     key
+}
+
+fn load_or_create_secret(name: &str, len: usize) -> Vec<u8> {
+    let path = dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(SERVICE_NAME)
+        .join(name);
+
+    if let Ok(bytes) = fs::read(&path) {
+        if bytes.len() == len {
+            return bytes;
+        }
+    }
+
+    let mut secret = vec![0u8; len];
+    OsRng.fill_bytes(&mut secret);
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Err(err) = fs::write(&path, &secret) {
+        warn!(target: "gitspace::auth", error = %err, path = %path.display(), "unable to persist derived-key secret");
+    }
+    secret
 }
 
 fn normalize_host(host: &str) -> String {

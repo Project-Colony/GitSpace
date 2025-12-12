@@ -26,7 +26,7 @@ fn build_layout_components() -> (
 ) {
     let theme = Theme::dark();
     let preferences = Preferences::default();
-    let auth_manager = AuthManager::new();
+    let auth_manager = AuthManager::default();
     (
         theme.clone(),
         ClonePanel::new(theme.clone(), preferences.default_clone_path().to_string()),
@@ -49,7 +49,7 @@ fn layout_panels_render_without_panic() {
         theme,
         mut clone_panel,
         mut recent_list,
-        mut config,
+        config,
         mut repo_overview,
         mut stage_panel,
         mut history_panel,
@@ -99,7 +99,7 @@ fn layout_switches_tabs_in_run_loop() {
         theme,
         mut clone_panel,
         mut recent_list,
-        mut config,
+        config,
         mut repo_overview,
         mut stage_panel,
         mut history_panel,
