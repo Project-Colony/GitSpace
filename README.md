@@ -12,6 +12,27 @@ GitSpace is a Git hub application that centralizes multiple repositories in one 
 - **.NET SDK** for any forthcoming .NET integration components.
 - **Git** for interacting with repositories.
 
+## Key Dependencies
+- **eframe/egui** for the panel-based desktop UI (with WGPU rendering).
+- **git2** for repository operations (branches, status, history, stash, remotes).
+- **tracing** + **tracing-subscriber** for structured logging.
+- **reqwest** for networked features and update checks.
+- **keyring** + **chacha20poly1305** for secure credential handling.
+
+## Current Functionality
+- Launches a multi-pane egui interface (`GitSpaceApp`) with logging configured out of the box.
+- Provides panels for cloning, recent repositories, repository overview, history, branches, staging, authentication, and settings.
+- Emits optional, anonymized telemetry about app and repository openings (with opt-out controls).
+- Implements git helpers for listing, creating, deleting, renaming, and checking out branches, along with status, history, diff, stash, and merge utilities.
+
+## Architecture Overview
+- **UI (`src/ui/`)**: egui components and layout wiring for the GitKraken-inspired interface.
+- **Git (`src/git/`)**: wrappers around `git2` for repository operations consumed by the UI.
+- **Auth (`src/auth/`)**: authentication primitives to be wired into provider flows.
+- **Config (`src/config.rs`)**: user and runtime configuration settings.
+- **Telemetry (`src/telemetry.rs`)**: anonymized diagnostics with batching and user controls.
+- **Logging (`src/logging.rs`)**: structured log setup for the desktop app.
+
 ## Quick Start
 1. Install the prerequisites above.
 2. Clone this repository.
