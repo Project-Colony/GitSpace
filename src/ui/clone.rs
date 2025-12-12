@@ -9,6 +9,7 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue, USER_AGENT};
 use serde::Deserialize;
 
 use crate::auth::{AuthManager, extract_host};
+use crate::config::NetworkOptions;
 use crate::error::{AppError, logs_directory};
 use crate::git::clone::{CloneProgress, CloneRequest, clone_repository};
 use crate::ui::notifications::{Notification, NotificationAction, NotificationCenter};
@@ -67,10 +68,11 @@ pub struct ClonePanel {
     last_cloned_repo: Option<PathBuf>,
     token_source: Option<String>,
     last_request: Option<CloneRequest>,
+    network: NetworkOptions,
 }
 
 impl ClonePanel {
-    pub fn new(theme: Theme, destination: String) -> Self {
+    pub fn new(theme: Theme, destination: String, network: NetworkOptions) -> Self {
         Self {
             theme,
             provider: Provider::GitHub,
@@ -91,6 +93,7 @@ impl ClonePanel {
             last_cloned_repo: None,
             token_source: None,
             last_request: None,
+            network,
         }
     }
 
@@ -100,6 +103,10 @@ impl ClonePanel {
 
     pub fn set_default_destination<S: Into<String>>(&mut self, destination: S) {
         self.destination = destination.into();
+    }
+
+    pub fn set_network_preferences(&mut self, network: NetworkOptions) {
+        self.network = network;
     }
 
     pub fn ui(&mut self, ui: &mut Ui, auth: &AuthManager, notifications: &mut NotificationCenter) {
@@ -335,9 +342,10 @@ impl ClonePanel {
         } else {
             Some(self.token.clone())
         };
+        let network = self.network.clone();
         self.search_status = Some("Searching...".to_string());
         self.search_promise = Some(Promise::spawn_thread("search_repos", move || {
-            search_repositories(provider, &query, token.as_deref())
+            search_repositories(provider, &query, token.as_deref(), network)
         }));
     }
 
@@ -363,6 +371,7 @@ impl ClonePanel {
             url,
             destination,
             token,
+            network: self.network.clone(),
         };
         self.begin_clone(request);
     }
@@ -488,10 +497,11 @@ fn search_repositories(
     provider: Provider,
     query: &str,
     token: Option<&str>,
+    network: NetworkOptions,
 ) -> Result<Vec<RemoteRepo>, AppError> {
     match provider {
-        Provider::GitHub => search_github(query, token),
-        Provider::GitLab => search_gitlab(query, token),
+        Provider::GitHub => search_github(query, token, &network),
+        Provider::GitLab => search_gitlab(query, token, &network),
     }
 }
 
@@ -499,6 +509,7 @@ fn client_with_headers(
     token: Option<&str>,
     token_header: Option<&str>,
     header: Option<(&'static str, &'static str)>,
+    network: &NetworkOptions,
 ) -> Result<Client, AppError> {
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -525,10 +536,44 @@ fn client_with_headers(
             HeaderValue::from_str(value).map_err(|err| AppError::Validation(err.to_string()))?,
         );
     }
-    Client::builder()
-        .default_headers(headers)
-        .build()
-        .map_err(AppError::from)
+    let mut builder =
+        Client::builder()
+            .default_headers(headers)
+            .timeout(std::time::Duration::from_secs(
+                network.network_timeout_secs.max(1),
+            ));
+
+    if !network.http_proxy.is_empty() {
+        builder = builder.proxy(
+            reqwest::Proxy::http(&network.http_proxy)
+                .map_err(|err| AppError::Validation(err.to_string()))?,
+        );
+    }
+
+    if !network.https_proxy.is_empty() {
+        builder = builder.proxy(
+            reqwest::Proxy::https(&network.https_proxy)
+                .map_err(|err| AppError::Validation(err.to_string()))?,
+        );
+    }
+
+    builder.build().map_err(AppError::from)
+}
+
+fn enforce_https_policy(url: &str, network: &NetworkOptions) -> Result<(), AppError> {
+    if url.starts_with("https://") && !network.use_https {
+        return Err(AppError::Validation(
+            "HTTPS endpoints are disabled in your network settings.".to_string(),
+        ));
+    }
+
+    if url.starts_with("http://") && network.use_https {
+        return Err(AppError::Validation(
+            "HTTP requests are blocked. Enable HTTP in network settings or use HTTPS.".to_string(),
+        ));
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -543,9 +588,14 @@ struct GithubSearchResponse {
     items: Vec<GithubRepoItem>,
 }
 
-fn search_github(query: &str, token: Option<&str>) -> Result<Vec<RemoteRepo>, AppError> {
-    let client = client_with_headers(token, None, None)?;
+fn search_github(
+    query: &str,
+    token: Option<&str>,
+    network: &NetworkOptions,
+) -> Result<Vec<RemoteRepo>, AppError> {
     let url = "https://api.github.com/search/repositories";
+    enforce_https_policy(url, network)?;
+    let client = client_with_headers(token, None, None, network)?;
     let response: GithubSearchResponse = client
         .get(url)
         .query(&[("q", query), ("per_page", "6")])
@@ -574,13 +624,19 @@ struct GitlabProject {
     http_url_to_repo: String,
 }
 
-fn search_gitlab(query: &str, token: Option<&str>) -> Result<Vec<RemoteRepo>, AppError> {
+fn search_gitlab(
+    query: &str,
+    token: Option<&str>,
+    network: &NetworkOptions,
+) -> Result<Vec<RemoteRepo>, AppError> {
+    let url = "https://gitlab.com/api/v4/projects";
+    enforce_https_policy(url, network)?;
     let client = client_with_headers(
         token,
         Some("PRIVATE-TOKEN"),
         Some(("Accept", "application/json")),
+        network,
     )?;
-    let url = "https://gitlab.com/api/v4/projects";
     let response: Vec<GitlabProject> = client
         .get(url)
         .query(&[("search", query), ("per_page", "6"), ("simple", "true")])

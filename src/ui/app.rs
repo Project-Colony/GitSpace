@@ -68,7 +68,11 @@ impl GitSpaceApp {
             telemetry.record_event("app_launch", properties);
         }
         Self {
-            clone_panel: ClonePanel::new(theme.clone(), default_clone_path),
+            clone_panel: ClonePanel::new(
+                theme.clone(),
+                default_clone_path,
+                preferences.network().clone(),
+            ),
             recent_list: RecentList::new(theme.clone()),
             repo_overview: RepoOverviewPanel::new(theme.clone()),
             history_panel: HistoryPanel::new(theme.clone()),
@@ -236,6 +240,8 @@ impl GitSpaceApp {
             .set_encrypted_fallback(preferences.allow_encrypted_tokens());
         self.auth_panel.set_auth_manager(self.auth_manager.clone());
         self.settings_panel.set_preferences(preferences.clone());
+        self.clone_panel
+            .set_network_preferences(preferences.network().clone());
 
         self.telemetry.set_enabled(preferences.telemetry_enabled());
         if self.telemetry_enabled() {
@@ -265,12 +271,13 @@ impl GitSpaceApp {
             .preferences()
             .update_feed_override()
             .map(str::to_string);
+        let network = self.config.preferences().network().clone();
 
         self.settings_panel
             .set_update_status("Checking for updates...");
 
         self.update_promise = Some(Promise::spawn_thread("update-check", move || {
-            update::check_for_updates(channel, feed_override.as_deref())
+            update::check_for_updates(channel, feed_override.as_deref(), &network)
         }));
         self.update_checked = true;
     }
