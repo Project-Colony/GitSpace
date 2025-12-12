@@ -29,6 +29,10 @@ impl AuthPanel {
         self.theme = theme;
     }
 
+    pub fn set_auth_manager(&mut self, auth: AuthManager) {
+        self.auth = auth;
+    }
+
     pub fn ui(&mut self, ui: &mut Ui) {
         self.poll_validation();
 
