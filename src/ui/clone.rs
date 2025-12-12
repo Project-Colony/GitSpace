@@ -35,6 +35,17 @@ impl Provider {
             Provider::GitLab => "gitlab.com",
         }
     }
+
+    fn icon(&self) -> char {
+        match self {
+            Provider::GitHub => '\u{f408}',
+            Provider::GitLab => '\u{f296}',
+        }
+    }
+
+    fn icon_label(&self) -> String {
+        format!("{} {}", self.icon(), self.label())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -166,7 +177,7 @@ impl ClonePanel {
                 painter.text(
                     rect.center(),
                     egui::Align2::CENTER_CENTER,
-                    provider.label(),
+                    provider.icon_label(),
                     egui::FontId::proportional(self.theme.typography.title),
                     self.theme.palette.text_primary,
                 );
@@ -182,11 +193,15 @@ impl ClonePanel {
 
     fn search_section(&mut self, ui: &mut Ui, auth: &AuthManager) {
         ui.vertical(|ui| {
-            ui.heading(RichText::new("Remote repository search").color(self.theme.palette.text_primary));
-            ui.label(
-                RichText::new("Search GitHub or GitLab without leaving the app. Select a result to fill the clone URL.")
-                    .color(self.theme.palette.text_secondary),
+            ui.heading(
+                RichText::new("Remote repository search").color(self.theme.palette.text_primary),
             );
+            let search_help = format!(
+                "Search {} or {} without leaving the app. Select a result to fill the clone URL.",
+                format!("{} GitHub", Provider::GitHub.icon()),
+                format!("{} GitLab", Provider::GitLab.icon()),
+            );
+            ui.label(RichText::new(search_help).color(self.theme.palette.text_secondary));
             ui.add_space(6.0);
 
             ui.horizontal(|ui| {
@@ -222,7 +237,10 @@ impl ClonePanel {
                 .show_ui(ui, |ui| {
                     for (idx, repo) in self.search_results.iter().enumerate() {
                         let label = format!("{} — {}", repo.name, repo.description);
-                        if ui.selectable_label(self.selected_repo == Some(idx), label).clicked() {
+                        if ui
+                            .selectable_label(self.selected_repo == Some(idx), label)
+                            .clicked()
+                        {
                             self.selected_repo = Some(idx);
                             self.repo_url = repo.url.clone();
                         }
@@ -233,8 +251,9 @@ impl ClonePanel {
             ui.label(RichText::new("Repository URL").color(self.theme.palette.text_primary));
             ui.add_sized(
                 [520.0, 28.0],
-                TextEdit::singleline(&mut self.repo_url)
-                    .hint_text("https://github.com/owner/repo.git or git@gitlab.com:owner/repo.git"),
+                TextEdit::singleline(&mut self.repo_url).hint_text(
+                    "https://github.com/owner/repo.git or git@gitlab.com:owner/repo.git",
+                ),
             );
         });
     }
