@@ -4,7 +4,8 @@ GitSpace ships with optional, anonymized diagnostics. The experience is opt-in: 
 
 ## What is collected
 - Launch and session metadata (counts, release channel).
-- Feature usage signals such as tab switches or repository openings.
+- Feature usage signals such as tab switches, tab reordering, or repository openings.
+- UI navigation context is captured with the trigger type (click, keyboard, context menu, drag-and-drop) to validate accessibility paths.
 - Repository references are hashed before they leave the device; no file contents, commit messages, or credentials are recorded.
 
 ## How events are handled
@@ -16,3 +17,4 @@ GitSpace ships with optional, anonymized diagnostics. The experience is opt-in: 
 - The Privacy section in Settings contains a single checkbox to enable/disable collection plus a **Purge collected diagnostics** button.
 - The purge button deletes pending batches and any offline cache in one step.
 - Users can also decline the initial prompt; the app will honor that choice and not prompt again.
+- Telemetry events respect opt-in state at emission time; UI navigation events are only sent after consent and include minimal properties (tab label, trigger, indices for reorders).
