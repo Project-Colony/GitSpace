@@ -203,9 +203,7 @@ impl BranchPanel {
     }
 
     fn render_node(&mut self, ui: &mut Ui, repo: &RepoContext, node: &BranchNode, depth: usize) {
-        let indent = 12.0 * depth as f32;
-        ui.horizontal(|ui| {
-            ui.add_space(indent);
+        let mut render_node_contents = |ui: &mut Ui| {
             if !node.children.is_empty() {
                 egui::collapsing_header::CollapsingState::load_with_default_open(
                     ui.ctx(),
@@ -228,7 +226,18 @@ impl BranchPanel {
                     response.on_hover_text(format!("Upstream: {upstream}"));
                 }
             }
-        });
+        };
+
+        if depth == 0 {
+            render_node_contents(ui);
+        } else {
+            ui.indent(
+                ui.make_persistent_id(("branch_indent", depth, &node.label)),
+                |ui| {
+                    render_node_contents(ui);
+                },
+            );
+        }
     }
 
     fn branch_label(&self, branch: &BranchEntry) -> RichText {
