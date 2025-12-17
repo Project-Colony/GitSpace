@@ -66,6 +66,7 @@ fn layout_panels_render_without_panic() {
 
     let layout = ShellLayout::new(&theme);
     let mut active_tab = MainTab::Clone;
+    let mut tab_order = MainTab::ALL.to_vec();
 
     let output = egui::Context::default().run(Default::default(), |ctx| {
         theme.apply(ctx);
@@ -74,7 +75,7 @@ fn layout_panels_render_without_panic() {
         layout.right_panel(ctx, None);
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            layout.tab_bar(ui, &mut active_tab);
+            layout.tab_bar(ui, &mut tab_order, &mut active_tab);
             layout.tab_content(
                 ui,
                 active_tab,
@@ -116,12 +117,13 @@ fn layout_switches_tabs_in_run_loop() {
 
     let layout = ShellLayout::new(&theme);
     let mut active_tab = MainTab::History;
+    let mut tab_order = MainTab::ALL.to_vec();
 
     let output = egui::Context::default().run(Default::default(), |ctx| {
         theme.apply(ctx);
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            layout.tab_bar(ui, &mut active_tab);
+            layout.tab_bar(ui, &mut tab_order, &mut active_tab);
             layout.tab_content(
                 ui,
                 active_tab,

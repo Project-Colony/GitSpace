@@ -1,4 +1,4 @@
-use eframe::egui::{self, Align, Layout, RichText, Sense, Ui};
+use eframe::egui::{self, Align, Id, Layout, RichText, Sense, Ui};
 
 use crate::auth::AuthManager;
 use crate::config::AppConfig;
@@ -18,6 +18,31 @@ pub enum MainTab {
     Branches,
     Auth,
     Settings,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum NavigationTrigger {
+    Click,
+    Keyboard,
+    ContextMenu,
+    DragAndDrop,
+}
+
+impl NavigationTrigger {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Click => "click",
+            Self::Keyboard => "keyboard",
+            Self::ContextMenu => "context_menu",
+            Self::DragAndDrop => "drag_and_drop",
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct TabInteraction {
+    pub selected: Option<(MainTab, NavigationTrigger)>,
+    pub reordered: Option<(usize, usize)>,
 }
 
 impl MainTab {
@@ -145,10 +170,26 @@ impl<'a> ShellLayout<'a> {
             });
     }
 
-    pub fn tab_bar(&self, ui: &mut Ui, active: &mut MainTab) {
+    pub fn tab_bar(
+        &self,
+        ui: &mut Ui,
+        tab_order: &mut Vec<MainTab>,
+        active: &mut MainTab,
+    ) -> TabInteraction {
+        let mut interaction = TabInteraction::default();
+        let dragging_id = Id::new("main_tab_dragging");
+        let mut dragging: Option<usize> = ui
+            .ctx()
+            .data_mut(|data| data.get_persisted(dragging_id))
+            .unwrap_or(None);
+
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
-            for tab in MainTab::ALL {
+
+            let pointer_down = ui.input(|i| i.pointer.primary_down());
+            let mut hover_swap: Option<(usize, usize)> = None;
+
+            for (index, tab) in tab_order.iter().copied().enumerate() {
                 let is_active = *active == tab;
                 let label = RichText::new(tab.label())
                     .color(if is_active {
@@ -158,8 +199,10 @@ impl<'a> ShellLayout<'a> {
                     })
                     .strong();
 
-                let response =
-                    ui.add_sized([120.0, 32.0], egui::Label::new(label).sense(Sense::click()));
+                let response = ui.add_sized(
+                    [120.0, 32.0],
+                    egui::Label::new(label).sense(Sense::click_and_drag()),
+                );
 
                 if is_active {
                     let rect = response.rect;
@@ -170,11 +213,48 @@ impl<'a> ShellLayout<'a> {
 
                 if response.clicked() {
                     *active = tab;
+                    interaction.selected = Some((tab, NavigationTrigger::Click));
+                }
+
+                response.context_menu(|ui| {
+                    if ui.button(format!("Switch to {}", tab.label())).clicked() {
+                        *active = tab;
+                        interaction.selected = Some((tab, NavigationTrigger::ContextMenu));
+                        ui.close_menu();
+                    }
+                });
+
+                if response.drag_started() {
+                    dragging = Some(index);
+                }
+
+                if let Some(dragging_index) = dragging {
+                    if dragging_index != index && response.hovered() && pointer_down {
+                        hover_swap = Some((dragging_index, index));
+                    }
                 }
             }
+
+            if let Some((from, to)) = hover_swap {
+                tab_order.swap(from, to);
+                dragging = Some(to);
+                interaction.reordered = Some((from, to));
+                interaction.selected = Some((tab_order[to], NavigationTrigger::DragAndDrop));
+                *active = tab_order[to];
+            }
+
+            if !pointer_down {
+                dragging = None;
+            }
         });
+
+        ui.ctx()
+            .data_mut(|data| data.insert_persisted(dragging_id, dragging));
+
         ui.add_space(4.0);
         ui.separator();
+
+        interaction
     }
 
     pub fn tab_content(

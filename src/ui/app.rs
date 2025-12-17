@@ -1,4 +1,4 @@
-use eframe::egui;
+use eframe::egui::{self, Key, Modifiers};
 use poll_promise::Promise;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -13,7 +13,7 @@ use crate::ui::{
     context::RepoContext,
     fonts,
     history::HistoryPanel,
-    layout::{MainTab, ShellLayout},
+    layout::{MainTab, NavigationTrigger, ShellLayout},
     notifications::{Notification, NotificationAction, NotificationCenter},
     recent::RecentList,
     repo_overview::RepoOverviewPanel,
@@ -43,6 +43,7 @@ pub struct GitSpaceApp {
     update_checked: bool,
     telemetry: TelemetryEmitter,
     telemetry_prompt_enqueued: bool,
+    tab_order: Vec<MainTab>,
 }
 
 impl GitSpaceApp {
@@ -92,6 +93,7 @@ impl GitSpaceApp {
             update_checked: false,
             telemetry,
             telemetry_prompt_enqueued: false,
+            tab_order: MainTab::ALL.to_vec(),
         }
     }
 
@@ -125,6 +127,7 @@ impl eframe::App for GitSpaceApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.initialize_if_needed(ctx);
         self.prompt_for_telemetry_if_needed();
+        self.handle_keyboard_navigation(ctx);
 
         let theme = self.theme.clone();
         let layout = ShellLayout::new(&theme);
@@ -133,7 +136,13 @@ impl eframe::App for GitSpaceApp {
         layout.right_panel(ctx, self.current_repo.as_ref());
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            layout.tab_bar(ui, &mut self.active_tab);
+            let tab_interaction = layout.tab_bar(ui, &mut self.tab_order, &mut self.active_tab);
+            if let Some((tab, trigger)) = tab_interaction.selected {
+                self.record_tab_switch(tab, trigger);
+            }
+            if let Some((from, to)) = tab_interaction.reordered {
+                self.record_tab_reorder(from, to);
+            }
             let available_height = ui.available_height();
             egui::ScrollArea::vertical()
                 .id_source("main_tab_content")
@@ -223,6 +232,73 @@ impl eframe::App for GitSpaceApp {
 }
 
 impl GitSpaceApp {
+    fn handle_keyboard_navigation(&mut self, ctx: &egui::Context) {
+        let tab_order = self.tab_order.clone();
+        let mut selected = None;
+
+        ctx.input_mut(|input| {
+            let mut command = Modifiers::default();
+            command.command = true;
+
+            let keys = [
+                Key::Num1,
+                Key::Num2,
+                Key::Num3,
+                Key::Num4,
+                Key::Num5,
+                Key::Num6,
+                Key::Num7,
+                Key::Num8,
+            ];
+
+            for (index, key) in keys.into_iter().enumerate() {
+                if input.consume_key(command, key) {
+                    if let Some(tab) = tab_order.get(index) {
+                        selected = Some(*tab);
+                    }
+                }
+            }
+        });
+
+        if let Some(tab) = selected {
+            if self.active_tab != tab {
+                self.active_tab = tab;
+                self.record_tab_switch(tab, NavigationTrigger::Keyboard);
+            }
+        }
+    }
+
+    fn record_tab_switch(&mut self, tab: MainTab, trigger: NavigationTrigger) {
+        if !self.telemetry_enabled() {
+            return;
+        }
+
+        let mut properties = Map::new();
+        properties.insert("tab".to_string(), Value::String(tab.label().to_string()));
+        properties.insert(
+            "trigger".to_string(),
+            Value::String(trigger.as_str().to_string()),
+        );
+        self.telemetry.record_event("ui_tab_switch", properties);
+    }
+
+    fn record_tab_reorder(&mut self, from: usize, to: usize) {
+        if !self.telemetry_enabled() {
+            return;
+        }
+
+        let mut properties = Map::new();
+        if let Some(tab) = self.tab_order.get(to) {
+            properties.insert("tab".to_string(), Value::String(tab.label().to_string()));
+        }
+        properties.insert(
+            "from_index".to_string(),
+            Value::Number((from as u64).into()),
+        );
+        properties.insert("to_index".to_string(), Value::Number((to as u64).into()));
+        self.telemetry.record_event("ui_tab_reordered", properties);
+    }
+
     fn apply_preferences(&mut self, preferences: Preferences, ctx: &egui::Context) {
         self.config.set_preferences(preferences.clone());
         self.theme = Theme::from_mode(preferences.theme_mode());
