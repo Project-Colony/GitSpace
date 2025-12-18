@@ -197,8 +197,9 @@ pub fn app_data_dir() -> PathBuf {
 }
 
 fn default_clone_path() -> String {
-    std::env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
+    dirs::home_dir()
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."))
         .display()
         .to_string()
 }

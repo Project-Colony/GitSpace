@@ -9,6 +9,7 @@ use reqwest::StatusCode;
 use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, USER_AGENT};
 use serde::Deserialize;
+use url::Url;
 
 use crate::auth::{AuthManager, extract_host};
 use crate::config::NetworkOptions;
@@ -66,6 +67,7 @@ pub struct ClonePanel {
     repo_query: String,
     repo_url: String,
     destination: String,
+    base_destination: PathBuf,
     token: String,
     search_results: Vec<RemoteRepo>,
     selected_repo: Option<usize>,
@@ -90,6 +92,7 @@ impl ClonePanel {
             provider: Provider::GitHub,
             repo_query: String::new(),
             repo_url: String::new(),
+            base_destination: PathBuf::from(&destination),
             destination,
             token: String::new(),
             search_results: Vec::new(),
@@ -115,6 +118,7 @@ impl ClonePanel {
 
     pub fn set_default_destination<S: Into<String>>(&mut self, destination: S) {
         self.destination = destination.into();
+        self.base_destination = PathBuf::from(self.destination.clone());
     }
 
     pub fn set_network_preferences(&mut self, network: NetworkOptions) {
@@ -236,13 +240,14 @@ impl ClonePanel {
                         .unwrap_or_else(|| "Select a repository".to_string()),
                 )
                 .show_ui(ui, |ui| {
-                    for (idx, repo) in self.search_results.iter().enumerate() {
+                    for idx in 0..self.search_results.len() {
+                        let repo = self.search_results[idx].clone();
                         if ui
                             .selectable_label(self.selected_repo == Some(idx), &repo.name)
                             .clicked()
                         {
                             self.selected_repo = Some(idx);
-                            self.repo_url = repo.url.clone();
+                            self.update_selection(&repo);
                         }
                     }
                 });
@@ -258,6 +263,24 @@ impl ClonePanel {
         });
     }
 
+    fn update_selection(&mut self, repo: &RemoteRepo) {
+        self.repo_url = repo.url.clone();
+        if let Some(destination) = self.suggested_destination(&repo.url) {
+            self.destination = destination;
+        }
+    }
+
+    fn suggested_destination(&self, repo_url: &str) -> Option<String> {
+        let repo_name = repo_name_from_url(repo_url)?;
+        let base = if self.base_destination.as_os_str().is_empty() {
+            PathBuf::from(self.destination.clone())
+        } else {
+            self.base_destination.clone()
+        };
+
+        Some(base.join(repo_name).display().to_string())
+    }
+
     fn destination_section(&mut self, ui: &mut Ui) {
         ui.heading(RichText::new("Local path").color(self.theme.palette.text_primary));
         ui.horizontal(|ui| {
@@ -271,6 +294,7 @@ impl ClonePanel {
                     .pick_folder()
                 {
                     self.destination = folder.display().to_string();
+                    self.base_destination = folder;
                 }
             }
         });
@@ -437,9 +461,9 @@ impl ClonePanel {
                         self.search_results = results.clone();
                         self.search_status =
                             Some(format!("{} result(s)", self.search_results.len()));
-                        if let Some(repo) = self.search_results.first() {
-                            self.repo_url = repo.url.clone();
+                        if let Some(repo) = self.search_results.first().cloned() {
                             self.selected_repo = Some(0);
+                            self.update_selection(&repo);
                         }
                     }
                     Err(err) => {
@@ -509,6 +533,37 @@ impl ClonePanel {
 
     pub fn take_last_cloned_repo(&mut self) -> Option<PathBuf> {
         self.last_cloned_repo.take()
+    }
+}
+
+fn repo_name_from_url(repo_url: &str) -> Option<String> {
+    let trimmed = repo_url.trim().trim_end_matches('/');
+    if let Ok(url) = Url::parse(trimmed) {
+        if let Some(segment) = url
+            .path_segments()
+            .and_then(|segments| segments.filter(|s| !s.is_empty()).last())
+        {
+            let name = segment.trim_end_matches(".git");
+            if !name.is_empty() {
+                return Some(name.to_string());
+            }
+        }
+    }
+
+    let mut candidate = trimmed;
+    if let Some(idx) = trimmed.rfind(':') {
+        candidate = &trimmed[idx + 1..];
+    }
+
+    if let Some(idx) = candidate.rfind('/') {
+        candidate = &candidate[idx + 1..];
+    }
+
+    let name = candidate.trim_end_matches(".git");
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
     }
 }
 
