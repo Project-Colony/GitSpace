@@ -28,6 +28,12 @@ pub enum NavigationTrigger {
     DragAndDrop,
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct NavigationSelection {
+    pub tab: MainTab,
+    pub trigger: NavigationTrigger,
+}
+
 impl NavigationTrigger {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -97,7 +103,8 @@ impl<'a> ShellLayout<'a> {
             });
     }
 
-    pub fn sidebar(&self, ctx: &egui::Context) {
+    pub fn sidebar(&self, ctx: &egui::Context, active_tab: MainTab) -> Option<NavigationSelection> {
+        let mut selection = None;
         egui::SidePanel::left("sidebar")
             .resizable(true)
             .default_width(220.0)
@@ -112,26 +119,60 @@ impl<'a> ShellLayout<'a> {
                 ui.separator();
 
                 ui.label(RichText::new("Workspaces").color(self.theme.palette.text_secondary));
-                for label in ["Recent", "Favorites", "Local Repos", "Remote Repos"] {
+                for (label, tab) in [
+                    ("Recent", MainTab::Open),
+                    ("Favorites", MainTab::Open),
+                    ("Local Repos", MainTab::Open),
+                    ("Remote Repos", MainTab::Clone),
+                ] {
                     ui.add_space(4.0);
-                    ui.colored_label(self.theme.palette.text_primary, label);
+                    let response = ui.add(egui::SelectableLabel::new(active_tab == tab, label));
+
+                    if response.hovered() {
+                        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+                    }
+
+                    if response.clicked() {
+                        selection = Some(NavigationSelection {
+                            tab,
+                            trigger: NavigationTrigger::Click,
+                        });
+                    }
                 }
 
                 ui.add_space(12.0);
                 ui.label(RichText::new("Actions").color(self.theme.palette.text_secondary));
-                for action in ["Clone", "Open", "New Branch", "Sync"] {
+                for (action, tab) in [
+                    ("Clone", MainTab::Clone),
+                    ("Open", MainTab::Open),
+                    ("New Branch", MainTab::Branches),
+                    ("Sync", MainTab::Stage),
+                ] {
                     let response = ui.add(egui::SelectableLabel::new(
-                        false,
+                        active_tab == tab,
                         RichText::new(action).strong(),
                     ));
                     if response.hovered() {
                         ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
                     }
+
+                    if response.clicked() {
+                        selection = Some(NavigationSelection {
+                            tab,
+                            trigger: NavigationTrigger::Click,
+                        });
+                    }
                 }
             });
+        selection
     }
 
-    pub fn right_panel(&self, ctx: &egui::Context, repo: Option<&RepoContext>) {
+    pub fn right_panel(
+        &self,
+        ctx: &egui::Context,
+        repo: Option<&RepoContext>,
+    ) -> Option<NavigationSelection> {
+        let mut selection = None;
         egui::SidePanel::right("context")
             .resizable(true)
             .default_width(260.0)
@@ -159,6 +200,35 @@ impl<'a> ShellLayout<'a> {
                             .color(self.theme.palette.text_secondary)
                             .italics(),
                     );
+
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Open in file manager").clicked() {
+                            if let Err(err) = open::that(&repo.path) {
+                                tracing::warn!("Failed to open repo path: {err}");
+                            }
+                        }
+
+                        if ui.button("Copy path").clicked() {
+                            ui.output_mut(|o| o.copied_text = repo.path.clone());
+                        }
+                    });
+
+                    ui.horizontal(|ui| {
+                        if ui.button("Switch repository").clicked() {
+                            selection = Some(NavigationSelection {
+                                tab: MainTab::Open,
+                                trigger: NavigationTrigger::Click,
+                            });
+                        }
+
+                        if ui.button("Branch view").clicked() {
+                            selection = Some(NavigationSelection {
+                                tab: MainTab::Branches,
+                                trigger: NavigationTrigger::Click,
+                            });
+                        }
+                    });
                 } else {
                     ui.label(
                         RichText::new(
@@ -168,6 +238,7 @@ impl<'a> ShellLayout<'a> {
                     );
                 }
             });
+        selection
     }
 
     pub fn tab_bar(
@@ -280,7 +351,7 @@ impl<'a> ShellLayout<'a> {
                 clone_panel.ui(ui, auth_manager, notifications);
                 None
             }
-            MainTab::Open => recent_list.ui(ui, config).map(|entry| entry.path),
+            MainTab::Open => recent_list.ui(ui, config),
             MainTab::RepoOverview => {
                 repo_overview.ui(ui, repo);
                 None

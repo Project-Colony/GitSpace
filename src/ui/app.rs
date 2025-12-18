@@ -132,8 +132,18 @@ impl eframe::App for GitSpaceApp {
         let theme = self.theme.clone();
         let layout = ShellLayout::new(&theme);
         layout.header(ctx);
-        layout.sidebar(ctx);
-        layout.right_panel(ctx, self.current_repo.as_ref());
+        if let Some(selection) = layout.sidebar(ctx, self.active_tab) {
+            if self.active_tab != selection.tab {
+                self.active_tab = selection.tab;
+                self.record_tab_switch(selection.tab, selection.trigger);
+            }
+        }
+        if let Some(selection) = layout.right_panel(ctx, self.current_repo.as_ref()) {
+            if self.active_tab != selection.tab {
+                self.active_tab = selection.tab;
+                self.record_tab_switch(selection.tab, selection.trigger);
+            }
+        }
 
         egui::CentralPanel::default().show(ctx, |ui| {
             let tab_interaction = layout.tab_bar(ui, &mut self.tab_order, &mut self.active_tab);
