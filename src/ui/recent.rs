@@ -1,7 +1,8 @@
 use eframe::egui::{self, RichText, ScrollArea, TextEdit, Ui};
+use rfd::FileDialog;
 use std::path::Path;
 
-use crate::config::{AppConfig, RecentRepo};
+use crate::config::AppConfig;
 use crate::ui::theme::Theme;
 
 #[derive(Debug, Clone)]
@@ -22,7 +23,7 @@ impl RecentList {
         self.theme = theme;
     }
 
-    pub fn ui(&mut self, ui: &mut Ui, config: &AppConfig) -> Option<RecentRepo> {
+    pub fn ui(&mut self, ui: &mut Ui, config: &AppConfig) -> Option<String> {
         ui.heading(RichText::new("Recently opened").color(self.theme.palette.text_primary));
         ui.label(
             RichText::new("Search and reopen workspaces you've used recently.")
@@ -30,16 +31,29 @@ impl RecentList {
         );
         ui.add_space(8.0);
 
-        ui.horizontal(|ui| {
+        let browse_result = ui.horizontal(|ui| {
             ui.label(RichText::new("Filter").color(self.theme.palette.text_secondary));
             ui.add_sized(
                 [320.0, 28.0],
                 TextEdit::singleline(&mut self.search).hint_text("Type to filter by name or path"),
             );
+
+            if ui.button("Browse...").clicked() {
+                if let Some(path) = FileDialog::new().pick_folder() {
+                    self.search.clear();
+                    return Some(path.display().to_string());
+                }
+            }
+
+            None
         });
 
+        if browse_result.inner.is_some() {
+            return browse_result.inner;
+        }
+
         ui.add_space(8.0);
-        let mut selected: Option<RecentRepo> = None;
+        let mut selected: Option<String> = None;
         ScrollArea::vertical()
             .auto_shrink([false; 2])
             .show(ui, |ui| {
@@ -79,7 +93,7 @@ impl RecentList {
                     }
 
                     if button.clicked() {
-                        selected = Some(entry.clone());
+                        selected = Some(entry.path.clone());
                     }
                 }
 
