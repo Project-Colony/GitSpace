@@ -30,6 +30,7 @@ hostname = "0.3"
 url = "2.5"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["ansi", "env-filter", "fmt", "json", "registry"] }
+tracing-appender = "0.2"
 argon2 = { version = "0.5", default-features = false, features = ["std"] }
 hmac = "0.12"
 ed25519-dalek = { version = "2", features = ["pkcs8"] }

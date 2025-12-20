@@ -14,6 +14,8 @@ pub struct AppConfig {
     #[serde(default)]
     preferences: Preferences,
     #[serde(default)]
+    logging: LoggingOptions,
+    #[serde(default)]
     telemetry_prompt_shown: bool,
 }
 
@@ -64,6 +66,12 @@ pub struct NetworkOptions {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LoggingOptions {
+    #[serde(default = "default_log_retention_files")]
+    retention_files: usize,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ReleaseChannel {
     Stable,
     Preview,
@@ -83,6 +91,14 @@ impl Default for NetworkOptions {
             https_proxy: String::new(),
             use_https: default_use_https(),
             allow_ssh: default_allow_ssh(),
+        }
+    }
+}
+
+impl Default for LoggingOptions {
+    fn default() -> Self {
+        Self {
+            retention_files: default_log_retention_files(),
         }
     }
 }
@@ -176,6 +192,10 @@ impl AppConfig {
         self.preferences = preferences;
     }
 
+    pub fn logging(&self) -> &LoggingOptions {
+        &self.logging
+    }
+
     pub fn telemetry_prompt_shown(&self) -> bool {
         self.telemetry_prompt_shown
     }
@@ -236,6 +256,10 @@ fn default_allow_ssh() -> bool {
 
 fn default_auto_check_updates() -> bool {
     true
+}
+
+fn default_log_retention_files() -> usize {
+    7
 }
 
 impl Preferences {
@@ -323,5 +347,11 @@ impl Preferences {
                 format!("Failed to parse preferences: {err}"),
             )
         })
+    }
+}
+
+impl LoggingOptions {
+    pub fn retention_files(&self) -> usize {
+        self.retention_files
     }
 }
