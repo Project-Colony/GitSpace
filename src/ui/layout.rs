@@ -202,39 +202,27 @@ impl<'a> ShellLayout<'a> {
                     );
 
                     ui.add_space(10.0);
-                    ui.vertical(|ui| {
-                        if ui
-                            .add_sized([220.0, 32.0], egui::Button::new("Open in file manager"))
-                            .clicked()
-                        {
+                    ui.horizontal(|ui| {
+                        if ui.button("Open in file manager").clicked() {
                             if let Err(err) = open::that(&repo.path) {
                                 tracing::warn!("Failed to open repo path: {err}");
                             }
                         }
 
-                        if ui
-                            .add_sized([220.0, 32.0], egui::Button::new("Copy path"))
-                            .clicked()
-                        {
+                        if ui.button("Copy path").clicked() {
                             ui.output_mut(|o| o.copied_text = repo.path.clone());
                         }
+                    });
 
-                        ui.separator();
-
-                        if ui
-                            .add_sized([220.0, 32.0], egui::Button::new("Switch repository"))
-                            .clicked()
-                        {
+                    ui.horizontal(|ui| {
+                        if ui.button("Switch repository").clicked() {
                             selection = Some(NavigationSelection {
                                 tab: MainTab::Open,
                                 trigger: NavigationTrigger::Click,
                             });
                         }
 
-                        if ui
-                            .add_sized([220.0, 32.0], egui::Button::new("Branch view"))
-                            .clicked()
-                        {
+                        if ui.button("Branch view").clicked() {
                             selection = Some(NavigationSelection {
                                 tab: MainTab::Branches,
                                 trigger: NavigationTrigger::Click,
