@@ -1,4 +1,4 @@
-use eframe::egui::{self, Align, Id, Layout, Margin, RichText, Sense, Ui};
+use eframe::egui::{self, Align, Id, Layout, RichText, Sense, Ui};
 
 use crate::auth::AuthManager;
 use crate::config::AppConfig;
@@ -202,76 +202,33 @@ impl<'a> ShellLayout<'a> {
                     );
 
                     ui.add_space(10.0);
-                    let previous_item_spacing = {
-                        let spacing = ui.spacing_mut();
-                        let previous = spacing.item_spacing;
-                        spacing.item_spacing = egui::vec2(8.0, 6.0);
-                        previous
-                    };
-
-                    let (open_in_manager, copy_path, switch_repository, branch_view) =
-                        egui::Grid::new("context_actions_grid")
-                            .num_columns(2)
-                            .spacing(egui::vec2(12.0, 10.0))
-                            .show(ui, |ui| {
-                                let open_in_manager = self.context_action_card(
-                                    ui,
-                                    "Open in file manager",
-                                    "Show this repository in your file explorer.",
-                                );
-                                let copy_path = self.context_action_card(
-                                    ui,
-                                    "Copy path",
-                                    "Copy the repository path to your clipboard.",
-                                );
-
-                                ui.end_row();
-
-                                let switch_repository = self.context_action_card(
-                                    ui,
-                                    "Switch repository",
-                                    "Choose another repository from your recents.",
-                                );
-                                let branch_view = self.context_action_card(
-                                    ui,
-                                    "Branch view",
-                                    "Open the branches panel for this repository.",
-                                );
-
-                                (
-                                    open_in_manager,
-                                    copy_path,
-                                    switch_repository,
-                                    branch_view,
-                                )
-                            })
-                            .inner;
-
-                    if open_in_manager.clicked() {
-                        if let Err(err) = open::that(&repo.path) {
-                            tracing::warn!("Failed to open repo path: {err}");
+                    ui.horizontal(|ui| {
+                        if ui.button("Open in file manager").clicked() {
+                            if let Err(err) = open::that(&repo.path) {
+                                tracing::warn!("Failed to open repo path: {err}");
+                            }
                         }
-                    }
 
-                    if copy_path.clicked() {
-                        ui.output_mut(|o| o.copied_text = repo.path.clone());
-                    }
+                        if ui.button("Copy path").clicked() {
+                            ui.output_mut(|o| o.copied_text = repo.path.clone());
+                        }
+                    });
 
-                    if switch_repository.clicked() {
-                        selection = Some(NavigationSelection {
-                            tab: MainTab::Open,
-                            trigger: NavigationTrigger::Click,
-                        });
-                    }
+                    ui.horizontal(|ui| {
+                        if ui.button("Switch repository").clicked() {
+                            selection = Some(NavigationSelection {
+                                tab: MainTab::Open,
+                                trigger: NavigationTrigger::Click,
+                            });
+                        }
 
-                    if branch_view.clicked() {
-                        selection = Some(NavigationSelection {
-                            tab: MainTab::Branches,
-                            trigger: NavigationTrigger::Click,
-                        });
-                    }
-
-                    ui.spacing_mut().item_spacing = previous_item_spacing;
+                        if ui.button("Branch view").clicked() {
+                            selection = Some(NavigationSelection {
+                                tab: MainTab::Branches,
+                                trigger: NavigationTrigger::Click,
+                            });
+                        }
+                    });
                 } else {
                     ui.label(
                         RichText::new(
@@ -282,40 +239,6 @@ impl<'a> ShellLayout<'a> {
                 }
             });
         selection
-    }
-
-    fn context_action_card(&self, ui: &mut Ui, label: &str, description: &str) -> egui::Response {
-        egui::Frame::none()
-            .fill(self.theme.palette.surface_highlight)
-            .inner_margin(Margin::symmetric(10.0, 8.0))
-            .show(ui, |ui| {
-                let original_item_spacing = {
-                    let spacing = ui.spacing_mut();
-                    let original_item_spacing = spacing.item_spacing;
-                    spacing.item_spacing = egui::vec2(6.0, 4.0);
-                    original_item_spacing
-                };
-
-                let response = ui.add_sized(
-                    [ui.available_width(), 30.0],
-                    egui::Button::new(
-                        RichText::new(label)
-                            .color(self.theme.palette.text_primary)
-                            .strong(),
-                    ),
-                );
-
-                ui.label(
-                    RichText::new(description)
-                        .color(self.theme.palette.text_secondary)
-                        .small(),
-                );
-
-                ui.spacing_mut().item_spacing = original_item_spacing;
-
-                response
-            })
-            .inner
     }
 
     pub fn tab_bar(
