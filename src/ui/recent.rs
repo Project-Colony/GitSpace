@@ -1,6 +1,6 @@
 use eframe::egui::{self, RichText, ScrollArea, TextEdit, Ui};
 use rfd::FileDialog;
-use std::path::Path;
+use std::{collections::HashSet, path::Path};
 
 use crate::config::AppConfig;
 use crate::ui::theme::Theme;
@@ -98,15 +98,93 @@ impl RecentList {
                 }
 
                 if config.recent_repos().is_empty() {
-                    ui.label(
-                        RichText::new(
-                            "Your recent repositories will appear here once you open a workspace.",
-                        )
-                        .color(self.theme.palette.text_secondary),
-                    );
+                    ui.vertical(|ui| {
+                        ui.label(
+                            RichText::new(
+                                "Your recent repositories will appear here once you open a workspace.",
+                            )
+                            .color(self.theme.palette.text_secondary),
+                        );
+                        ui.add_space(8.0);
+
+                        let open_button = ui.add_sized(
+                            [520.0, 36.0],
+                            egui::Button::new(
+                                RichText::new("Open a workspace folder")
+                                    .color(self.theme.palette.text_primary)
+                                    .strong(),
+                            )
+                            .fill(self.theme.palette.accent),
+                        );
+
+                        if open_button.hovered() {
+                            ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+                        }
+
+                        if open_button.clicked() {
+                            if let Some(path) = FileDialog::new().pick_folder() {
+                                self.search.clear();
+                                selected = Some(path.display().to_string());
+                            }
+                        }
+
+                        let common_paths = Self::common_paths();
+                        if !common_paths.is_empty() {
+                            ui.add_space(8.0);
+                            ui.label(
+                                RichText::new("Quick access")
+                                    .color(self.theme.palette.text_secondary)
+                                    .strong(),
+                            );
+
+                            for (label, path) in common_paths {
+                                let response = ui.add(
+                                    egui::Label::new(
+                                        RichText::new(format!("{label}: {path}"))
+                                            .color(self.theme.palette.text_secondary),
+                                    )
+                                    .sense(egui::Sense::click()),
+                                );
+
+                                if response.hovered() {
+                                    ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+                                }
+
+                                if response.clicked() {
+                                    self.search.clear();
+                                    selected = Some(path);
+                                }
+                            }
+                        }
+                    });
                 }
             });
 
         selected
+    }
+
+    fn common_paths() -> Vec<(String, String)> {
+        let mut paths = Vec::new();
+        let mut seen = HashSet::new();
+
+        let candidates = [
+            ("Home", dirs::home_dir()),
+            ("Desktop", dirs::desktop_dir()),
+            ("Documents", dirs::document_dir()),
+            ("Downloads", dirs::download_dir()),
+        ];
+
+        for (label, path) in candidates {
+            if let Some(path) = path {
+                if path.exists() {
+                    let display = path.display().to_string();
+                    if seen.insert(display.clone()) {
+                        paths.push((label.to_string(), display));
+                    }
+                }
+            }
+        }
+
+        paths
     }
 }
