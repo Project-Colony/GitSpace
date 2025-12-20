@@ -1,7 +1,7 @@
 use std::sync::OnceLock;
 
 use tracing_appender::{non_blocking, rolling};
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::{config::AppConfig, error::logs_directory};
 
@@ -24,7 +24,9 @@ pub fn init_tracing() {
         .with_line_number(true)
         .json();
 
-    let subscriber = tracing_subscriber::registry().with(env_filter).with(fmt_layer);
+    let subscriber = tracing_subscriber::registry()
+        .with(env_filter)
+        .with(fmt_layer);
 
     if let Some((writer, guard)) = build_file_writer() {
         let file_layer = fmt::layer()
