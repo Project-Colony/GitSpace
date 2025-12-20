@@ -71,7 +71,7 @@ fn layout_panels_render_without_panic() {
     let output = egui::Context::default().run(Default::default(), |ctx| {
         theme.apply(ctx);
         layout.header(ctx);
-        layout.sidebar(ctx);
+        layout.sidebar(ctx, active_tab);
         layout.right_panel(ctx, None);
 
         egui::CentralPanel::default().show(ctx, |ui| {
