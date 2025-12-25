@@ -50,6 +50,43 @@ impl AuthPanel {
         );
         ui.add_space(10.0);
 
+        ui.vertical(|ui| {
+            ui.label(
+                RichText::new(format!("\u{f408} Remote host"))
+                    .color(self.theme.palette.text_secondary),
+            );
+            ui.label(
+                RichText::new("github.com").color(self.theme.palette.text_secondary),
+            );
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new("Access Token").color(self.theme.palette.text_secondary),
+            );
+            ui.label(
+                RichText::new("Paste your personal access token")
+                    .color(self.theme.palette.text_secondary),
+            );
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new(format!("\u{f296} Remote host"))
+                    .color(self.theme.palette.text_secondary),
+            );
+            ui.label(
+                RichText::new("gitlab.com").color(self.theme.palette.text_secondary),
+            );
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new("Access Token").color(self.theme.palette.text_secondary),
+            );
+            ui.label(
+                RichText::new("Paste your personal access token")
+                    .color(self.theme.palette.text_secondary),
+            );
+        });
+
+        ui.add_space(12.0);
         egui::Frame::none()
             .fill(self.theme.palette.surface)
             .stroke(egui::Stroke::new(1.0, self.theme.palette.surface_highlight))
@@ -62,6 +99,18 @@ impl AuthPanel {
                     ui.add_sized(
                         [320.0, 28.0],
                         TextEdit::singleline(&mut self.host).hint_text("github.com or gitlab.com"),
+                    );
+                    ui.label(
+                        RichText::new("Examples (host only, no repository path):")
+                            .color(self.theme.palette.text_secondary),
+                    );
+                    ui.label(
+                        RichText::new("Remote host\ngithub.com\nExample: github.com/MotherSphere")
+                            .color(self.theme.palette.text_secondary),
+                    );
+                    ui.label(
+                        RichText::new("Remote host\ngitlab.com\nExample: gitlab.com/MotherSphere")
+                            .color(self.theme.palette.text_secondary),
                     );
 
                     ui.add_space(8.0);
