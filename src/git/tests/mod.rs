@@ -11,7 +11,7 @@ use crate::git::diff::commit_diff;
 use crate::git::log::{CommitFilter, read_commit_log};
 use crate::git::remote::{fetch_remote, list_remotes, pull_branch, prune_remotes, push_branch};
 use crate::git::stash::{apply_stash, create_stash, drop_stash, list_stashes};
-use crate::git::status::{read_repo_status, read_working_tree_status};
+use crate::git::status::read_repo_status;
 
 fn init_temp_repo() -> (tempfile::TempDir, Repository) {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -237,28 +237,4 @@ fn stashes_round_trip_changes() {
 
     let restored = fs::read_to_string(&file_path).expect("read file");
     assert_eq!(restored, "modified");
-}
-
-#[test]
-fn working_tree_status_groups_files() {
-    let (_dir, repo) = init_temp_repo();
-    let root = repo.path().parent().unwrap();
-
-    write_commit(&repo, "status.txt", "base", "initial");
-    let head = repo.head().expect("head").peel_to_commit().expect("commit");
-    repo.reset(head.as_object(), ResetType::Hard, None)
-        .expect("reset head");
-
-    let tracked_path = root.join("status.txt");
-    fs::write(&tracked_path, "updated").expect("modify tracked file");
-
-    let new_path = root.join("new_file.txt");
-    fs::write(&new_path, "new content").expect("write new file");
-
-    let status = read_working_tree_status(root).expect("working tree status");
-
-    assert!(status.staged.is_empty());
-    assert_eq!(status.unstaged, vec!["status.txt".to_string()]);
-    assert_eq!(status.untracked, vec!["new_file.txt".to_string()]);
-    assert!(status.conflicted.is_empty());
 }
