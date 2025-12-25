@@ -11,7 +11,7 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue, USER_AGENT};
 use serde::Deserialize;
 use url::Url;
 
-use crate::auth::AuthManager;
+use crate::auth::{AuthManager, extract_host};
 use crate::config::NetworkOptions;
 use crate::error::{AppError, logs_directory};
 use crate::git::clone::{CloneProgress, CloneRequest, clone_repository};
@@ -68,6 +68,7 @@ pub struct ClonePanel {
     repo_url: String,
     destination: String,
     base_destination: PathBuf,
+    token: String,
     search_results: Vec<RemoteRepo>,
     selected_repo: Option<usize>,
     search_promise: Option<Promise<Result<Vec<RemoteRepo>, AppError>>>,
@@ -79,6 +80,7 @@ pub struct ClonePanel {
     cloning: bool,
     active_destination: Option<PathBuf>,
     last_cloned_repo: Option<PathBuf>,
+    token_source: Option<String>,
     last_request: Option<CloneRequest>,
     network: NetworkOptions,
 }
@@ -92,6 +94,7 @@ impl ClonePanel {
             repo_url: String::new(),
             base_destination: PathBuf::from(&destination),
             destination,
+            token: String::new(),
             search_results: Vec::new(),
             selected_repo: None,
             search_promise: None,
@@ -103,6 +106,7 @@ impl ClonePanel {
             cloning: false,
             active_destination: None,
             last_cloned_repo: None,
+            token_source: None,
             last_request: None,
             network,
         }
@@ -150,6 +154,8 @@ impl ClonePanel {
         self.search_section(ui, auth);
         ui.add_space(12.0);
         self.destination_section(ui);
+        ui.add_space(12.0);
+        self.token_section(ui, auth);
         ui.add_space(12.0);
         self.action_bar(ui, auth);
         self.progress_section(ui);
@@ -294,6 +300,41 @@ impl ClonePanel {
         });
     }
 
+    fn token_section(&mut self, ui: &mut Ui, auth: &AuthManager) {
+        ui.heading(
+            RichText::new("Authentication (optional)").color(self.theme.palette.text_primary),
+        );
+        ui.horizontal(|ui| {
+            ui.add_sized(
+                [400.0, 28.0],
+                TextEdit::singleline(&mut self.token)
+                    .password(true)
+                    .hint_text("Personal access token"),
+            );
+            ui.label(
+                RichText::new("Tokens are sent only to the provider you choose.")
+                    .color(self.theme.palette.text_secondary),
+            );
+        });
+
+        if self.token.trim().is_empty() {
+            let host_hint = extract_host(self.repo_url.trim())
+                .or_else(|| Some(self.provider_host().to_string()));
+            if let Some(host) = host_hint {
+                if auth.resolve_for_host(&host).is_some() {
+                    ui.colored_label(
+                        self.theme.palette.text_secondary,
+                        format!("Saved token detected for {}.", host),
+                    );
+                }
+            }
+        }
+
+        if let Some(source) = &self.token_source {
+            ui.colored_label(self.theme.palette.text_secondary, source);
+        }
+    }
+
     fn action_bar(&mut self, ui: &mut Ui, auth: &AuthManager) {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             let can_clone = !self.repo_url.trim().is_empty()
@@ -339,7 +380,11 @@ impl ClonePanel {
             return;
         }
         let provider = self.provider;
-        let token = auth.resolve_for_host(self.provider_host());
+        let token = if self.token.trim().is_empty() {
+            auth.resolve_for_host(self.provider_host())
+        } else {
+            Some(self.token.clone())
+        };
         let network = self.network.clone();
         self.search_status = Some("Searching...".to_string());
         self.search_promise = Some(Promise::spawn_thread("search_repos", move || {
@@ -350,7 +395,20 @@ impl ClonePanel {
     fn start_clone(&mut self, auth: &AuthManager) {
         let url = self.repo_url.trim().to_string();
         let destination = PathBuf::from(self.destination.trim());
-        let token = auth.resolve_for_url(&url);
+        let mut token = if self.token.trim().is_empty() {
+            None
+        } else {
+            Some(self.token.clone())
+        };
+
+        self.token_source = None;
+        if token.is_none() {
+            if let Some(saved) = auth.resolve_for_url(&url) {
+                let host = extract_host(&url).unwrap_or_else(|| "remote".to_string());
+                self.token_source = Some(format!("Using stored token for {}", host));
+                token = Some(saved);
+            }
+        }
 
         let request = CloneRequest {
             url,
