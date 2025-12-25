@@ -278,6 +278,18 @@ impl HistoryPanel {
                 ui.label(
                     RichText::new(commit.message.trim()).color(self.theme.palette.text_secondary),
                 );
+                if let (Some(files), Some(additions), Some(deletions)) = (
+                    commit.files_changed,
+                    commit.additions,
+                    commit.deletions,
+                ) {
+                    ui.label(
+                        RichText::new(format!(
+                            "Files changed: {files} (+{additions}, -{deletions})"
+                        ))
+                        .color(self.theme.palette.text_secondary),
+                    );
+                }
                 ui.add_space(8.0);
                 ui.separator();
                 ui.add_space(8.0);
