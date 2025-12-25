@@ -1,8 +1,10 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 use eframe::egui::{self, Align, ComboBox, Layout, RichText, ScrollArea, Ui};
-use git2::{DiffFormat, DiffOptions, Repository, Signature, Status, StatusOptions, StatusShow};
+use git2::{Repository, Signature, Status, StatusOptions, StatusShow};
 
+use crate::git::diff::{diff_file, staged_diff, working_tree_diff};
 use crate::git::stash::{StashEntry, apply_stash, create_stash, drop_stash, list_stashes};
 use crate::ui::{context::RepoContext, theme::Theme};
 
@@ -457,8 +459,8 @@ fn read_statuses(repo_path: &str) -> Result<(Vec<FileEntry>, Vec<FileEntry>), gi
         .include_unmodified(false);
 
     let statuses = repo.statuses(Some(&mut status_opts))?;
-    let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
-    let index = repo.index()?;
+    let staged_map = build_diff_map(staged_diff(repo_path)?);
+    let unstaged_map = build_diff_map(working_tree_diff(repo_path)?);
 
     let mut staged = Vec::new();
     let mut unstaged = Vec::new();
@@ -475,7 +477,7 @@ fn read_statuses(repo_path: &str) -> Result<(Vec<FileEntry>, Vec<FileEntry>), gi
         {
             staged.push(FileEntry {
                 status_label: format_status_label(status),
-                diff: diff_for_path(&repo, &index, head_tree.as_ref(), &path, true)?,
+                diff: lookup_or_refresh_diff(&staged_map, repo_path, &path, true)?,
                 path: path.clone(),
                 checked: true,
             });
@@ -489,7 +491,7 @@ fn read_statuses(repo_path: &str) -> Result<(Vec<FileEntry>, Vec<FileEntry>), gi
         {
             unstaged.push(FileEntry {
                 status_label: format_status_label(status),
-                diff: diff_for_path(&repo, &index, head_tree.as_ref(), &path, false)?,
+                diff: lookup_or_refresh_diff(&unstaged_map, repo_path, &path, false)?,
                 path,
                 checked: false,
             });
@@ -499,40 +501,26 @@ fn read_statuses(repo_path: &str) -> Result<(Vec<FileEntry>, Vec<FileEntry>), gi
     Ok((staged, unstaged))
 }
 
-fn diff_for_path(
-    repo: &Repository,
-    index: &git2::Index,
-    head: Option<&git2::Tree>,
+fn build_diff_map(diffs: Vec<crate::git::diff::FileDiff>) -> HashMap<String, String> {
+    diffs
+        .into_iter()
+        .map(|diff| (diff.path, diff.patch))
+        .collect()
+}
+
+fn lookup_or_refresh_diff(
+    diffs: &HashMap<String, String>,
+    repo_path: &str,
     path: &str,
     staged: bool,
 ) -> Result<String, git2::Error> {
-    let mut opts = DiffOptions::new();
-    opts.pathspec(path).context_lines(3);
-    if !staged {
-        opts.include_untracked(true);
+    if let Some(patch) = diffs.get(path) {
+        return Ok(patch.clone());
     }
 
-    let diff = if staged {
-        repo.diff_tree_to_index(head, Some(index), Some(&mut opts))?
-    } else {
-        repo.diff_index_to_workdir(Some(index), Some(&mut opts))?
-    };
-
-    let mut patch = String::new();
-    diff.print(DiffFormat::Patch, |_delta, _hunk, line| {
-        let content = std::str::from_utf8(line.content()).unwrap_or("");
-        match line.origin() {
-            '\\' => patch.push(' '),
-            other => patch.push(other),
-        }
-        patch.push_str(content);
-        true
-    })?;
-
-    if patch.is_empty() {
-        patch.push_str("(no textual diff available)\n");
-    }
-
+    let patch = diff_file(repo_path, path, staged)?
+        .map(|entry| entry.patch)
+        .unwrap_or_else(|| "(no textual diff available)\n".to_string());
     Ok(patch)
 }
 
