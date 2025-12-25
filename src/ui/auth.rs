@@ -184,7 +184,8 @@ fn provider_section(
             .hint_text("Paste your personal access token"),
     );
 
-    // ui.add_space(10.0);
+    let previous_spacing = ui.spacing().item_spacing;
+    ui.spacing_mut().item_spacing = egui::vec2(previous_spacing.x, 0.0);
     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
         let button = ui.add_enabled(
             !host.trim().is_empty() && !token.trim().is_empty(),
@@ -194,6 +195,7 @@ fn provider_section(
             start_validation(auth, host, token, status, validation);
         }
     });
+    ui.spacing_mut().item_spacing = previous_spacing;
 
     if let Some(current_status) = status {
         ui.add_space(6.0);
