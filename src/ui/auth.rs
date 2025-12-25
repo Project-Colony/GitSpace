@@ -63,12 +63,6 @@ impl AuthPanel {
                         [320.0, 28.0],
                         TextEdit::singleline(&mut self.host).hint_text("github.com or gitlab.com"),
                     );
-                    ui.label(
-                        RichText::new(
-                            "Use only the host name (no repository path).\nExamples:\n• GitHub: github.com\n• GitLab: gitlab.com",
-                        )
-                        .color(self.theme.palette.text_secondary),
-                    );
 
                     ui.add_space(8.0);
                     ui.label(
