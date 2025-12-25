@@ -184,7 +184,7 @@ fn provider_section(
             .hint_text("Paste your personal access token"),
     );
 
-    ui.add_space(10.0);
+    // ui.add_space(10.0);
     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
         let button = ui.add_enabled(
             !host.trim().is_empty() && !token.trim().is_empty(),
