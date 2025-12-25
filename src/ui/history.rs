@@ -8,7 +8,7 @@ use crate::git::{
 use crate::ui::{context::RepoContext, theme::Theme};
 
 const MAX_COMMITS: usize = 200;
-const ROW_HEIGHT: f32 = 72.0;
+const ROW_HEIGHT: f32 = 144.0;
 
 #[derive(Default, Clone)]
 pub struct HistoryFilters {
