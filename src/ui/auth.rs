@@ -118,7 +118,9 @@ impl AuthPanel {
                         .clicked()
                     {
                         let _ = self.auth.clear_token(&host);
-                        self.status = Some(format!("Removed token for {}", host));
+                        let message = Some(format!("Removed token for {}", host));
+                        self.github_status = message.clone();
+                        self.gitlab_status = message;
                     }
                 });
             }
