@@ -7,10 +7,14 @@ use crate::ui::theme::Theme;
 pub struct AuthPanel {
     theme: Theme,
     auth: AuthManager,
-    host: String,
-    token: String,
-    status: Option<String>,
-    validation: Option<Promise<Result<(), String>>>,
+    github_host: String,
+    github_token: String,
+    github_status: Option<String>,
+    github_validation: Option<Promise<Result<(), String>>>,
+    gitlab_host: String,
+    gitlab_token: String,
+    gitlab_status: Option<String>,
+    gitlab_validation: Option<Promise<Result<(), String>>>,
 }
 
 impl AuthPanel {
@@ -18,10 +22,14 @@ impl AuthPanel {
         Self {
             theme,
             auth,
-            host: "github.com".to_string(),
-            token: String::new(),
-            status: None,
-            validation: None,
+            github_host: "github.com".to_string(),
+            github_token: String::new(),
+            github_status: None,
+            github_validation: None,
+            gitlab_host: "gitlab.com".to_string(),
+            gitlab_token: String::new(),
+            gitlab_status: None,
+            gitlab_validation: None,
         }
     }
 
@@ -34,7 +42,16 @@ impl AuthPanel {
     }
 
     pub fn ui(&mut self, ui: &mut Ui) {
-        self.poll_validation();
+        self.poll_validation(
+            &mut self.github_validation,
+            &mut self.github_status,
+            &mut self.github_token,
+        );
+        self.poll_validation(
+            &mut self.gitlab_validation,
+            &mut self.gitlab_status,
+            &mut self.gitlab_token,
+        );
 
         ui.add_space(8.0);
         ui.heading(
@@ -50,49 +67,39 @@ impl AuthPanel {
         );
         ui.add_space(10.0);
 
-        egui::Frame::none()
-            .fill(self.theme.palette.surface)
-            .stroke(egui::Stroke::new(1.0, self.theme.palette.surface_highlight))
-            .rounding(egui::Rounding::same(8.0))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.add_space(8.0);
-                ui.vertical(|ui| {
-                    ui.label(RichText::new("Remote host").color(self.theme.palette.text_secondary));
-                    ui.add_sized(
-                        [320.0, 28.0],
-                        TextEdit::singleline(&mut self.host).hint_text("github.com or gitlab.com"),
-                    );
+        self.provider_block(
+            ui,
+            '\u{f408}',
+            &mut self.github_host,
+            &mut self.github_token,
+            &mut self.github_status,
+            &mut self.github_validation,
+            "github.com",
+        );
+        ui.add_space(12.0);
+        self.provider_block(
+            ui,
+            '\u{f296}',
+            &mut self.gitlab_host,
+            &mut self.gitlab_token,
+            &mut self.gitlab_status,
+            &mut self.gitlab_validation,
+            "gitlab.com",
+        );
 
-                    ui.add_space(8.0);
-                    ui.label(
-                        RichText::new("Access token").color(self.theme.palette.text_secondary),
-                    );
-                    ui.add_sized(
-                        [320.0, 28.0],
-                        TextEdit::singleline(&mut self.token)
-                            .password(true)
-                            .hint_text("Paste your personal access token"),
-                    );
-
-                    ui.add_space(10.0);
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let button = ui.add_enabled(
-                            !self.host.trim().is_empty() && !self.token.trim().is_empty(),
-                            egui::Button::new("Validate & Save"),
-                        );
-                        if button.clicked() {
-                            self.start_validation();
-                        }
-                    });
-
-                    if let Some(status) = &self.status {
-                        ui.add_space(6.0);
-                        ui.colored_label(self.theme.palette.text_secondary, status);
-                    }
-                });
-                ui.add_space(8.0);
-            });
+        ui.add_space(12.0);
+        ui.label(
+            RichText::new("Examples (host only, no repository path):")
+                .color(self.theme.palette.text_secondary),
+        );
+        ui.label(
+            RichText::new("Remote host\ngithub.com\nExample: github.com/MotherSphere")
+                .color(self.theme.palette.text_secondary),
+        );
+        ui.label(
+            RichText::new("Remote host\ngitlab.com\nExample: gitlab.com/MotherSphere")
+                .color(self.theme.palette.text_secondary),
+        );
 
         ui.add_space(12.0);
         ui.heading(RichText::new("Saved hosts").color(self.theme.palette.text_primary));
@@ -118,27 +125,96 @@ impl AuthPanel {
         }
     }
 
-    fn start_validation(&mut self) {
-        let host = self.host.trim().to_string();
-        let token = self.token.trim().to_string();
+    fn provider_block(
+        &mut self,
+        ui: &mut Ui,
+        icon: char,
+        host: &mut String,
+        token: &mut String,
+        status: &mut Option<String>,
+        validation: &mut Option<Promise<Result<(), String>>>,
+        host_hint: &str,
+    ) {
+        egui::Frame::none()
+            .fill(self.theme.palette.surface)
+            .stroke(egui::Stroke::new(1.0, self.theme.palette.surface_highlight))
+            .rounding(egui::Rounding::same(8.0))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.add_space(8.0);
+                ui.vertical(|ui| {
+                    ui.label(
+                        RichText::new(format!("{icon} Remote host"))
+                            .color(self.theme.palette.text_secondary),
+                    );
+                    ui.add_sized(
+                        [320.0, 28.0],
+                        TextEdit::singleline(host).hint_text(host_hint),
+                    );
+
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new("Access Token").color(self.theme.palette.text_secondary),
+                    );
+                    ui.add_sized(
+                        [320.0, 28.0],
+                        TextEdit::singleline(token)
+                            .password(true)
+                            .hint_text("Paste your personal access token"),
+                    );
+
+                    ui.add_space(10.0);
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        let button = ui.add_enabled(
+                            !host.trim().is_empty() && !token.trim().is_empty(),
+                            egui::Button::new("Validate & Save"),
+                        );
+                        if button.clicked() {
+                            self.start_validation(host, token, status, validation);
+                        }
+                    });
+
+                    if let Some(current_status) = status {
+                        ui.add_space(6.0);
+                        ui.colored_label(self.theme.palette.text_secondary, current_status);
+                    }
+                });
+                ui.add_space(8.0);
+            });
+    }
+
+    fn start_validation(
+        &self,
+        host: &str,
+        token: &str,
+        status: &mut Option<String>,
+        validation: &mut Option<Promise<Result<(), String>>>,
+    ) {
+        let host = host.trim().to_string();
+        let token = token.trim().to_string();
         let auth = self.auth.clone();
-        self.status = Some("Validating token...".to_string());
-        self.validation = Some(Promise::spawn_thread("validate_token", move || {
+        *status = Some("Validating token...".to_string());
+        *validation = Some(Promise::spawn_thread("validate_token", move || {
             auth.validate_and_store(&host, &token)
         }));
     }
 
-    fn poll_validation(&mut self) {
-        if let Some(promise) = &self.validation {
+    fn poll_validation(
+        &self,
+        validation: &mut Option<Promise<Result<(), String>>>,
+        status: &mut Option<String>,
+        token: &mut String,
+    ) {
+        if let Some(promise) = validation {
             if let Some(result) = promise.ready() {
                 let result = result.clone();
-                self.validation = None;
+                *validation = None;
                 match result {
                     Ok(_) => {
-                        self.status = Some("Token validated and saved.".to_string());
-                        self.token.clear();
+                        *status = Some("Token validated and saved.".to_string());
+                        token.clear();
                     }
-                    Err(err) => self.status = Some(format!("Validation failed: {}", err)),
+                    Err(err) => *status = Some(format!("Validation failed: {}", err)),
                 }
             }
         }
