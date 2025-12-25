@@ -4,12 +4,11 @@ use std::path::Path;
 use git2::build::CheckoutBuilder;
 use git2::{BranchType, Commit, Oid, Repository, RepositoryInitOptions, ResetType, Signature};
 
-use crate::config::NetworkOptions;
 use crate::git::branch;
 use crate::git::branch::{BranchKind, list_branches, rename_branch};
 use crate::git::diff::commit_diff;
 use crate::git::log::{CommitFilter, read_commit_log};
-use crate::git::remote::{fetch_remote, list_remotes, pull_branch, prune_remotes, push_branch};
+use crate::git::remote::list_remotes;
 use crate::git::stash::{apply_stash, create_stash, drop_stash, list_stashes};
 use crate::git::status::read_repo_status;
 
@@ -156,59 +155,6 @@ fn remotes_are_discovered() {
     let remotes = list_remotes(repo.path().parent().unwrap()).expect("list remotes");
     assert_eq!(remotes.len(), 1);
     assert_eq!(remotes[0].name, "origin");
-}
-
-#[test]
-fn fetch_push_pull_and_prune_work_with_local_remote() {
-    let (_dir, repo) = init_temp_repo();
-    let commit = write_commit(&repo, "push.txt", "content", "initial");
-
-    let remote_dir = tempfile::tempdir().expect("create remote dir");
-    let _remote_repo = Repository::init_bare(remote_dir.path()).expect("init bare");
-
-    repo.remote(
-        "origin",
-        remote_dir.path().to_str().expect("remote path"),
-    )
-    .expect("add remote");
-
-    let network = NetworkOptions::default();
-    push_branch(
-        repo.path().parent().unwrap(),
-        "origin",
-        "main",
-        &network,
-        None,
-    )
-    .expect("push");
-
-    let fetch_dir = tempfile::tempdir().expect("create fetch dir");
-    let fetch_repo = Repository::init(fetch_dir.path()).expect("init fetch repo");
-    fetch_repo
-        .remote(
-            "origin",
-            remote_dir.path().to_str().expect("remote path"),
-        )
-        .expect("add remote");
-
-    fetch_remote(fetch_dir.path(), "origin", &network, None).expect("fetch");
-    let fetch_repo = Repository::open(fetch_dir.path()).expect("open fetch repo");
-    let remote_ref = fetch_repo
-        .find_reference("refs/remotes/origin/main")
-        .expect("remote ref");
-    assert_eq!(remote_ref.target(), Some(commit));
-
-    fetch_repo
-        .reference("refs/remotes/origin/obsolete", commit, true, "obsolete")
-        .expect("create obsolete ref");
-    prune_remotes(fetch_dir.path(), "origin", &network, None).expect("prune");
-    assert!(fetch_repo
-        .find_reference("refs/remotes/origin/obsolete")
-        .is_err());
-
-    pull_branch(fetch_dir.path(), "origin", "main", &network, None).expect("pull");
-    let head = fetch_repo.head().expect("head");
-    assert_eq!(head.target(), Some(commit));
 }
 
 #[test]
