@@ -16,12 +16,6 @@ pub struct BranchEntry {
     pub upstream: Option<String>,
 }
 
-#[derive(Debug, Clone)]
-pub struct TrackingBranch {
-    pub local: String,
-    pub upstream: String,
-}
-
 pub fn list_branches<P: AsRef<Path>>(repo_path: P) -> Result<Vec<BranchEntry>, Error> {
     let repo = Repository::open(repo_path)?;
     let head_name = repo
@@ -61,61 +55,12 @@ pub fn list_branches<P: AsRef<Path>>(repo_path: P) -> Result<Vec<BranchEntry>, E
     Ok(entries)
 }
 
-pub fn create_branch<P: AsRef<Path>>(
-    repo_path: P,
-    name: &str,
-    start_point: Option<&str>,
-) -> Result<(), Error> {
+pub fn create_branch<P: AsRef<Path>>(repo_path: P, name: &str) -> Result<(), Error> {
     let repo = Repository::open(repo_path)?;
-    let commit = match start_point {
-        Some(start_point) => repo.revparse_single(start_point)?.peel_to_commit()?,
-        None => repo.head()?.peel_to_commit()?,
-    };
+    let head = repo.head()?;
+    let commit = head.peel_to_commit()?;
     repo.branch(name, &commit, false)?;
     Ok(())
-}
-
-pub fn set_upstream<P: AsRef<Path>>(
-    repo_path: P,
-    local: &str,
-    upstream: &str,
-) -> Result<(), Error> {
-    let repo = Repository::open(repo_path)?;
-    let mut branch = repo.find_branch(local, BranchType::Local)?;
-    branch.set_upstream(Some(upstream))?;
-    Ok(())
-}
-
-pub fn unset_upstream<P: AsRef<Path>>(repo_path: P, local: &str) -> Result<(), Error> {
-    let repo = Repository::open(repo_path)?;
-    let mut branch = repo.find_branch(local, BranchType::Local)?;
-    branch.set_upstream(None)?;
-    Ok(())
-}
-
-pub fn list_tracking_branches<P: AsRef<Path>>(
-    repo_path: P,
-) -> Result<Vec<TrackingBranch>, Error> {
-    let repo = Repository::open(repo_path)?;
-    let mut entries = Vec::new();
-    for branch_result in repo.branches(Some(BranchType::Local))? {
-        let (branch, _) = branch_result?;
-        let Some(name) = branch.name()? else {
-            continue;
-        };
-        let upstream = branch
-            .upstream()
-            .ok()
-            .and_then(|upstream| upstream.name().ok().flatten().map(|s| s.to_string()));
-        if let Some(upstream) = upstream {
-            entries.push(TrackingBranch {
-                local: name.to_string(),
-                upstream,
-            });
-        }
-    }
-    entries.sort_by(|a, b| a.local.cmp(&b.local));
-    Ok(entries)
 }
 
 pub fn delete_branch<P: AsRef<Path>>(repo_path: P, name: &str) -> Result<(), Error> {
