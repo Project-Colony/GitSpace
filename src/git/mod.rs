@@ -1,5 +1,6 @@
 pub mod branch;
 pub mod clone;
+pub mod discovery;
 pub mod diff;
 pub mod log;
 pub mod merge;
