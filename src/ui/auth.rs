@@ -63,26 +63,6 @@ impl AuthPanel {
                         [320.0, 28.0],
                         TextEdit::singleline(&mut self.host).hint_text("github.com or gitlab.com"),
                     );
-                    ui.label(
-                        RichText::new("Examples (host only, no repository path):")
-                            .color(self.theme.palette.text_secondary),
-                    );
-                    ui.label(
-                        RichText::new(format!("\u{f408} Remote host"))
-                            .color(self.theme.palette.text_secondary),
-                    );
-                    ui.label(
-                        RichText::new("github.com\nExample: github.com/MotherSphere")
-                            .color(self.theme.palette.text_secondary),
-                    );
-                    ui.label(
-                        RichText::new(format!("\u{f296} Remote host"))
-                            .color(self.theme.palette.text_secondary),
-                    );
-                    ui.label(
-                        RichText::new("gitlab.com\nExample: gitlab.com/MotherSphere")
-                            .color(self.theme.palette.text_secondary),
-                    );
 
                     ui.add_space(8.0);
                     ui.label(
