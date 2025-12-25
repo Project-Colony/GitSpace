@@ -18,6 +18,9 @@ pub struct CommitInfo {
     pub email: Option<String>,
     pub time: Time,
     pub parents: Vec<String>,
+    pub files_changed: Option<usize>,
+    pub additions: Option<usize>,
+    pub deletions: Option<usize>,
 }
 
 pub fn list_local_branches(repo_path: &str) -> Result<Vec<String>, git2::Error> {
@@ -40,6 +43,7 @@ pub fn read_commit_log(
     repo_path: &str,
     filter: &CommitFilter,
     limit: usize,
+    include_stats: bool,
 ) -> Result<Vec<CommitInfo>, git2::Error> {
     let repo = Repository::open(repo_path)?;
     let mut revwalk = repo.revwalk()?;
@@ -101,6 +105,20 @@ pub fn read_commit_log(
             .map(|p| p.id().to_string())
             .collect::<Vec<_>>();
 
+        let (files_changed, additions, deletions) = if include_stats {
+            let tree = commit.tree()?;
+            let parent_tree = commit.parent(0).ok().map(|parent| parent.tree()).transpose()?;
+            let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)?;
+            let stats = diff.stats()?;
+            (
+                Some(stats.files_changed()),
+                Some(stats.insertions()),
+                Some(stats.deletions()),
+            )
+        } else {
+            (None, None, None)
+        };
+
         commits.push(CommitInfo {
             id: oid.to_string(),
             summary: commit.summary().unwrap_or_default().to_string(),
@@ -109,6 +127,9 @@ pub fn read_commit_log(
             email: commit.author().email().map(|s| s.to_string()),
             time: commit.time(),
             parents,
+            files_changed,
+            additions,
+            deletions,
         });
     }
 

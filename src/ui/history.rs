@@ -349,7 +349,7 @@ impl HistoryPanel {
             until: parse_date(&self.filters.until),
         };
 
-        match read_commit_log(&repo.path, &filter, MAX_COMMITS) {
+        match read_commit_log(&repo.path, &filter, MAX_COMMITS, false) {
             Ok(commits) => self.commits = commits,
             Err(err) => self.error = Some(format!("Failed to read commits: {err}")),
         }

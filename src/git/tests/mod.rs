@@ -208,11 +208,37 @@ fn commit_logs_respect_filters() {
         search: Some("beta".to_string()),
         ..Default::default()
     };
-    let commits =
-        read_commit_log(repo.path().parent().unwrap().to_str().unwrap(), &filter, 10).expect("log");
+    let commits = read_commit_log(
+        repo.path().parent().unwrap().to_str().unwrap(),
+        &filter,
+        10,
+        false,
+    )
+    .expect("log");
 
     assert_eq!(commits.len(), 1);
     assert!(commits[0].summary.to_lowercase().contains("beta"));
+}
+
+#[test]
+fn commit_logs_can_include_diff_stats() {
+    let (_dir, repo) = init_temp_repo();
+    write_commit(&repo, "stats.txt", "one\n", "initial");
+    write_commit(&repo, "stats.txt", "one\ntwo\n", "add line");
+
+    let commits = read_commit_log(
+        repo.path().parent().unwrap().to_str().unwrap(),
+        &CommitFilter::default(),
+        1,
+        true,
+    )
+    .expect("log");
+
+    assert_eq!(commits.len(), 1);
+    let stats = &commits[0];
+    assert_eq!(stats.files_changed, Some(1));
+    assert_eq!(stats.additions, Some(1));
+    assert_eq!(stats.deletions, Some(0));
 }
 
 #[test]
