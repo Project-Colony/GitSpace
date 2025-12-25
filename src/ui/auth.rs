@@ -79,9 +79,9 @@ impl AuthPanel {
             &mut self.github_validation,
             "github.com",
         );
-        ui.add_space(6.0);
+        ui.add_space(2.0);
         ui.separator();
-        ui.add_space(6.0);
+        ui.add_space(2.0);
         provider_section(
             ui,
             &self.theme,
