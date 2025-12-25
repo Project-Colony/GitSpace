@@ -278,6 +278,18 @@ impl HistoryPanel {
                 ui.label(
                     RichText::new(commit.message.trim()).color(self.theme.palette.text_secondary),
                 );
+                if let (Some(files), Some(additions), Some(deletions)) = (
+                    commit.files_changed,
+                    commit.additions,
+                    commit.deletions,
+                ) {
+                    ui.label(
+                        RichText::new(format!(
+                            "Files changed: {files} (+{additions}, -{deletions})"
+                        ))
+                        .color(self.theme.palette.text_secondary),
+                    );
+                }
                 ui.add_space(8.0);
                 ui.separator();
                 ui.add_space(8.0);
@@ -349,7 +361,7 @@ impl HistoryPanel {
             until: parse_date(&self.filters.until),
         };
 
-        match read_commit_log(&repo.path, &filter, MAX_COMMITS) {
+        match read_commit_log(&repo.path, &filter, MAX_COMMITS, false) {
             Ok(commits) => self.commits = commits,
             Err(err) => self.error = Some(format!("Failed to read commits: {err}")),
         }
