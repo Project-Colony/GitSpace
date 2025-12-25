@@ -137,7 +137,7 @@ impl BranchPanel {
                         if self.new_branch.trim().is_empty() {
                             self.error = Some("Branch name cannot be empty".to_string());
                         } else {
-                            match create_branch(&repo.path, self.new_branch.trim()) {
+                            match create_branch(&repo.path, self.new_branch.trim(), None) {
                                 Ok(_) => {
                                     self.status = Some(format!(
                                         "Created branch {} from HEAD",
