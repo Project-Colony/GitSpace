@@ -7,7 +7,7 @@ use git2::{BranchType, Commit, Oid, Repository, RepositoryInitOptions, ResetType
 use crate::config::NetworkOptions;
 use crate::git::branch;
 use crate::git::branch::{BranchKind, list_branches, rename_branch};
-use crate::git::diff::commit_diff;
+use crate::git::diff::{commit_diff, diff_file, staged_diff, working_tree_diff};
 use crate::git::log::{CommitFilter, read_commit_log};
 use crate::git::remote::{fetch_remote, list_remotes, pull_branch, prune_remotes, push_branch};
 use crate::git::stash::{apply_stash, create_stash, drop_stash, list_stashes};
@@ -27,6 +27,7 @@ fn write_commit(repo: &Repository, path: impl AsRef<Path>, contents: &str, messa
 
     let mut index = repo.index().expect("index");
     index.add_path(path.as_ref()).expect("add path");
+    index.write().expect("write index");
     let tree_id = index.write_tree().expect("write tree");
     let tree = repo.find_tree(tree_id).expect("find tree");
 
@@ -128,6 +129,41 @@ fn commit_diff_tracks_file_changes() {
     assert!(entry.deletions <= 1);
     assert!(entry.patch.contains("+two"));
     assert!(entry.patch.contains("diff.txt"));
+}
+
+#[test]
+fn working_tree_and_staged_diffs_are_reported() {
+    let (_dir, repo) = init_temp_repo();
+    write_commit(&repo, "change.txt", "one\n", "initial");
+    let repo_root = repo.path().parent().unwrap();
+    let file_path = repo_root.join("change.txt");
+    fs::write(&file_path, "one\ntwo\n").expect("update file");
+
+    let unstaged = working_tree_diff(repo_root.to_str().unwrap()).expect("working tree diff");
+    let unstaged_entry = unstaged
+        .iter()
+        .find(|diff| diff.path.ends_with("change.txt"))
+        .expect("unstaged entry");
+    assert!(unstaged_entry.patch.contains("+two"));
+
+    let unstaged_file =
+        diff_file(repo_root.to_str().unwrap(), "change.txt", false).expect("file diff");
+    assert!(unstaged_file.is_some());
+
+    let mut index = repo.index().expect("index");
+    index.add_path(Path::new("change.txt")).expect("stage file");
+    index.write().expect("write index");
+
+    let staged = staged_diff(repo_root.to_str().unwrap()).expect("staged diff");
+    let staged_entry = staged
+        .iter()
+        .find(|diff| diff.path.ends_with("change.txt"))
+        .expect("staged entry");
+    assert!(staged_entry.patch.contains("+two"));
+
+    let staged_file =
+        diff_file(repo_root.to_str().unwrap(), "change.txt", true).expect("staged file diff");
+    assert!(staged_file.is_some());
 }
 
 #[test]
