@@ -67,44 +67,33 @@ impl AuthPanel {
         );
         ui.add_space(8.0);
 
-        egui::Frame::none()
-            .fill(self.theme.palette.surface)
-            .stroke(egui::Stroke::new(1.0, self.theme.palette.surface_highlight))
-            .rounding(egui::Rounding::same(8.0))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.add_space(6.0);
-                ui.vertical(|ui| {
-                    provider_section(
-                        ui,
-                        &self.theme,
-                        &self.auth,
-                        "GitHub",
-                        '\u{f408}',
-                        &mut self.github_host,
-                        &mut self.github_token,
-                        &mut self.github_status,
-                        &mut self.github_validation,
-                        "github.com",
-                    );
-                    ui.add_space(6.0);
-                    ui.separator();
-                    ui.add_space(6.0);
-                    provider_section(
-                        ui,
-                        &self.theme,
-                        &self.auth,
-                        "GitLab",
-                        '\u{f296}',
-                        &mut self.gitlab_host,
-                        &mut self.gitlab_token,
-                        &mut self.gitlab_status,
-                        &mut self.gitlab_validation,
-                        "gitlab.com",
-                    );
-                });
-                ui.add_space(6.0);
-            });
+        provider_section(
+            ui,
+            &self.theme,
+            &self.auth,
+            "GitHub",
+            '\u{f408}',
+            &mut self.github_host,
+            &mut self.github_token,
+            &mut self.github_status,
+            &mut self.github_validation,
+            "github.com",
+        );
+        ui.add_space(6.0);
+        ui.separator();
+        ui.add_space(6.0);
+        provider_section(
+            ui,
+            &self.theme,
+            &self.auth,
+            "GitLab",
+            '\u{f296}',
+            &mut self.gitlab_host,
+            &mut self.gitlab_token,
+            &mut self.gitlab_status,
+            &mut self.gitlab_validation,
+            "gitlab.com",
+        );
 
         ui.add_space(12.0);
         ui.label(
