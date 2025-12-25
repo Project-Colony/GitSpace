@@ -334,18 +334,11 @@ fn load_or_create_secret(name: &str, len: usize) -> Vec<u8> {
 
 fn normalize_host(host: &str) -> String {
     let trimmed = host.trim().trim_end_matches('/');
-    let with_scheme = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
         trimmed.to_string()
     } else {
         format!("https://{}", trimmed)
-    };
-    if let Ok(parsed) = Url::parse(&with_scheme) {
-        if let Some(host) = parsed.host_str() {
-            let scheme = parsed.scheme();
-            return format!("{}://{}", scheme, host);
-        }
     }
-    with_scheme
 }
 
 fn validate_github(client: &Client, host: &str, token: &str) -> Result<(), String> {
