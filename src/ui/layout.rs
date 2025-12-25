@@ -88,7 +88,7 @@ impl<'a> ShellLayout<'a> {
 
     pub fn header(&self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("header")
-            .exact_height(148.0)
+            .exact_height(48.0)
             .frame(egui::Frame::none().fill(self.theme.palette.surface))
             .show(ctx, |ui| {
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
