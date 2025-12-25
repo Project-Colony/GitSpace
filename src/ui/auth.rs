@@ -65,31 +65,46 @@ impl AuthPanel {
             )
             .color(self.theme.palette.text_secondary),
         );
-        ui.add_space(10.0);
+        ui.add_space(8.0);
 
-        provider_block(
-            ui,
-            &self.theme,
-            &self.auth,
-            '\u{f408}',
-            &mut self.github_host,
-            &mut self.github_token,
-            &mut self.github_status,
-            &mut self.github_validation,
-            "github.com",
-        );
-        ui.add_space(12.0);
-        provider_block(
-            ui,
-            &self.theme,
-            &self.auth,
-            '\u{f296}',
-            &mut self.gitlab_host,
-            &mut self.gitlab_token,
-            &mut self.gitlab_status,
-            &mut self.gitlab_validation,
-            "gitlab.com",
-        );
+        egui::Frame::none()
+            .fill(self.theme.palette.surface)
+            .stroke(egui::Stroke::new(1.0, self.theme.palette.surface_highlight))
+            .rounding(egui::Rounding::same(8.0))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.add_space(6.0);
+                ui.vertical(|ui| {
+                    provider_section(
+                        ui,
+                        &self.theme,
+                        &self.auth,
+                        "GitHub",
+                        '\u{f408}',
+                        &mut self.github_host,
+                        &mut self.github_token,
+                        &mut self.github_status,
+                        &mut self.github_validation,
+                        "github.com",
+                    );
+                    ui.add_space(6.0);
+                    ui.separator();
+                    ui.add_space(6.0);
+                    provider_section(
+                        ui,
+                        &self.theme,
+                        &self.auth,
+                        "GitLab",
+                        '\u{f296}',
+                        &mut self.gitlab_host,
+                        &mut self.gitlab_token,
+                        &mut self.gitlab_status,
+                        &mut self.gitlab_validation,
+                        "gitlab.com",
+                    );
+                });
+                ui.add_space(6.0);
+            });
 
         ui.add_space(12.0);
         ui.label(
@@ -133,10 +148,11 @@ impl AuthPanel {
 
 }
 
-fn provider_block(
+fn provider_section(
     ui: &mut Ui,
     theme: &Theme,
     auth: &AuthManager,
+    label: &str,
     icon: char,
     host: &mut String,
     token: &mut String,
@@ -144,50 +160,45 @@ fn provider_block(
     validation: &mut Option<Promise<Result<(), String>>>,
     host_hint: &str,
 ) {
-    egui::Frame::none()
-        .fill(theme.palette.surface)
-        .stroke(egui::Stroke::new(1.0, theme.palette.surface_highlight))
-        .rounding(egui::Rounding::same(8.0))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.add_space(8.0);
-            ui.vertical(|ui| {
-                ui.label(
-                    RichText::new(format!("{icon} Remote host"))
-                        .color(theme.palette.text_secondary),
-                );
-                ui.add_sized(
-                    [320.0, 28.0],
-                    TextEdit::singleline(host).hint_text(host_hint),
-                );
+    ui.label(
+        RichText::new(format!("{icon} {label}"))
+            .color(theme.palette.text_primary)
+            .strong(),
+    );
+    ui.add_space(6.0);
+    ui.label(
+        RichText::new("Remote host")
+            .color(theme.palette.text_secondary),
+    );
+    ui.add_sized(
+        [320.0, 28.0],
+        TextEdit::singleline(host).hint_text(host_hint),
+    );
 
-                ui.add_space(8.0);
-                ui.label(RichText::new("Access Token").color(theme.palette.text_secondary));
-                ui.add_sized(
-                    [320.0, 28.0],
-                    TextEdit::singleline(token)
-                        .password(true)
-                        .hint_text("Paste your personal access token"),
-                );
+    ui.add_space(8.0);
+    ui.label(RichText::new("Access Token").color(theme.palette.text_secondary));
+    ui.add_sized(
+        [320.0, 28.0],
+        TextEdit::singleline(token)
+            .password(true)
+            .hint_text("Paste your personal access token"),
+    );
 
-                ui.add_space(10.0);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let button = ui.add_enabled(
-                        !host.trim().is_empty() && !token.trim().is_empty(),
-                        egui::Button::new("Validate & Save"),
-                    );
-                    if button.clicked() {
-                        start_validation(auth, host, token, status, validation);
-                    }
-                });
+    ui.add_space(10.0);
+    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        let button = ui.add_enabled(
+            !host.trim().is_empty() && !token.trim().is_empty(),
+            egui::Button::new("Validate & Save"),
+        );
+        if button.clicked() {
+            start_validation(auth, host, token, status, validation);
+        }
+    });
 
-                if let Some(current_status) = status {
-                    ui.add_space(6.0);
-                    ui.colored_label(theme.palette.text_secondary, current_status);
-                }
-            });
-            ui.add_space(8.0);
-        });
+    if let Some(current_status) = status {
+        ui.add_space(6.0);
+        ui.colored_label(theme.palette.text_secondary, current_status);
+    }
 }
 
 fn start_validation(
