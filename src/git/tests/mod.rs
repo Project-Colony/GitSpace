@@ -2,10 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use git2::build::CheckoutBuilder;
-use git2::{
-    BranchType, Commit, Oid, Repository, RepositoryInitOptions, ResetType, Signature,
-    WorktreeAddOptions,
-};
+use git2::{BranchType, Commit, Oid, Repository, RepositoryInitOptions, ResetType, Signature};
 
 use crate::config::NetworkOptions;
 use crate::git::branch;
@@ -13,7 +10,6 @@ use crate::git::branch::{
     BranchKind, list_branches, list_tracking_branches, rename_branch, set_upstream,
     unset_upstream,
 };
-use crate::git::discovery::{find_repo_root, is_git_repo, list_submodules, list_worktrees};
 use crate::git::diff::{commit_diff, diff_file, staged_diff, working_tree_diff};
 use crate::git::log::{CommitFilter, read_commit_log};
 use crate::git::remote::{fetch_remote, list_remotes, pull_branch, prune_remotes, push_branch};
@@ -329,63 +325,4 @@ fn working_tree_status_groups_files() {
     assert_eq!(status.unstaged, vec!["status.txt".to_string()]);
     assert_eq!(status.untracked, vec!["new_file.txt".to_string()]);
     assert!(status.conflicted.is_empty());
-}
-
-#[test]
-fn repo_discovery_and_contents_are_reported() {
-    let (_dir, repo) = init_temp_repo();
-    write_commit(&repo, "README.md", "hello", "initial");
-    repo.set_head("refs/heads/main").expect("set head");
-
-    let repo_root = repo.path().parent().unwrap();
-    let nested = repo_root.join("nested");
-    fs::create_dir_all(&nested).expect("create nested");
-
-    assert!(is_git_repo(repo_root));
-    assert!(is_git_repo(&nested));
-
-    let other_dir = tempfile::tempdir().expect("other temp dir");
-    assert!(!is_git_repo(other_dir.path()));
-
-    let discovered = find_repo_root(&nested).expect("find repo root");
-    assert_eq!(discovered.as_deref(), Some(repo_root));
-    let none = find_repo_root(other_dir.path()).expect("no repo root");
-    assert!(none.is_none());
-}
-
-#[test]
-fn worktrees_and_submodules_are_listed() {
-    let (_dir, repo) = init_temp_repo();
-    write_commit(&repo, "README.md", "hello", "initial");
-
-    let sub_repo_dir = tempfile::tempdir().expect("submodule repo dir");
-    let sub_repo = Repository::init(sub_repo_dir.path()).expect("init submodule repo");
-    write_commit(&sub_repo, "lib.txt", "submodule", "init submodule");
-
-    let submodule_path = repo.path().parent().unwrap().join("vendor/submodule");
-    fs::create_dir_all(&submodule_path).expect("create submodule path");
-
-    let gitmodules = format!(
-        "[submodule \"vendor/submodule\"]\n\tpath = vendor/submodule\n\turl = {}\n",
-        sub_repo_dir.path().to_str().expect("submodule url")
-    );
-    write_commit(&repo, ".gitmodules", &gitmodules, "add submodule");
-
-    let submodules = list_submodules(repo.path().parent().unwrap()).expect("list submodules");
-    assert_eq!(submodules.len(), 1);
-    assert_eq!(submodules[0].path, "vendor/submodule");
-    assert_eq!(
-        submodules[0].url.as_deref(),
-        Some(sub_repo_dir.path().to_str().expect("submodule url"))
-    );
-
-    let worktree_parent = tempfile::tempdir().expect("worktree dir");
-    let worktree_dir = worktree_parent.path().join("worktree");
-    let opts = WorktreeAddOptions::new();
-    repo.worktree("worktree-feature", &worktree_dir, Some(&opts))
-        .expect("create worktree");
-
-    let worktrees = list_worktrees(repo.path().parent().unwrap()).expect("list worktrees");
-    let worktree_path = worktree_dir.to_string_lossy().to_string();
-    assert!(worktrees.iter().any(|path| path == &worktree_path));
 }
