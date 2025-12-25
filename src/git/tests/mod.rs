@@ -6,10 +6,7 @@ use git2::{BranchType, Commit, Oid, Repository, RepositoryInitOptions, ResetType
 
 use crate::config::NetworkOptions;
 use crate::git::branch;
-use crate::git::branch::{
-    BranchKind, list_branches, list_tracking_branches, rename_branch, set_upstream,
-    unset_upstream,
-};
+use crate::git::branch::{BranchKind, list_branches, rename_branch};
 use crate::git::diff::{commit_diff, diff_file, staged_diff, working_tree_diff};
 use crate::git::log::{CommitFilter, read_commit_log};
 use crate::git::remote::{fetch_remote, list_remotes, pull_branch, prune_remotes, push_branch};
@@ -90,7 +87,7 @@ fn branch_lifecycle_is_managed() {
     write_commit(&repo, "file.txt", "content", "base");
     let root = repo.path().parent().unwrap();
 
-    branch::create_branch(root, "feature/test", None).expect("create branch");
+    branch::create_branch(root, "feature/test").expect("create branch");
     let mut branches = list_branches(root).expect("list branches");
     branches.sort_by(|a, b| a.name.cmp(&b.name));
     assert!(
@@ -110,31 +107,6 @@ fn branch_lifecycle_is_managed() {
     branch::delete_branch(root, "feature/renamed").expect("delete");
     let remaining = list_branches(root).expect("list branches");
     assert!(!remaining.iter().any(|entry| entry.name.contains("feature")));
-}
-
-#[test]
-fn upstreams_are_set_and_listed() {
-    let (_dir, repo) = init_temp_repo();
-    let base = write_commit(&repo, "upstream.txt", "base", "base");
-    let root = repo.path().parent().unwrap();
-
-    branch::create_branch(root, "feature/upstream", Some("main")).expect("create branch");
-
-    repo.remote("origin", "https://example.com/remote.git")
-        .expect("create remote");
-    let reference_name = "refs/remotes/origin/feature/upstream";
-    repo.reference(reference_name, base, true, "create remote ref")
-        .expect("remote ref");
-
-    set_upstream(root, "feature/upstream", "origin/feature/upstream").expect("set upstream");
-    let tracking = list_tracking_branches(root).expect("list tracking");
-    assert!(tracking.iter().any(|entry| {
-        entry.local == "feature/upstream" && entry.upstream == "origin/feature/upstream"
-    }));
-
-    unset_upstream(root, "feature/upstream").expect("unset upstream");
-    let tracking = list_tracking_branches(root).expect("list tracking");
-    assert!(!tracking.iter().any(|entry| entry.local == "feature/upstream"));
 }
 
 #[test]
