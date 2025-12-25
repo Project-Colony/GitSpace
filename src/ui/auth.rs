@@ -178,7 +178,7 @@ fn provider_section(
     ui.add_space(8.0);
     ui.label(RichText::new("Access Token").color(theme.palette.text_secondary));
     ui.add_sized(
-        [80.0, 10.0],
+        [360.0, 28.0],
         TextEdit::singleline(token)
             .password(true)
             .hint_text("Paste your personal access token"),
