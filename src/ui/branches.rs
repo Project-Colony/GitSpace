@@ -4,8 +4,8 @@ use chrono::Utc;
 use eframe::egui::{self, RichText, Sense, Ui};
 
 use crate::git::branch::{
-    BranchEntry, BranchKind, checkout_branch, create_branch, delete_branch, list_branches,
-    rename_branch,
+    BranchEntry, BranchKind, checkout_branch, create_branch, create_tracking_branch, delete_branch,
+    list_branches, rename_branch,
 };
 use crate::git::compare::{BranchComparison, compare_branch_with_head};
 use crate::git::merge::{MergeOutcome, MergeStrategy, detect_conflicts, merge_branch};
@@ -289,6 +289,17 @@ impl BranchPanel {
             if ui.button("Checkout").clicked() {
                 self.run_branch_action(repo, || checkout_branch(&repo.path, &branch.name));
                 ui.close_menu();
+            }
+
+            if branch.kind == BranchKind::Remote {
+                if ui.button("Checkout & Track").clicked() {
+                    self.run_branch_action(repo, || {
+                        let local_name = create_tracking_branch(&repo.path, &branch.name)?;
+                        checkout_branch(&repo.path, &local_name)?;
+                        Ok(())
+                    });
+                    ui.close_menu();
+                }
             }
 
             if branch.kind == BranchKind::Local && !branch.is_head {
