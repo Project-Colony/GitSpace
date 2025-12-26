@@ -62,14 +62,11 @@ impl AuthPanel {
         );
 
         layout.section(ui, AuthSection::provider("GitHub", '\u{f408}'), |ui| {
-            provider_section(
+            provider_fields(
                 ui,
                 &layout,
-                &self.auth,
                 &mut self.github_host,
                 &mut self.github_token,
-                &mut self.github_status,
-                &mut self.github_validation,
                 "github.com",
             );
         });
@@ -85,6 +82,19 @@ impl AuthPanel {
                 &mut self.gitlab_status,
                 &mut self.gitlab_validation,
                 "gitlab.com",
+            );
+        });
+
+        ui.add_space(layout.spacing.sm);
+        layout.action_section(ui, |ui| {
+            provider_actions(
+                ui,
+                &layout,
+                &self.auth,
+                &mut self.github_host,
+                &mut self.github_token,
+                &mut self.github_status,
+                &mut self.github_validation,
             );
         });
 
@@ -150,6 +160,17 @@ fn provider_section(
     validation: &mut Option<Promise<Result<(), String>>>,
     host_hint: &str,
 ) {
+    provider_fields(ui, layout, host, token, host_hint);
+    provider_actions(ui, layout, auth, host, token, status, validation);
+}
+
+fn provider_fields(
+    ui: &mut Ui,
+    layout: &AuthLayout<'_>,
+    host: &mut String,
+    token: &mut String,
+    host_hint: &str,
+) {
     let control_height = ui.spacing().interact_size.y;
     AuthTextField::new("Remote host", host)
         .hint_text(host_hint)
@@ -162,7 +183,17 @@ fn provider_section(
         .kind(FieldKind::Password)
         .show(ui, layout.theme, control_height);
     ui.add_space(layout.spacing.md);
+}
 
+fn provider_actions(
+    ui: &mut Ui,
+    layout: &AuthLayout<'_>,
+    auth: &AuthManager,
+    host: &mut String,
+    token: &mut String,
+    status: &mut Option<String>,
+    validation: &mut Option<Promise<Result<(), String>>>,
+) {
     let previous_spacing = ui.spacing().item_spacing;
     ui.spacing_mut().item_spacing = egui::vec2(previous_spacing.x, 0.0);
     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -257,6 +288,20 @@ impl<'a> AuthLayout<'a> {
         frame.show(ui, |ui| {
             section.header(ui, self.theme, self.spacing);
             ui.add_space(self.spacing.md);
+            content(ui);
+        });
+    }
+
+    fn action_section<F>(&self, ui: &mut Ui, content: F)
+    where
+        F: FnOnce(&mut Ui),
+    {
+        let frame = egui::Frame::none()
+            .fill(self.theme.palette.surface)
+            .stroke(egui::Stroke::new(1.0, self.theme.palette.surface_highlight))
+            .inner_margin(egui::Margin::same(self.spacing.md))
+            .rounding(egui::Rounding::same(self.spacing.xs));
+        frame.show(ui, |ui| {
             content(ui);
         });
     }
