@@ -336,17 +336,11 @@ impl<'a> AuthSection<'a> {
     }
 }
 
-enum FieldKind {
-    Text,
-    Password,
-}
-
 struct AuthTextField<'a> {
     label: &'a str,
     value: &'a mut String,
     hint: &'a str,
     width: f32,
-    kind: FieldKind,
 }
 
 impl<'a> AuthTextField<'a> {
@@ -356,7 +350,6 @@ impl<'a> AuthTextField<'a> {
             value,
             hint: "",
             width: 300.0,
-            kind: FieldKind::Text,
         }
     }
 
@@ -370,17 +363,9 @@ impl<'a> AuthTextField<'a> {
         self
     }
 
-    fn kind(mut self, kind: FieldKind) -> Self {
-        self.kind = kind;
-        self
-    }
-
     fn show(self, ui: &mut Ui, theme: &Theme, height: f32) {
         ui.label(RichText::new(self.label).color(theme.palette.text_secondary));
         let mut edit = TextEdit::singleline(self.value).hint_text(self.hint);
-        if matches!(self.kind, FieldKind::Password) {
-            edit = edit.password(true);
-        }
         ui.add_sized([self.width, height], edit);
     }
 }
