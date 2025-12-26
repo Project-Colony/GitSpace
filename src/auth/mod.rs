@@ -44,7 +44,12 @@ impl AuthManager {
     }
 
     pub fn resolve_for_host(&self, host: &str) -> Option<String> {
-        self.storage.get_token(host).ok().flatten()
+        for candidate in host_candidates(host) {
+            if let Ok(Some(token)) = self.storage.get_token(&candidate) {
+                return Some(token);
+            }
+        }
+        None
     }
 
     pub fn resolve_for_url(&self, url: &str) -> Option<String> {
@@ -53,11 +58,26 @@ impl AuthManager {
 
     #[allow(dead_code)]
     pub fn set_token(&self, host: &str, token: &str) -> Result<(), String> {
-        self.storage.set_token(host, token)
+        let canonical = normalize_host(host);
+        self.storage.set_token(&canonical, token)
     }
 
     pub fn clear_token(&self, host: &str) -> Result<(), String> {
-        self.storage.clear_token(host)
+        let candidates = host_candidates(host);
+        let mut last_err = None;
+        let mut cleared = false;
+        for candidate in candidates {
+            match self.storage.clear_token(&candidate) {
+                Ok(()) => cleared = true,
+                Err(err) => last_err = Some(err),
+            }
+        }
+
+        if cleared || last_err.is_none() {
+            Ok(())
+        } else {
+            Err(last_err.unwrap_or_else(|| "Failed to clear token".to_string()))
+        }
     }
 
     pub fn known_hosts(&self) -> Vec<String> {
@@ -85,11 +105,24 @@ impl AuthManager {
 
     pub fn validate_and_store(&self, host: &str, token: &str) -> Result<(), String> {
         self.validate_token(host, token)?;
-        self.storage.set_token(host, token)
+        self.set_token(host, token)
     }
     pub fn set_encrypted_fallback(&mut self, allowed: bool) {
         self.storage.set_allow_encrypted_fallback(allowed);
     }
+}
+
+fn host_candidates(host: &str) -> Vec<String> {
+    let trimmed = host.trim().trim_end_matches('/').to_string();
+    let mut candidates = Vec::new();
+    if !trimmed.is_empty() {
+        candidates.push(trimmed.clone());
+    }
+    let normalized = normalize_host(&trimmed);
+    if !normalized.is_empty() && !candidates.iter().any(|item| item == &normalized) {
+        candidates.push(normalized);
+    }
+    candidates
 }
 
 #[derive(Debug, Clone)]
