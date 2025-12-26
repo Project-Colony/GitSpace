@@ -4,12 +4,15 @@ use chrono::Utc;
 use eframe::egui::{self, RichText, Sense, Ui};
 
 use crate::git::branch::{
-    BranchEntry, BranchKind, checkout_branch, create_branch, create_tracking_branch, delete_branch,
-    list_branches, rename_branch,
+    BranchEntry, BranchKind, archive_branch, checkout_branch, create_branch,
+    create_tracking_branch, delete_branch, list_branches, rename_branch,
 };
 use crate::git::compare::{BranchComparison, compare_branch_with_head};
+use crate::git::log::{CommitInfo, latest_commit_for_branch};
 use crate::git::merge::{MergeOutcome, MergeStrategy, detect_conflicts, merge_branch};
 use crate::ui::{context::RepoContext, theme::Theme};
+
+const STALE_DAYS: i64 = 30;
 
 #[derive(Default)]
 struct BranchNode {
@@ -35,6 +38,7 @@ impl BranchNode {
 pub struct BranchPanel {
     theme: Theme,
     branches: Vec<BranchEntry>,
+    branch_commits: BTreeMap<String, CommitInfo>,
     new_branch: String,
     rename_buffer: String,
     last_repo: Option<String>,
@@ -44,6 +48,7 @@ pub struct BranchPanel {
     error: Option<String>,
     status: Option<String>,
     conflict_files: Vec<String>,
+    stale_only: bool,
 }
 
 impl BranchPanel {
@@ -51,6 +56,7 @@ impl BranchPanel {
         Self {
             theme,
             branches: Vec::new(),
+            branch_commits: BTreeMap::new(),
             new_branch: String::new(),
             rename_buffer: String::new(),
             last_repo: None,
@@ -60,6 +66,7 @@ impl BranchPanel {
             error: None,
             status: None,
             conflict_files: Vec::new(),
+            stale_only: false,
         }
     }
 
@@ -102,6 +109,10 @@ impl BranchPanel {
 
             ui.add_space(6.0);
             self.creation_bar(ui, repo);
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut self.stale_only, "Show stale only");
+            });
             ui.add_space(8.0);
 
             let available_height = ui.available_height();
@@ -188,6 +199,7 @@ impl BranchPanel {
                 return;
             }
         }
+        self.refresh_branch_commits(repo);
 
         match detect_conflicts(&repo.path) {
             Ok(conflicts) => self.conflict_files = conflicts,
@@ -201,6 +213,9 @@ impl BranchPanel {
 
         let mut root = BranchNode::default();
         for branch in self.branches.iter().filter(|b| b.kind == kind) {
+            if self.stale_only && !self.is_branch_stale(branch) {
+                continue;
+            }
             let segments: Vec<&str> = branch.name.split('/').collect();
             root.insert(&segments, branch.clone());
         }
@@ -241,8 +256,7 @@ impl BranchPanel {
                     }
                 });
             } else if let Some(branch) = &node.branch {
-                let label = self.branch_label(branch);
-                let response = ui.add(egui::Label::new(label).sense(Sense::click()));
+                let response = self.branch_label(ui, branch);
                 if response.clicked() {
                     self.select_branch(repo, &branch.name);
                 }
@@ -265,18 +279,37 @@ impl BranchPanel {
         }
     }
 
-    fn branch_label(&self, branch: &BranchEntry) -> RichText {
+    fn branch_label(&self, ui: &mut Ui, branch: &BranchEntry) -> egui::Response {
         let mut text = branch.name.clone();
         if branch.is_head {
             text.push_str(" (HEAD)");
         }
-        RichText::new(text)
+        let label = RichText::new(text)
             .color(if branch.is_head {
                 self.theme.palette.accent
             } else {
                 self.theme.palette.text_primary
             })
-            .strong()
+            .strong();
+        let is_stale = self.is_branch_stale(branch);
+        ui.horizontal(|ui| {
+            let response = ui.add(egui::Label::new(label).sense(Sense::click()));
+            if is_stale {
+                egui::Frame::none()
+                    .fill(self.theme.palette.surface_highlight)
+                    .rounding(egui::Rounding::same(6.0))
+                    .inner_margin(egui::Margin::symmetric(6.0, 2.0))
+                    .show(ui, |ui| {
+                        ui.label(
+                            RichText::new("stale")
+                                .color(self.theme.palette.text_secondary)
+                                .size(self.theme.typography.label),
+                        );
+                    });
+            }
+            response
+        })
+        .inner
     }
 
     fn context_menu(
@@ -303,7 +336,7 @@ impl BranchPanel {
             }
 
             if branch.kind == BranchKind::Local && !branch.is_head {
-                if ui.button("Delete").clicked() {
+                if ui.button("Delete branch").clicked() {
                     self.run_branch_action(repo, || delete_branch(&repo.path, &branch.name));
                     ui.close_menu();
                 }
@@ -320,6 +353,19 @@ impl BranchPanel {
             }
 
             if branch.kind == BranchKind::Local {
+                if ui.button("Archive").clicked() {
+                    self.status = None;
+                    self.error = None;
+                    match archive_branch(&repo.path, &branch.name) {
+                        Ok(tag) => {
+                            self.status = Some(format!("Archived {} as tag {}", branch.name, tag));
+                            self.refresh(repo);
+                        }
+                        Err(err) => self.error = Some(err.to_string()),
+                    }
+                    ui.close_menu();
+                }
+
                 ui.separator();
                 if self.rename_buffer.is_empty() {
                     self.rename_buffer = branch.name.clone();
@@ -462,5 +508,37 @@ impl BranchPanel {
             self.status = Some(outcome.message);
         }
         self.refresh(repo);
+    }
+
+    fn refresh_branch_commits(&mut self, repo: &RepoContext) {
+        self.branch_commits.clear();
+        for branch in &self.branches {
+            match latest_commit_for_branch(&repo.path, &branch.name) {
+                Ok(Some(commit)) => {
+                    self.branch_commits.insert(self.branch_key(branch), commit);
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    self.error = Some(format!("Failed to read branch history: {err}"));
+                    return;
+                }
+            }
+        }
+    }
+
+    fn branch_key(&self, branch: &BranchEntry) -> String {
+        match branch.kind {
+            BranchKind::Local => format!("local:{}", branch.name),
+            BranchKind::Remote => format!("remote:{}", branch.name),
+        }
+    }
+
+    fn is_branch_stale(&self, branch: &BranchEntry) -> bool {
+        let key = self.branch_key(branch);
+        let Some(commit) = self.branch_commits.get(&key) else {
+            return true;
+        };
+        let age_seconds = Utc::now().timestamp().saturating_sub(commit.time.seconds());
+        age_seconds > STALE_DAYS * 24 * 60 * 60
     }
 }
