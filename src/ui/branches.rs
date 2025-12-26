@@ -194,6 +194,7 @@ impl BranchPanel {
         }
 
         egui::ScrollArea::vertical()
+            .id_source(("branch_scroll", kind))
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for node in root.children.values() {
