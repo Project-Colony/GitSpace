@@ -81,7 +81,10 @@ impl GitSpaceApp {
                 preferences.branch_box_height(),
             ),
             history_panel: HistoryPanel::new(theme.clone()),
-            branches_panel: BranchPanel::new(theme.clone()),
+            branches_panel: BranchPanel::new(
+                theme.clone(),
+                preferences.pinned_branches().to_vec(),
+            ),
             stage_panel: StagePanel::new(theme.clone()),
             config,
             current_repo,
@@ -195,6 +198,13 @@ impl eframe::App for GitSpaceApp {
 
         if let Some(updated_preferences) = self.settings_panel.take_changes() {
             self.apply_preferences(updated_preferences, ctx);
+        }
+
+        if let Some(pinned_branches) = self.branches_panel.take_pinned_changes() {
+            let mut preferences = self.config.preferences().clone();
+            preferences.set_pinned_branches(pinned_branches);
+            self.config.set_preferences(preferences);
+            let _ = self.config.save();
         }
 
         if let Some(control_height) = self.settings_panel.take_control_height_change() {
@@ -344,6 +354,8 @@ impl GitSpaceApp {
             .set_branch_box_height(preferences.branch_box_height());
         self.history_panel.set_theme(self.theme.clone());
         self.branches_panel.set_theme(self.theme.clone());
+        self.branches_panel
+            .set_pinned_branches(preferences.pinned_branches().to_vec());
         self.stage_panel.set_theme(self.theme.clone());
         self.auth_panel.set_theme(self.theme.clone());
         self.settings_panel.set_theme(self.theme.clone());

@@ -131,6 +131,8 @@ pub struct Preferences {
     control_height: f32,
     #[serde(default = "default_branch_box_height")]
     branch_box_height: f32,
+    #[serde(default)]
+    pinned_branches: Vec<String>,
 }
 
 impl Default for Preferences {
@@ -147,6 +149,7 @@ impl Default for Preferences {
             allow_encrypted_tokens: false,
             control_height: default_control_height(),
             branch_box_height: default_branch_box_height(),
+            pinned_branches: Vec::new(),
         }
     }
 }
@@ -365,6 +368,14 @@ impl Preferences {
 
     pub fn set_branch_box_height(&mut self, height: f32) {
         self.branch_box_height = height.max(MIN_BRANCH_BOX_HEIGHT);
+    }
+
+    pub fn pinned_branches(&self) -> &[String] {
+        &self.pinned_branches
+    }
+
+    pub fn set_pinned_branches(&mut self, branches: Vec<String>) {
+        self.pinned_branches = branches;
     }
 
     pub fn save_to_path<P: AsRef<Path>>(&self, path: P) -> std::io::Result<()> {
