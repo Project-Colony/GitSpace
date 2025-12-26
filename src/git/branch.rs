@@ -76,6 +76,20 @@ pub fn create_branch<P: AsRef<Path>>(
     Ok(())
 }
 
+pub fn create_tracking_branch<P: AsRef<Path>>(
+    repo_path: P,
+    remote_branch: &str,
+) -> Result<String, Error> {
+    let repo = Repository::open(repo_path)?;
+    let remote = repo.find_branch(remote_branch, BranchType::Remote)?;
+    let commit = remote.into_reference().peel_to_commit()?;
+    let local_name = local_branch_name(remote_branch);
+    repo.branch(&local_name, &commit, false)?;
+    let mut local_branch = repo.find_branch(&local_name, BranchType::Local)?;
+    local_branch.set_upstream(Some(remote_branch))?;
+    Ok(local_name)
+}
+
 #[allow(dead_code)]
 pub fn set_upstream<P: AsRef<Path>>(
     repo_path: P,
@@ -163,4 +177,11 @@ fn branch_sort_key(entry: &BranchEntry) -> usize {
         BranchKind::Local => 0,
         BranchKind::Remote => 1,
     }
+}
+
+fn local_branch_name(remote_branch: &str) -> String {
+    remote_branch
+        .split_once('/')
+        .map(|(_, name)| name.to_string())
+        .unwrap_or_else(|| remote_branch.to_string())
 }
