@@ -1,4 +1,4 @@
-use eframe::egui::{self, Align, Layout, RichText, TextEdit, Ui};
+use eframe::egui::{self, RichText, TextEdit, Ui};
 use poll_promise::Promise;
 
 use crate::auth::AuthManager;
@@ -156,16 +156,13 @@ fn provider_section(
         .width(layout.metrics.host_width)
         .show(ui, layout.theme, control_height);
     ui.add_space(layout.spacing.sm);
-    AuthTextField::new("Access token", token)
-        .hint_text("Paste your personal access token")
-        .width(layout.metrics.token_width)
-        .kind(FieldKind::Password)
-        .show(ui, layout.theme, control_height);
-    ui.add_space(layout.spacing.md);
-
-    let previous_spacing = ui.spacing().item_spacing;
-    ui.spacing_mut().item_spacing = egui::vec2(previous_spacing.x, 0.0);
-    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+    ui.label(RichText::new("Access token").color(layout.theme.palette.text_secondary));
+    ui.horizontal(|ui| {
+        let edit = TextEdit::singleline(token)
+            .hint_text("Paste your personal access token")
+            .password(true);
+        ui.add_sized([layout.metrics.token_width, control_height], edit);
+        ui.add_space(layout.spacing.sm);
         let enabled = !host.trim().is_empty() && !token.trim().is_empty();
         let button = AuthActionButton::new("Validate & Save")
             .variant(ActionVariant::Primary)
@@ -174,7 +171,7 @@ fn provider_section(
             start_validation(auth, host, token, status, validation);
         }
     });
-    ui.spacing_mut().item_spacing = previous_spacing;
+    ui.add_space(layout.spacing.md);
 
     if let Some(current_status) = status {
         ui.add_space(layout.spacing.sm);
