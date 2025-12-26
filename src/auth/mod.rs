@@ -48,7 +48,12 @@ impl AuthManager {
     }
 
     pub fn resolve_for_url(&self, url: &str) -> Option<String> {
-        extract_host(url).and_then(|host| self.resolve_for_host(&host))
+        let host = extract_host(url)?;
+        self.resolve_for_host(&host)
+            .or_else(|| match host.as_str() {
+                "github.com" => self.resolve_for_host("api.github.com"),
+                _ => None,
+            })
     }
 
     #[allow(dead_code)]
