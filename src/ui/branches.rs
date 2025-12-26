@@ -145,20 +145,12 @@ impl BranchPanel {
             ui.add_space(8.0);
 
             let available_height = ui.available_height();
-            ui.horizontal(|ui| {
-                ui.vertical(|ui| {
-                    ui.set_min_height(available_height);
-                    ui.set_width(ui.available_width() * 0.5);
-                    self.render_tree(ui, repo, BranchKind::Local, "Local branches");
-                });
+            ui.columns(2, |columns| {
+                columns[0].set_min_height(available_height);
+                self.render_tree(&mut columns[0], repo, BranchKind::Local, "Local branches");
 
-                ui.separator();
-
-                ui.vertical(|ui| {
-                    ui.set_min_height(available_height);
-                    ui.set_width(ui.available_width());
-                    self.render_tree(ui, repo, BranchKind::Remote, "Remote branches");
-                });
+                columns[1].set_min_height(available_height);
+                self.render_tree(&mut columns[1], repo, BranchKind::Remote, "Remote branches");
             });
 
             ui.add_space(10.0);
