@@ -118,7 +118,12 @@ impl RepoOverviewPanel {
             .fill(self.theme.palette.surface)
             .stroke(egui::Stroke::new(1.0, self.theme.palette.surface_highlight))
             .rounding(8.0)
-            .inner_margin(Margin::same(10.0));
+            .inner_margin(Margin {
+                left: 10.0,
+                right: 10.0,
+                top: 6.0,
+                bottom: 6.0,
+            });
 
         ui.add_space(4.0);
         ui.heading(RichText::new("Branch").color(self.theme.palette.text_primary));
@@ -146,19 +151,19 @@ impl RepoOverviewPanel {
 
     fn stat_chip(&self, ui: &mut Ui, label: &str, value: usize) {
         let rect = ui
-            .allocate_exact_size(egui::vec2(90.0, 46.0), egui::Sense::hover())
+            .allocate_exact_size(egui::vec2(90.0, 38.0), egui::Sense::hover())
             .0;
         let painter = ui.painter();
         painter.rect_filled(rect, 10.0, self.theme.palette.surface_highlight);
         painter.text(
-            rect.left_top() + egui::vec2(10.0, 8.0),
+            rect.left_top() + egui::vec2(10.0, 6.0),
             egui::Align2::LEFT_TOP,
             label,
             egui::FontId::proportional(self.theme.typography.label),
             self.theme.palette.text_secondary,
         );
         painter.text(
-            rect.left_bottom() + egui::vec2(10.0, -8.0),
+            rect.left_bottom() + egui::vec2(10.0, -6.0),
             egui::Align2::LEFT_BOTTOM,
             value.to_string(),
             egui::FontId::proportional(self.theme.typography.title),
