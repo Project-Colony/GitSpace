@@ -53,6 +53,7 @@ pub struct BranchPanel {
     status: Option<String>,
     conflict_files: Vec<String>,
     stale_only: bool,
+    open_history_branch: Option<String>,
 }
 
 impl BranchPanel {
@@ -75,11 +76,16 @@ impl BranchPanel {
             status: None,
             conflict_files: Vec::new(),
             stale_only: false,
+            open_history_branch: None,
         }
     }
 
     pub fn set_theme(&mut self, theme: Theme) {
         self.theme = theme;
+    }
+
+    pub fn take_history_request(&mut self) -> Option<String> {
+        self.open_history_branch.take()
     }
 
     pub fn ui(&mut self, ui: &mut Ui, repo: Option<&RepoContext>) {
@@ -368,6 +374,11 @@ impl BranchPanel {
 
             if ui.button("Compare with current").clicked() {
                 self.compare_with_current(repo, &branch.name);
+                ui.close_menu();
+            }
+
+            if ui.button("Open in History").clicked() {
+                self.open_history_branch = Some(branch.name.clone());
                 ui.close_menu();
             }
 

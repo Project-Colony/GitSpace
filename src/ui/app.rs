@@ -183,6 +183,13 @@ impl eframe::App for GitSpaceApp {
                     ) {
                         self.load_repo_context(selected);
                     }
+
+                    if let Some(branch) = self.branches_panel.take_history_request() {
+                        self.active_tab = MainTab::History;
+                        self.record_tab_switch(MainTab::History, NavigationTrigger::ContextMenu);
+                        self.history_panel
+                            .set_branch_filter(branch, self.current_repo.as_ref());
+                    }
                 });
         });
 
