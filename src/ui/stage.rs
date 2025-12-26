@@ -1,13 +1,11 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::path::Path;
 
-use eframe::egui::{self, Align, ComboBox, Layout, RichText, ScrollArea, Ui, Window};
+use eframe::egui::{self, Align, ComboBox, Layout, RichText, ScrollArea, Ui};
 use git2::{Repository, Signature, Status, StatusOptions, StatusShow};
 
-use crate::git::branch::restore_file_from_branch;
 use crate::git::diff::{diff_file, staged_diff, working_tree_diff};
 use crate::git::stash::{StashEntry, apply_stash, create_stash, drop_stash, list_stashes};
-use crate::git::status::read_repo_status;
 use crate::ui::{context::RepoContext, theme::Theme};
 
 #[derive(Debug, Clone)]
@@ -34,8 +32,6 @@ pub struct StagePanel {
     stashes: Vec<StashEntry>,
     include_untracked_in_stash: bool,
     needs_refresh: bool,
-    restore_dialog_open: bool,
-    restore_selection: Option<String>,
 }
 
 const COMMIT_TEMPLATES: &[(&str, &str)] = &[
@@ -69,8 +65,6 @@ impl StagePanel {
             stashes: Vec::new(),
             include_untracked_in_stash: true,
             needs_refresh: true,
-            restore_dialog_open: false,
-            restore_selection: None,
         }
     }
 
@@ -119,7 +113,6 @@ impl StagePanel {
             self.render_commit_editor(ui);
             ui.add_space(12.0);
             self.render_stash_controls(ui, repo);
-            self.render_restore_dialog(ui, repo);
         } else {
             ui.add_space(8.0);
             ui.label(
@@ -180,7 +173,6 @@ impl StagePanel {
 
         let mut pending_action: Option<(bool, String)> = None;
         let mut pending_diff: Option<(bool, String)> = None;
-        let mut pending_restore: Option<String> = None;
 
         ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -189,8 +181,7 @@ impl StagePanel {
                     ui.horizontal(|ui| {
                         let mut toggle = entry.checked;
                         let label = format!("{} ({})", entry.path, entry.status_label);
-                        let response = ui.checkbox(&mut toggle, label);
-                        if response.changed() {
+                        if ui.checkbox(&mut toggle, label).changed() {
                             entry.checked = toggle;
                             pending_action = Some((staged, entry.path.clone()));
                         }
@@ -198,13 +189,6 @@ impl StagePanel {
                         if ui.button("Diff").clicked() {
                             pending_diff = Some((staged, entry.path.clone()));
                         }
-
-                        response.context_menu(|ui| {
-                            if ui.button("Restore file...").clicked() {
-                                pending_restore = Some(entry.path.clone());
-                                ui.close_menu();
-                            }
-                        });
                     });
                 }
             });
@@ -219,11 +203,6 @@ impl StagePanel {
 
         if let Some(diff) = pending_diff {
             self.selected_diff = Some(diff);
-        }
-
-        if let Some(path) = pending_restore {
-            self.restore_dialog_open = true;
-            self.restore_selection = Some(path);
         }
     }
 
@@ -400,95 +379,6 @@ impl StagePanel {
                     });
                 }
             });
-    }
-
-    fn render_restore_dialog(&mut self, ui: &mut Ui, repo: &RepoContext) {
-        if !self.restore_dialog_open {
-            return;
-        }
-
-        let mut open = self.restore_dialog_open;
-        let current_branch = read_repo_status(&repo.path)
-            .ok()
-            .and_then(|status| status.branch)
-            .unwrap_or_else(|| "HEAD".to_string());
-        let candidates = self.restore_candidates();
-
-        Window::new("Restore file")
-            .open(&mut open)
-            .collapsible(false)
-            .show(ui.ctx(), |ui| {
-                ui.label(
-                    RichText::new(format!(
-                        "Restore file from {current_branch} (discard local changes)."
-                    ))
-                    .color(self.theme.palette.text_secondary),
-                );
-                ui.add_space(6.0);
-
-                if candidates.is_empty() {
-                    ui.label(
-                        RichText::new("No modified files to restore.")
-                            .color(self.theme.palette.text_secondary),
-                    );
-                    return;
-                }
-
-                ScrollArea::vertical()
-                    .max_height(220.0)
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        for path in candidates {
-                            let selected = self.restore_selection.as_deref() == Some(&path);
-                            if ui.selectable_label(selected, &path).clicked() {
-                                self.restore_selection = Some(path);
-                            }
-                        }
-                    });
-
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    if ui.button("Cancel").clicked() {
-                        open = false;
-                    }
-
-                    let restore_enabled = self.restore_selection.is_some();
-                    if ui
-                        .add_enabled(restore_enabled, egui::Button::new("Restore"))
-                        .clicked()
-                    {
-                        if let Some(path) = self.restore_selection.clone() {
-                            self.status = None;
-                            match restore_file_from_branch(&repo.path, &current_branch, &path) {
-                                Ok(()) => {
-                                    self.status = Some(format!(
-                                        "Restored {path} from {current_branch}"
-                                    ));
-                                    self.needs_refresh = true;
-                                    open = false;
-                                }
-                                Err(err) => {
-                                    self.error =
-                                        Some(format!("Failed to restore {path}: {err}"));
-                                }
-                            }
-                        }
-                    }
-                });
-            });
-
-        if !open {
-            self.restore_selection = None;
-        }
-        self.restore_dialog_open = open;
-    }
-
-    fn restore_candidates(&self) -> Vec<String> {
-        let mut candidates = BTreeSet::new();
-        for entry in self.staged.iter().chain(self.unstaged.iter()) {
-            candidates.insert(entry.path.clone());
-        }
-        candidates.into_iter().collect()
     }
 
     fn handle_stage(&mut self, repo: &RepoContext, path: &str) {
