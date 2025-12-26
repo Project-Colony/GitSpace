@@ -89,54 +89,66 @@ impl AuthPanel {
         });
 
         ui.add_space(layout.spacing.lg);
-        layout.section(
-            ui,
-            AuthSection::info("Examples", "Host only, no repository path needed."),
-            |ui| {
-                ui.label(
-                    RichText::new("Remote host\ngithub.com\nExample: github.com/MotherSphere")
-                        .color(layout.theme.palette.text_secondary),
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                layout.section(
+                    ui,
+                    AuthSection::info("Examples", "Host only, no repository path needed."),
+                    |ui| {
+                        ui.label(
+                            RichText::new(
+                                "Remote host\ngithub.com\nExample: github.com/MotherSphere",
+                            )
+                            .color(layout.theme.palette.text_secondary),
+                        );
+                        ui.add_space(layout.spacing.sm);
+                        ui.label(
+                            RichText::new(
+                                "Remote host\ngitlab.com\nExample: gitlab.com/MotherSphere",
+                            )
+                            .color(layout.theme.palette.text_secondary),
+                        );
+                    },
                 );
-                ui.add_space(layout.spacing.sm);
-                ui.label(
-                    RichText::new("Remote host\ngitlab.com\nExample: gitlab.com/MotherSphere")
-                        .color(layout.theme.palette.text_secondary),
-                );
-            },
-        );
-
-        ui.add_space(layout.spacing.lg);
-        layout.section(
-            ui,
-            AuthSection::info("Saved hosts", "Stored credentials available to GitSpace."),
-            |ui| {
-                let hosts = self.auth.known_hosts();
-                if hosts.is_empty() {
-                    ui.label(
-                        RichText::new(
-                            "No saved tokens yet. Add a host above to store a credential.",
-                        )
-                        .color(layout.theme.palette.text_secondary),
-                    );
-                } else {
-                    for host in hosts {
-                        ui.horizontal(|ui| {
-                            ui.colored_label(layout.theme.palette.text_primary, host.clone());
-                            let remove_button = AuthActionButton::new("Remove")
-                                .variant(ActionVariant::Secondary)
-                                .small();
-                            if remove_button.show(ui, layout.theme).clicked() {
-                                let _ = self.auth.clear_token(&host);
-                                let message = Some(format!("Removed token for {}", host));
-                                self.github_status = message.clone();
-                                self.gitlab_status = message;
+            });
+            ui.add_space(layout.spacing.lg);
+            ui.vertical(|ui| {
+                layout.section(
+                    ui,
+                    AuthSection::info("Saved hosts", "Stored credentials available to GitSpace."),
+                    |ui| {
+                        let hosts = self.auth.known_hosts();
+                        if hosts.is_empty() {
+                            ui.label(
+                                RichText::new(
+                                    "No saved tokens yet. Add a host above to store a credential.",
+                                )
+                                .color(layout.theme.palette.text_secondary),
+                            );
+                        } else {
+                            for host in hosts {
+                                ui.horizontal(|ui| {
+                                    ui.colored_label(
+                                        layout.theme.palette.text_primary,
+                                        host.clone(),
+                                    );
+                                    let remove_button = AuthActionButton::new("Remove")
+                                        .variant(ActionVariant::Secondary)
+                                        .small();
+                                    if remove_button.show(ui, layout.theme).clicked() {
+                                        let _ = self.auth.clear_token(&host);
+                                        let message = Some(format!("Removed token for {}", host));
+                                        self.github_status = message.clone();
+                                        self.gitlab_status = message;
+                                    }
+                                });
+                                ui.add_space(layout.spacing.xs);
                             }
-                        });
-                        ui.add_space(layout.spacing.xs);
-                    }
-                }
-            },
-        );
+                        }
+                    },
+                );
+            });
+        });
     }
 }
 
