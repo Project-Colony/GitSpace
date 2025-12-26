@@ -189,7 +189,7 @@ impl RepoOverviewPanel {
             self.branch_box_height = (self.branch_box_height + delta).max(MIN_BRANCH_BOX_HEIGHT);
         }
 
-        if grip_response.dragged_stopped() {
+        if grip_response.drag_stopped() {
             self.pending_branch_box_height = Some(self.branch_box_height);
         }
 
