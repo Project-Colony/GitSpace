@@ -21,6 +21,7 @@ const SERVICE_NAME: &str = "gitspace";
 const TOKEN_FILE_NAME: &str = "tokens.enc";
 const TOKEN_SALT_FILE: &str = "token-salt.bin";
 const TOKEN_PEPPER_FILE: &str = "token-pepper.bin";
+const TOKEN_KEYRING_ENTRY: &str = "token-key";
 const MASTER_PASSWORD_ENV: &str = "GITSPACE_TOKEN_MASTER_PASSWORD";
 
 #[derive(Debug, Clone)]
@@ -110,7 +111,11 @@ struct EncryptedTokenFile {
 
 impl TokenStorage {
     pub fn new(allow_encrypted_fallback: bool) -> Self {
-        let key = derive_local_key();
+        let key = load_or_create_keyring_key()
+            .map_err(|err| {
+                warn!(target: "gitspace::auth", error = %err, "failed to access keyring encryption key");
+            })
+            .unwrap_or_else(|_| derive_local_key());
         let path = dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join(SERVICE_NAME)
@@ -307,6 +312,34 @@ fn derive_local_key() -> [u8; 32] {
         key.copy_from_slice(&fallback[..32]);
     }
     key
+}
+
+fn load_or_create_keyring_key() -> Result<[u8; 32], String> {
+    let entry = Entry::new(SERVICE_NAME, TOKEN_KEYRING_ENTRY)
+        .map_err(|err| format!("Failed to access keyring: {err}"))?;
+    match entry.get_password() {
+        Ok(password) => {
+            let decoded = general_purpose::STANDARD
+                .decode(password.trim())
+                .map_err(|err| format!("Failed to decode keyring token key: {err}"))?;
+            if decoded.len() != 32 {
+                return Err("Keyring token key is invalid".to_string());
+            }
+            let mut key = [0u8; 32];
+            key.copy_from_slice(&decoded);
+            Ok(key)
+        }
+        Err(keyring::Error::NoEntry) => {
+            let mut key = [0u8; 32];
+            OsRng.fill_bytes(&mut key);
+            let encoded = general_purpose::STANDARD.encode(key);
+            entry
+                .set_password(&encoded)
+                .map_err(|err| format!("Failed to store token key in keyring: {err}"))?;
+            Ok(key)
+        }
+        Err(err) => Err(format!("Failed to read keyring token key: {err}")),
+    }
 }
 
 fn load_or_create_secret(name: &str, len: usize) -> Vec<u8> {
