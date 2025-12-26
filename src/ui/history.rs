@@ -174,6 +174,7 @@ impl HistoryPanel {
         }
 
         egui::ScrollArea::vertical()
+            .id_source("history_commit_list")
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for (idx, commit) in self.commits.iter().enumerate() {
@@ -297,28 +298,32 @@ impl HistoryPanel {
                 if let Some(error) = &self.diff_error {
                     ui.colored_label(self.theme.palette.accent, error);
                 }
-                egui::ScrollArea::vertical().show(ui, |ui| {
+        egui::ScrollArea::vertical()
+            .id_source("history_details_files")
+            .show(ui, |ui| {
                     if let Some(email) = &commit.email {
                         ui.label(RichText::new(email).color(self.theme.palette.text_secondary));
                         ui.add_space(6.0);
                     }
-                    for diff in &self.diffs {
-                        ui.collapsing(
-                            RichText::new(format!(
-                                "{} (+{}, -{})",
-                                diff.path, diff.additions, diff.deletions
-                            ))
-                            .color(self.theme.palette.text_primary),
-                            |ui| {
-                                ui.add(
-                                    egui::TextEdit::multiline(&mut diff.patch.clone())
-                                        .font(egui::TextStyle::Monospace)
-                                        .desired_width(f32::INFINITY)
-                                        .interactive(false),
-                                );
-                            },
-                        );
-                        ui.add_space(6.0);
+                    for (idx, diff) in self.diffs.iter().enumerate() {
+                        ui.push_id(idx, |ui| {
+                            ui.collapsing(
+                                RichText::new(format!(
+                                    "{} (+{}, -{})",
+                                    diff.path, diff.additions, diff.deletions
+                                ))
+                                .color(self.theme.palette.text_primary),
+                                |ui| {
+                                    ui.add(
+                                        egui::TextEdit::multiline(&mut diff.patch.clone())
+                                            .font(egui::TextStyle::Monospace)
+                                            .desired_width(f32::INFINITY)
+                                            .interactive(false),
+                                    );
+                                },
+                            );
+                            ui.add_space(6.0);
+                        });
                     }
                 });
             } else {
