@@ -79,7 +79,6 @@ impl GitSpaceApp {
             repo_overview: RepoOverviewPanel::new(
                 theme.clone(),
                 preferences.branch_box_height(),
-                preferences.network().clone(),
             ),
             history_panel: HistoryPanel::new(theme.clone()),
             branches_panel: BranchPanel::new(theme.clone()),
@@ -336,8 +335,6 @@ impl GitSpaceApp {
         self.repo_overview.set_theme(self.theme.clone());
         self.repo_overview
             .set_branch_box_height(preferences.branch_box_height());
-        self.repo_overview
-            .set_network_preferences(preferences.network().clone());
         self.history_panel.set_theme(self.theme.clone());
         self.branches_panel.set_theme(self.theme.clone());
         self.stage_panel.set_theme(self.theme.clone());
