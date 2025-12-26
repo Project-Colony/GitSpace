@@ -321,13 +321,21 @@ impl HistoryPanel {
                         .color(self.theme.palette.text_primary)
                         .strong(),
                 );
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(commit.message.trim())
-                            .color(self.theme.palette.text_secondary),
-                    )
-                    .wrap(true),
-                );
+                let full_message = commit.message.trim();
+                let summary_trimmed = commit.summary.trim();
+                let message_body = if full_message.starts_with(summary_trimmed) {
+                    full_message[summary_trimmed.len()..].trim_start()
+                } else {
+                    full_message
+                };
+                if !message_body.is_empty() {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(message_body).color(self.theme.palette.text_secondary),
+                        )
+                        .wrap(true),
+                    );
+                }
                 if let (Some(files), Some(additions), Some(deletions)) = (
                     commit.files_changed,
                     commit.additions,
