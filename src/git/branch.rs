@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::process::Command;
 
 use chrono::Utc;
 use git2::{BranchType, Error, Repository, build::CheckoutBuilder};
@@ -181,6 +182,26 @@ pub fn archive_branch<P: AsRef<Path>>(repo_path: P, name: &str) -> Result<String
     let tag_name = next_available_tag_name(&repo, &base_tag)?;
     repo.tag_lightweight(&tag_name, commit.as_object(), false)?;
     Ok(tag_name)
+}
+
+pub fn restore_file_from_branch<P: AsRef<Path>>(
+    repo_path: P,
+    branch: &str,
+    path: &str,
+) -> Result<(), String> {
+    let output = Command::new("git")
+        .args(["checkout", branch, "--", path])
+        .current_dir(repo_path.as_ref())
+        .output()
+        .map_err(|err| err.to_string())?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        Err(if !stderr.is_empty() { stderr } else { stdout })
+    }
 }
 
 fn branch_sort_key(entry: &BranchEntry) -> usize {
