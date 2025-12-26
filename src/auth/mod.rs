@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
@@ -19,6 +19,7 @@ use url::Url;
 
 const SERVICE_NAME: &str = "gitspace";
 const TOKEN_FILE_NAME: &str = "tokens.enc";
+const HOST_FILE_NAME: &str = "token-hosts.json";
 const TOKEN_SALT_FILE: &str = "token-salt.bin";
 const TOKEN_PEPPER_FILE: &str = "token-pepper.bin";
 const TOKEN_KEYRING_ENTRY: &str = "token-key";
@@ -95,12 +96,18 @@ impl AuthManager {
 pub struct TokenStorage {
     key: [u8; 32],
     path: PathBuf,
+    host_path: PathBuf,
     allow_encrypted_fallback: bool,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 struct TokenMap {
     tokens: HashMap<String, String>,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+struct HostIndex {
+    hosts: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -120,9 +127,14 @@ impl TokenStorage {
             .unwrap_or_else(|| PathBuf::from("."))
             .join(SERVICE_NAME)
             .join(TOKEN_FILE_NAME);
+        let host_path = dirs::config_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(SERVICE_NAME)
+            .join(HOST_FILE_NAME);
         Self {
             key,
             path,
+            host_path,
             allow_encrypted_fallback,
         }
     }
@@ -133,13 +145,21 @@ impl TokenStorage {
             warn!(target: "gitspace::auth", error = %err, "failed to store token in native keyring");
         }
 
-        if self.allow_encrypted_fallback {
+        let result = if self.allow_encrypted_fallback {
             self.persist_fallback(host, token)
         } else if keyring_result.is_err() {
             Err("Native keyring unavailable and encrypted storage is disabled".to_string())
         } else {
             Ok(())
+        };
+
+        if result.is_ok() {
+            if let Err(err) = self.record_host(host) {
+                warn!(target: "gitspace::auth", error = %err, "failed to update saved host list");
+            }
         }
+
+        result
     }
 
     pub fn get_token(&self, host: &str) -> Result<Option<String>, String> {
@@ -165,23 +185,41 @@ impl TokenStorage {
         if let Err(err) = self.remove_from_keyring(host) {
             warn!(target: "gitspace::auth", error = %err, "failed to clear token from native keyring");
         }
-        if self.allow_encrypted_fallback {
+        let mut result = if self.allow_encrypted_fallback {
             let mut map = self.read_fallback()?;
             map.tokens.remove(host);
             self.write_fallback(&map)
         } else {
             Ok(())
+        };
+
+        if let Err(err) = self.remove_host(host) {
+            warn!(target: "gitspace::auth", error = %err, "failed to update saved host list");
+            if result.is_ok() {
+                result = Err(err);
+            }
         }
+
+        result
     }
 
     pub fn known_hosts(&self) -> Vec<String> {
-        if self.allow_encrypted_fallback {
-            self.read_fallback()
-                .map(|map| map.tokens.keys().cloned().collect())
-                .unwrap_or_default()
-        } else {
-            Vec::new()
+        let mut hosts = HashSet::new();
+        if let Ok(index) = self.read_host_index() {
+            for host in index.hosts {
+                hosts.insert(host);
+            }
         }
+        if self.allow_encrypted_fallback {
+            if let Ok(map) = self.read_fallback() {
+                for host in map.tokens.keys() {
+                    hosts.insert(host.clone());
+                }
+            }
+        }
+        let mut list: Vec<String> = hosts.into_iter().collect();
+        list.sort();
+        list
     }
 
     fn store_in_keyring(&self, host: &str, token: &str) -> Result<(), String> {
@@ -239,6 +277,46 @@ impl TokenStorage {
         let blob: EncryptedTokenFile = serde_json::from_str(&data)
             .map_err(|err| format!("Failed to parse credential file: {err}"))?;
         decrypt_tokens(&blob, &self.key)
+    }
+
+    fn record_host(&self, host: &str) -> Result<(), String> {
+        let mut index = self.read_host_index().unwrap_or_default();
+        if !index.hosts.iter().any(|value| value == host) {
+            index.hosts.push(host.to_string());
+            index.hosts.sort();
+            self.write_host_index(&index)?;
+        }
+        Ok(())
+    }
+
+    fn remove_host(&self, host: &str) -> Result<(), String> {
+        let mut index = self.read_host_index().unwrap_or_default();
+        let original_len = index.hosts.len();
+        index.hosts.retain(|value| value != host);
+        if index.hosts.len() != original_len {
+            self.write_host_index(&index)?;
+        }
+        Ok(())
+    }
+
+    fn read_host_index(&self) -> Result<HostIndex, String> {
+        if !self.host_path.exists() {
+            return Ok(HostIndex::default());
+        }
+        let data = fs::read_to_string(&self.host_path)
+            .map_err(|err| format!("Failed to read host index: {err}"))?;
+        serde_json::from_str(&data).map_err(|err| format!("Failed to parse host index: {err}"))
+    }
+
+    fn write_host_index(&self, index: &HostIndex) -> Result<(), String> {
+        if let Some(parent) = self.host_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|err| format!("Failed to prepare host directory: {err}"))?;
+        }
+        let serialized = serde_json::to_string_pretty(index)
+            .map_err(|err| format!("Failed to serialize host index: {err}"))?;
+        fs::write(&self.host_path, serialized)
+            .map_err(|err| format!("Failed to write host index: {err}"))
     }
 
     pub fn set_allow_encrypted_fallback(&mut self, allowed: bool) {
