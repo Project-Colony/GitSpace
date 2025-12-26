@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use chrono::Utc;
 use git2::{BranchType, Error, Repository, build::CheckoutBuilder};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,9 +112,7 @@ pub fn unset_upstream<P: AsRef<Path>>(repo_path: P, local: &str) -> Result<(), E
 }
 
 #[allow(dead_code)]
-pub fn list_tracking_branches<P: AsRef<Path>>(
-    repo_path: P,
-) -> Result<Vec<TrackingBranch>, Error> {
+pub fn list_tracking_branches<P: AsRef<Path>>(repo_path: P) -> Result<Vec<TrackingBranch>, Error> {
     let repo = Repository::open(repo_path)?;
     let mut entries = Vec::new();
     for branch_result in repo.branches(Some(BranchType::Local))? {
@@ -172,6 +171,18 @@ pub fn checkout_branch<P: AsRef<Path>>(repo_path: P, name: &str) -> Result<(), E
     Ok(())
 }
 
+pub fn archive_branch<P: AsRef<Path>>(repo_path: P, name: &str) -> Result<String, Error> {
+    let repo = Repository::open(repo_path)?;
+    let reference_name = format!("refs/heads/{name}");
+    let reference = repo.find_reference(&reference_name)?;
+    let commit = reference.peel_to_commit()?;
+    let date_suffix = Utc::now().format("%Y%m%d").to_string();
+    let base_tag = format!("archive/{name}-{date_suffix}");
+    let tag_name = next_available_tag_name(&repo, &base_tag)?;
+    repo.tag_lightweight(&tag_name, commit.as_object(), false)?;
+    Ok(tag_name)
+}
+
 fn branch_sort_key(entry: &BranchEntry) -> usize {
     match entry.kind {
         BranchKind::Local => 0,
@@ -184,4 +195,22 @@ fn local_branch_name(remote_branch: &str) -> String {
         .split_once('/')
         .map(|(_, name)| name.to_string())
         .unwrap_or_else(|| remote_branch.to_string())
+}
+
+fn next_available_tag_name(repo: &Repository, base: &str) -> Result<String, Error> {
+    if repo.find_reference(&format!("refs/tags/{base}")).is_err() {
+        return Ok(base.to_string());
+    }
+
+    let mut index = 2;
+    loop {
+        let candidate = format!("{base}-{index}");
+        if repo
+            .find_reference(&format!("refs/tags/{candidate}"))
+            .is_err()
+        {
+            return Ok(candidate);
+        }
+        index += 1;
+    }
 }

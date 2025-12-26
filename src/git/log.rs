@@ -107,7 +107,11 @@ pub fn read_commit_log(
 
         let (files_changed, additions, deletions) = if include_stats {
             let tree = commit.tree()?;
-            let parent_tree = commit.parent(0).ok().map(|parent| parent.tree()).transpose()?;
+            let parent_tree = commit
+                .parent(0)
+                .ok()
+                .map(|parent| parent.tree())
+                .transpose()?;
             let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)?;
             let stats = diff.stats()?;
             (
@@ -134,4 +138,55 @@ pub fn read_commit_log(
     }
 
     Ok(commits)
+}
+
+pub fn latest_commit_for_branch(
+    repo_path: &str,
+    branch_name: &str,
+) -> Result<Option<CommitInfo>, git2::Error> {
+    let repo = Repository::open(repo_path)?;
+    let oid = resolve_branch_oid(&repo, branch_name)?;
+    let Some(oid) = oid else {
+        return Ok(None);
+    };
+    let commit = repo.find_commit(oid)?;
+    Ok(Some(commit_info_from_commit(&commit)))
+}
+
+fn resolve_branch_oid(
+    repo: &Repository,
+    branch_name: &str,
+) -> Result<Option<git2::Oid>, git2::Error> {
+    let reference_names = [
+        format!("refs/heads/{branch_name}"),
+        format!("refs/remotes/{branch_name}"),
+    ];
+    for reference_name in reference_names {
+        if let Ok(reference) = repo.find_reference(&reference_name) {
+            if let Some(oid) = reference.target() {
+                return Ok(Some(oid));
+            }
+        }
+    }
+
+    if let Ok(object) = repo.revparse_single(branch_name) {
+        return Ok(Some(object.id()));
+    }
+
+    Ok(None)
+}
+
+fn commit_info_from_commit(commit: &git2::Commit<'_>) -> CommitInfo {
+    CommitInfo {
+        id: commit.id().to_string(),
+        summary: commit.summary().unwrap_or_default().to_string(),
+        message: commit.message().unwrap_or_default().to_string(),
+        author: commit.author().name().unwrap_or("Unknown").to_string(),
+        email: commit.author().email().map(|s| s.to_string()),
+        time: commit.time(),
+        parents: commit.parents().map(|p| p.id().to_string()).collect(),
+        files_changed: None,
+        additions: None,
+        deletions: None,
+    }
 }
