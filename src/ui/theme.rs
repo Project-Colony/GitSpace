@@ -202,6 +202,10 @@ impl Theme {
                 TextStyle::Small,
                 egui::FontId::proportional(self.typography.label),
             ),
+            (
+                TextStyle::Monospace,
+                egui::FontId::monospace(self.typography.body),
+            ),
         ]
         .into();
 
