@@ -1,11 +1,13 @@
 use std::collections::BTreeMap;
 
+use chrono::Utc;
 use eframe::egui::{self, RichText, Sense, Ui};
 
 use crate::git::branch::{
     BranchEntry, BranchKind, checkout_branch, create_branch, delete_branch, list_branches,
     rename_branch,
 };
+use crate::git::compare::{BranchComparison, compare_branch_with_head};
 use crate::git::merge::{MergeOutcome, MergeStrategy, detect_conflicts, merge_branch};
 use crate::ui::{context::RepoContext, theme::Theme};
 
@@ -36,6 +38,9 @@ pub struct BranchPanel {
     new_branch: String,
     rename_buffer: String,
     last_repo: Option<String>,
+    selected_branch: Option<String>,
+    selected_comparison: Option<BranchComparison>,
+    selected_error: Option<String>,
     error: Option<String>,
     status: Option<String>,
     conflict_files: Vec<String>,
@@ -49,6 +54,9 @@ impl BranchPanel {
             new_branch: String::new(),
             rename_buffer: String::new(),
             last_repo: None,
+            selected_branch: None,
+            selected_comparison: None,
+            selected_error: None,
             error: None,
             status: None,
             conflict_files: Vec::new(),
@@ -112,6 +120,9 @@ impl BranchPanel {
                     self.render_tree(ui, repo, BranchKind::Remote, "Remote branches");
                 });
             });
+
+            ui.add_space(10.0);
+            self.render_selection_panel(ui);
         } else {
             ui.add_space(8.0);
             ui.label(
@@ -165,6 +176,9 @@ impl BranchPanel {
             self.status = None;
             self.error = None;
             self.last_repo = Some(repo.path.clone());
+            self.selected_branch = None;
+            self.selected_comparison = None;
+            self.selected_error = None;
         }
 
         match list_branches(&repo.path) {
@@ -229,6 +243,9 @@ impl BranchPanel {
             } else if let Some(branch) = &node.branch {
                 let label = self.branch_label(branch);
                 let response = ui.add(egui::Label::new(label).sense(Sense::click()));
+                if response.clicked() {
+                    self.select_branch(repo, &branch.name);
+                }
                 self.context_menu(repo, branch, &response);
                 if let Some(upstream) = &branch.upstream {
                     response.on_hover_text(format!("Upstream: {upstream}"));
@@ -335,6 +352,90 @@ impl BranchPanel {
         match merge_branch(&repo.path, branch, strategy) {
             Ok(outcome) => self.handle_merge_outcome(repo, outcome),
             Err(err) => self.error = Some(err),
+        }
+    }
+
+    fn select_branch(&mut self, repo: &RepoContext, branch_name: &str) {
+        self.selected_branch = Some(branch_name.to_string());
+        self.selected_error = None;
+        match compare_branch_with_head(&repo.path, branch_name) {
+            Ok(comparison) => self.selected_comparison = Some(comparison),
+            Err(err) => {
+                self.selected_comparison = None;
+                self.selected_error = Some(format!("Failed to compare branch: {err}"));
+            }
+        }
+    }
+
+    fn render_selection_panel(&self, ui: &mut Ui) {
+        ui.heading(RichText::new("Selection details").color(self.theme.palette.text_primary));
+        ui.add_space(6.0);
+
+        let Some(branch_name) = &self.selected_branch else {
+            ui.label(
+                RichText::new("Select a branch to see its latest commit and comparison details.")
+                    .color(self.theme.palette.text_secondary),
+            );
+            return;
+        };
+
+        if let Some(error) = &self.selected_error {
+            ui.colored_label(self.theme.palette.accent, error);
+            return;
+        }
+
+        let Some(comparison) = &self.selected_comparison else {
+            ui.label(
+                RichText::new("No comparison data available yet.")
+                    .color(self.theme.palette.text_secondary),
+            );
+            return;
+        };
+
+        ui.label(
+            RichText::new(branch_name)
+                .color(self.theme.palette.text_primary)
+                .strong(),
+        );
+
+        if let Some(commit) = &comparison.commit {
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(commit.summary.clone())
+                    .color(self.theme.palette.text_primary)
+                    .strong(),
+            );
+            ui.label(
+                RichText::new(format!("Author: {}", commit.author))
+                    .color(self.theme.palette.text_secondary),
+            );
+            let date = chrono::DateTime::<Utc>::from_timestamp(commit.time.seconds(), 0)
+                .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+                .unwrap_or_else(|| "Unknown time".to_string());
+            ui.label(RichText::new(date).color(self.theme.palette.text_secondary));
+        } else {
+            ui.label(
+                RichText::new("No commits found for this branch.")
+                    .color(self.theme.palette.text_secondary),
+            );
+        }
+
+        ui.add_space(8.0);
+        ui.label(
+            RichText::new("Comparison with current HEAD")
+                .color(self.theme.palette.text_primary)
+                .strong(),
+        );
+        if let Some(diff) = &comparison.diff {
+            ui.label(
+                RichText::new(format!(
+                    "{} files changed • +{} / -{}",
+                    diff.files_changed, diff.additions, diff.deletions
+                ))
+                .color(self.theme.palette.text_secondary),
+            );
+        } else {
+            ui.label(RichText::new("No diff available.").color(self.theme.palette.text_secondary));
         }
     }
 
