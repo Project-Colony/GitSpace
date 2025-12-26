@@ -88,7 +88,6 @@ pub struct Spacing {
     pub sm: f32,
     pub md: f32,
     pub lg: f32,
-    pub xl: f32,
 }
 
 impl Default for Spacing {
@@ -98,7 +97,6 @@ impl Default for Spacing {
             sm: 8.0,
             md: 12.0,
             lg: 16.0,
-            xl: 24.0,
         }
     }
 }
