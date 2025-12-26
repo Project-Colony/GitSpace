@@ -13,6 +13,7 @@ use crate::git::merge::{MergeOutcome, MergeStrategy, detect_conflicts, merge_bra
 use crate::ui::{context::RepoContext, theme::Theme};
 
 const STALE_DAYS: i64 = 30;
+const REMOTE_PAGE_SIZE: usize = 25;
 
 #[derive(Default)]
 struct BranchNode {
@@ -56,6 +57,7 @@ pub struct BranchPanel {
     open_history_branch: Option<String>,
     pinned_branches: Vec<String>,
     pending_pinned: Option<Vec<String>>,
+    remote_page: usize,
 }
 
 impl BranchPanel {
@@ -81,6 +83,7 @@ impl BranchPanel {
             open_history_branch: None,
             pinned_branches,
             pending_pinned: None,
+            remote_page: 0,
         }
     }
 
@@ -222,6 +225,7 @@ impl BranchPanel {
             self.compare_commits.clear();
             self.compare_diff = None;
             self.compare_error = None;
+            self.remote_page = 0;
         }
 
         match list_branches(&repo.path) {
@@ -253,13 +257,34 @@ impl BranchPanel {
             .collect();
         pinned.sort_by(|a, b| a.name.cmp(&b.name));
 
-        let mut root = BranchNode::default();
-        for branch in self.branches.iter().filter(|b| b.kind == kind) {
-            if !self.should_show_branch(branch) || self.is_branch_pinned(branch) {
-                continue;
+        let mut branches: Vec<BranchEntry> = self
+            .branches
+            .iter()
+            .filter(|branch| branch.kind == kind)
+            .filter(|branch| self.should_show_branch(branch))
+            .filter(|branch| !self.is_branch_pinned(branch))
+            .cloned()
+            .collect();
+        branches.sort_by(|a, b| a.name.cmp(&b.name));
+
+        let (page_branches, total_pages) = if kind == BranchKind::Remote {
+            let total_pages = branches.len().div_ceil(REMOTE_PAGE_SIZE).max(1);
+            if self.remote_page >= total_pages {
+                self.remote_page = total_pages - 1;
             }
-            let segments: Vec<&str> = branch.name.split('/').collect();
-            root.insert(&segments, branch.clone());
+            let start = self.remote_page * REMOTE_PAGE_SIZE;
+            let end = (start + REMOTE_PAGE_SIZE).min(branches.len());
+            let page_branches = branches.get(start..end).unwrap_or_default().to_vec();
+            (page_branches, total_pages)
+        } else {
+            (branches, 1)
+        };
+
+        let mut root = BranchNode::default();
+        for branch in page_branches {
+            let name = branch.name.clone();
+            let segments: Vec<&str> = name.split('/').collect();
+            root.insert(&segments, branch);
         }
 
         if pinned.is_empty() && root.children.is_empty() {
@@ -290,6 +315,34 @@ impl BranchPanel {
                     self.render_node(ui, repo, node, 0);
                 }
             });
+
+        if kind == BranchKind::Remote && total_pages > 1 {
+            ui.add_space(6.0);
+            ui.horizontal_centered(|ui| {
+                let prev_enabled = self.remote_page > 0;
+                let next_enabled = self.remote_page + 1 < total_pages;
+                if ui
+                    .add_enabled(prev_enabled, egui::Button::new("◀"))
+                    .clicked()
+                {
+                    self.remote_page = self.remote_page.saturating_sub(1);
+                }
+                ui.label(
+                    RichText::new(format!(
+                        "Page {}/{}",
+                        self.remote_page + 1,
+                        total_pages
+                    ))
+                    .color(self.theme.palette.text_secondary),
+                );
+                if ui
+                    .add_enabled(next_enabled, egui::Button::new("▶"))
+                    .clicked()
+                {
+                    self.remote_page = (self.remote_page + 1).min(total_pages - 1);
+                }
+            });
+        }
     }
 
     fn render_node(&mut self, ui: &mut Ui, repo: &RepoContext, node: &BranchNode, depth: usize) {
