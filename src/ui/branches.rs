@@ -7,8 +7,8 @@ use crate::git::branch::{
     BranchEntry, BranchKind, archive_branch, checkout_branch, create_branch,
     create_tracking_branch, delete_branch, list_branches, rename_branch,
 };
-use crate::git::compare::{BranchComparison, compare_branch_with_head};
-use crate::git::log::{CommitInfo, latest_commit_for_branch};
+use crate::git::compare::{BranchComparison, DiffSummary, compare_branch_with_head};
+use crate::git::log::{CommitInfo, commits_between_refs, latest_commit_for_branch};
 use crate::git::merge::{MergeOutcome, MergeStrategy, detect_conflicts, merge_branch};
 use crate::ui::{context::RepoContext, theme::Theme};
 
@@ -45,6 +45,10 @@ pub struct BranchPanel {
     selected_branch: Option<String>,
     selected_comparison: Option<BranchComparison>,
     selected_error: Option<String>,
+    compare_branch: Option<String>,
+    compare_commits: Vec<CommitInfo>,
+    compare_diff: Option<DiffSummary>,
+    compare_error: Option<String>,
     error: Option<String>,
     status: Option<String>,
     conflict_files: Vec<String>,
@@ -63,6 +67,10 @@ impl BranchPanel {
             selected_branch: None,
             selected_comparison: None,
             selected_error: None,
+            compare_branch: None,
+            compare_commits: Vec::new(),
+            compare_diff: None,
+            compare_error: None,
             error: None,
             status: None,
             conflict_files: Vec::new(),
@@ -134,6 +142,8 @@ impl BranchPanel {
 
             ui.add_space(10.0);
             self.render_selection_panel(ui);
+            ui.add_space(10.0);
+            self.render_compare_panel(ui);
         } else {
             ui.add_space(8.0);
             ui.label(
@@ -190,6 +200,10 @@ impl BranchPanel {
             self.selected_branch = None;
             self.selected_comparison = None;
             self.selected_error = None;
+            self.compare_branch = None;
+            self.compare_commits.clear();
+            self.compare_diff = None;
+            self.compare_error = None;
         }
 
         match list_branches(&repo.path) {
@@ -352,6 +366,11 @@ impl BranchPanel {
                 ui.close_menu();
             }
 
+            if ui.button("Compare with current").clicked() {
+                self.compare_with_current(repo, &branch.name);
+                ui.close_menu();
+            }
+
             if branch.kind == BranchKind::Local {
                 if ui.button("Archive").clicked() {
                     self.status = None;
@@ -496,6 +515,82 @@ impl BranchPanel {
         }
     }
 
+    fn render_compare_panel(&self, ui: &mut Ui) {
+        ui.heading(RichText::new("Compare with current").color(self.theme.palette.text_primary));
+        ui.add_space(6.0);
+
+        let Some(branch_name) = &self.compare_branch else {
+            ui.label(
+                RichText::new("Use the branch context menu to compare with current HEAD.")
+                    .color(self.theme.palette.text_secondary),
+            );
+            return;
+        };
+
+        if let Some(error) = &self.compare_error {
+            ui.colored_label(self.theme.palette.accent, error);
+            return;
+        }
+
+        ui.label(
+            RichText::new(branch_name)
+                .color(self.theme.palette.text_primary)
+                .strong(),
+        );
+
+        if let Some(diff) = &self.compare_diff {
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(format!(
+                    "{} files changed • +{} / -{}",
+                    diff.files_changed, diff.additions, diff.deletions
+                ))
+                .color(self.theme.palette.text_secondary),
+            );
+        }
+
+        ui.add_space(6.0);
+        ui.label(
+            RichText::new("Commits between current HEAD and branch")
+                .color(self.theme.palette.text_primary)
+                .strong(),
+        );
+
+        if self.compare_commits.is_empty() {
+            ui.label(
+                RichText::new("No commits found in the selected range.")
+                    .color(self.theme.palette.text_secondary),
+            );
+            return;
+        }
+
+        egui::ScrollArea::vertical()
+            .id_source("compare_commits")
+            .auto_shrink([false, false])
+            .max_height(220.0)
+            .show(ui, |ui| {
+                for commit in &self.compare_commits {
+                    ui.vertical(|ui| {
+                        ui.label(
+                            RichText::new(commit.summary.clone())
+                                .color(self.theme.palette.text_primary)
+                                .strong(),
+                        );
+                        ui.label(
+                            RichText::new(format!(
+                                "{} • {}",
+                                self.short_commit_id(&commit.id),
+                                commit.author
+                            ))
+                            .color(self.theme.palette.text_secondary),
+                        );
+                        ui.add_space(4.0);
+                    });
+                    ui.separator();
+                }
+            });
+    }
+
     fn handle_merge_outcome(&mut self, repo: &RepoContext, outcome: MergeOutcome) {
         if outcome.had_conflicts {
             self.conflict_files = outcome.conflicts;
@@ -540,5 +635,30 @@ impl BranchPanel {
         };
         let age_seconds = Utc::now().timestamp().saturating_sub(commit.time.seconds());
         age_seconds > STALE_DAYS * 24 * 60 * 60
+    }
+
+    fn compare_with_current(&mut self, repo: &RepoContext, branch_name: &str) {
+        self.compare_branch = Some(branch_name.to_string());
+        self.compare_error = None;
+        let comparison = compare_branch_with_head(&repo.path, branch_name);
+        match comparison {
+            Ok(comparison) => self.compare_diff = comparison.diff,
+            Err(err) => {
+                self.compare_diff = None;
+                self.compare_error = Some(format!("Failed to compare branch: {err}"));
+            }
+        }
+
+        match commits_between_refs(&repo.path, "HEAD", branch_name, 50) {
+            Ok(commits) => self.compare_commits = commits,
+            Err(err) => {
+                self.compare_commits.clear();
+                self.compare_error = Some(format!("Failed to load comparison commits: {err}"));
+            }
+        }
+    }
+
+    fn short_commit_id(&self, id: &str) -> String {
+        id.chars().take(7).collect()
     }
 }
