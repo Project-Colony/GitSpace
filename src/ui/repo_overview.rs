@@ -150,8 +150,9 @@ impl RepoOverviewPanel {
     }
 
     fn stat_chip(&self, ui: &mut Ui, label: &str, value: usize) {
+        let chip_height = ui.spacing().interact_size.y + 8.0;
         let rect = ui
-            .allocate_exact_size(egui::vec2(90.0, 32.0), egui::Sense::hover())
+            .allocate_exact_size(egui::vec2(90.0, chip_height), egui::Sense::hover())
             .0;
         let painter = ui.painter();
         painter.rect_filled(rect, 10.0, self.theme.palette.surface_highlight);
@@ -209,6 +210,7 @@ impl RepoOverviewPanel {
         ui.add_space(4.0);
 
         ui.horizontal_wrapped(|ui| {
+            let control_height = ui.spacing().interact_size.y;
             for (label, action) in [
                 ("Fetch", ActionKind::Git(&["fetch"])),
                 ("Pull", ActionKind::Git(&["pull"])),
@@ -216,7 +218,7 @@ impl RepoOverviewPanel {
                 ("Open terminal", ActionKind::Terminal),
                 ("Open file explorer", ActionKind::FileExplorer),
             ] {
-                let response = ui.add_sized([150.0, 34.0], egui::Button::new(label));
+                let response = ui.add_sized([150.0, control_height], egui::Button::new(label));
                 if response.clicked() {
                     let result = match action {
                         ActionKind::Git(args) => self.run_git(repo, args),

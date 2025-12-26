@@ -159,15 +159,16 @@ fn provider_section(
         RichText::new("Remote host")
             .color(theme.palette.text_secondary),
     );
+    let control_height = ui.spacing().interact_size.y;
     ui.add_sized(
-        [320.0, 28.0],
+        [320.0, control_height],
         TextEdit::singleline(host).hint_text(host_hint),
     );
 
     ui.add_space(8.0);
     ui.label(RichText::new("Access Token").color(theme.palette.text_secondary));
     ui.add_sized(
-        [360.0, 28.0],
+        [360.0, control_height],
         TextEdit::singleline(token)
             .password(true)
             .hint_text("Paste your personal access token"),
