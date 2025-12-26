@@ -6,7 +6,6 @@ use crate::git::{
     remote::{RemoteInfo, list_remotes},
     status::{RepoStatus, read_repo_status},
 };
-use crate::config::MIN_BRANCH_BOX_HEIGHT;
 use crate::ui::{context::RepoContext, theme::Theme};
 
 #[derive(Debug, Clone)]
@@ -17,12 +16,10 @@ pub struct RepoOverviewPanel {
     last_repo: Option<String>,
     error: Option<String>,
     action_status: Option<String>,
-    branch_box_height: f32,
-    pending_branch_box_height: Option<f32>,
 }
 
 impl RepoOverviewPanel {
-    pub fn new(theme: Theme, branch_box_height: f32) -> Self {
+    pub fn new(theme: Theme) -> Self {
         Self {
             theme,
             status: None,
@@ -30,21 +27,11 @@ impl RepoOverviewPanel {
             last_repo: None,
             error: None,
             action_status: None,
-            branch_box_height,
-            pending_branch_box_height: None,
         }
     }
 
     pub fn set_theme(&mut self, theme: Theme) {
         self.theme = theme;
-    }
-
-    pub fn set_branch_box_height(&mut self, height: f32) {
-        self.branch_box_height = height.max(MIN_BRANCH_BOX_HEIGHT);
-    }
-
-    pub fn take_branch_box_height_change(&mut self) -> Option<f32> {
-        self.pending_branch_box_height.take()
     }
 
     pub fn ui(&mut self, ui: &mut Ui, repo: Option<&RepoContext>) {
@@ -120,15 +107,13 @@ impl RepoOverviewPanel {
         });
     }
 
-    fn branch_section(&mut self, ui: &mut Ui) {
+    fn branch_section(&self, ui: &mut Ui) {
         let status = self.status.clone().unwrap_or_default();
         let branch = status.branch.unwrap_or_else(|| "(detached)".to_string());
         let upstream = status.upstream.unwrap_or_else(|| "No upstream".to_string());
         let ahead = status.ahead.unwrap_or(0);
         let behind = status.behind.unwrap_or(0);
 
-        let branch_height = self.branch_box_height.max(MIN_BRANCH_BOX_HEIGHT);
-        let grip_height = 6.0;
         let frame = egui::Frame::none()
             .fill(self.theme.palette.surface)
             .stroke(egui::Stroke::new(1.0, self.theme.palette.surface_highlight))
@@ -143,22 +128,7 @@ impl RepoOverviewPanel {
         ui.add_space(4.0);
         ui.heading(RichText::new("Branch").color(self.theme.palette.text_primary));
         ui.add_space(4.0);
-        let total_height = branch_height + grip_height;
-        let (rect, _) = ui.allocate_exact_size(
-            egui::vec2(ui.available_width(), total_height),
-            egui::Sense::hover(),
-        );
-        let frame_rect = egui::Rect::from_min_size(
-            rect.min,
-            egui::vec2(rect.width(), branch_height),
-        );
-        let grip_rect = egui::Rect::from_min_size(
-            egui::pos2(rect.left(), rect.top() + branch_height),
-            egui::vec2(rect.width(), grip_height),
-        );
-
-        let mut content_ui = ui.child_ui(frame_rect, Layout::top_down(Align::Min));
-        frame.show(&mut content_ui, |ui| {
+        frame.show(ui, |ui| {
             ui.with_layout(Layout::left_to_right(Align::TOP), |ui| {
                 ui.vertical(|ui| {
                     ui.label(
@@ -177,33 +147,6 @@ impl RepoOverviewPanel {
                 });
             });
         });
-
-        let grip_id = ui.make_persistent_id("branch_box_resize_grip");
-        let grip_response = ui.interact(grip_rect, grip_id, egui::Sense::click_and_drag());
-        if grip_response.hovered() || grip_response.dragged() {
-            ui.output_mut(|output| output.cursor_icon = egui::CursorIcon::ResizeVertical);
-        }
-
-        if grip_response.dragged() {
-            let delta = ui.input(|input| input.pointer.delta().y);
-            self.branch_box_height = (self.branch_box_height + delta).max(MIN_BRANCH_BOX_HEIGHT);
-        }
-
-        if grip_response.drag_released() {
-            self.pending_branch_box_height = Some(self.branch_box_height);
-        }
-
-        let painter = ui.painter();
-        painter.rect_filled(grip_rect, 0.0, self.theme.palette.surface);
-        let grip_center = grip_rect.center();
-        let grip_line = egui::Stroke::new(1.0, self.theme.palette.surface_highlight);
-        painter.line_segment(
-            [
-                egui::pos2(grip_rect.left() + 12.0, grip_center.y),
-                egui::pos2(grip_rect.right() - 12.0, grip_center.y),
-            ],
-            grip_line,
-        );
     }
 
     fn stat_chip(&self, ui: &mut Ui, label: &str, value: usize) {
