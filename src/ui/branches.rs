@@ -197,20 +197,14 @@ impl BranchPanel {
             BranchKind::Local => "local",
             BranchKind::Remote => "remote",
         };
-        let mut scroll_area = egui::ScrollArea::vertical()
+        egui::ScrollArea::vertical()
             .id_source(("branch_scroll", kind_id))
-            .auto_shrink([false, false]);
-
-        if kind == BranchKind::Remote {
-            let min_height = ui.available_height().max(240.0);
-            scroll_area = scroll_area.min_scrolled_height(min_height);
-        }
-
-        scroll_area.show(ui, |ui| {
-            for node in root.children.values() {
-                self.render_node(ui, repo, node, 0);
-            }
-        });
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for node in root.children.values() {
+                    self.render_node(ui, repo, node, 0);
+                }
+            });
     }
 
     fn render_node(&mut self, ui: &mut Ui, repo: &RepoContext, node: &BranchNode, depth: usize) {
