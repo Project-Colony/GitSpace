@@ -153,6 +153,35 @@ pub fn latest_commit_for_branch(
     Ok(Some(commit_info_from_commit(&commit)))
 }
 
+pub fn commits_between_refs(
+    repo_path: &str,
+    from_ref: &str,
+    to_ref: &str,
+    limit: usize,
+) -> Result<Vec<CommitInfo>, git2::Error> {
+    let repo = Repository::open(repo_path)?;
+    let Some(to_oid) = resolve_ref_oid(&repo, to_ref)? else {
+        return Ok(Vec::new());
+    };
+    let from_oid = resolve_ref_oid(&repo, from_ref)?;
+
+    let mut revwalk = repo.revwalk()?;
+    revwalk.set_sorting(git2::Sort::TIME | git2::Sort::TOPOLOGICAL)?;
+    revwalk.push(to_oid)?;
+    if let Some(from_oid) = from_oid {
+        revwalk.hide(from_oid)?;
+    }
+
+    let mut commits = Vec::new();
+    for oid_result in revwalk.take(limit) {
+        let oid = oid_result?;
+        let commit = repo.find_commit(oid)?;
+        commits.push(commit_info_from_commit(&commit));
+    }
+
+    Ok(commits)
+}
+
 fn resolve_branch_oid(
     repo: &Repository,
     branch_name: &str,
@@ -173,6 +202,16 @@ fn resolve_branch_oid(
         return Ok(Some(object.id()));
     }
 
+    Ok(None)
+}
+
+fn resolve_ref_oid(
+    repo: &Repository,
+    reference: &str,
+) -> Result<Option<git2::Oid>, git2::Error> {
+    if let Ok(object) = repo.revparse_single(reference) {
+        return Ok(Some(object.id()));
+    }
     Ok(None)
 }
 
