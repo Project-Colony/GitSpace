@@ -138,10 +138,12 @@ impl eframe::App for GitSpaceApp {
                 self.record_tab_switch(selection.tab, selection.trigger);
             }
         }
-        if let Some(selection) = layout.right_panel(ctx, self.current_repo.as_ref()) {
-            if self.active_tab != selection.tab {
-                self.active_tab = selection.tab;
-                self.record_tab_switch(selection.tab, selection.trigger);
+        if self.active_tab != MainTab::History {
+            if let Some(selection) = layout.right_panel(ctx, self.current_repo.as_ref()) {
+                if self.active_tab != selection.tab {
+                    self.active_tab = selection.tab;
+                    self.record_tab_switch(selection.tab, selection.trigger);
+                }
             }
         }
 
