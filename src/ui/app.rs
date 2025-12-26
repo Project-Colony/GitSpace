@@ -76,7 +76,10 @@ impl GitSpaceApp {
                 preferences.network().clone(),
             ),
             recent_list: RecentList::new(theme.clone()),
-            repo_overview: RepoOverviewPanel::new(theme.clone()),
+            repo_overview: RepoOverviewPanel::new(
+                theme.clone(),
+                preferences.branch_box_height(),
+            ),
             history_panel: HistoryPanel::new(theme.clone()),
             branches_panel: BranchPanel::new(theme.clone()),
             stage_panel: StagePanel::new(theme.clone()),
@@ -189,6 +192,10 @@ impl eframe::App for GitSpaceApp {
 
         if let Some(control_height) = self.settings_panel.take_control_height_change() {
             self.apply_control_height(control_height, ctx);
+        }
+
+        if let Some(branch_height) = self.repo_overview.take_branch_box_height_change() {
+            self.apply_branch_box_height(branch_height);
         }
 
         if self.settings_panel.take_telemetry_purge_request() {
@@ -326,6 +333,8 @@ impl GitSpaceApp {
             .set_default_destination(preferences.default_clone_path().to_string());
         self.recent_list.set_theme(self.theme.clone());
         self.repo_overview.set_theme(self.theme.clone());
+        self.repo_overview
+            .set_branch_box_height(preferences.branch_box_height());
         self.history_panel.set_theme(self.theme.clone());
         self.branches_panel.set_theme(self.theme.clone());
         self.stage_panel.set_theme(self.theme.clone());
@@ -370,6 +379,18 @@ impl GitSpaceApp {
         preferences.set_control_height(control_height);
         self.config.set_preferences(preferences.clone());
         self.apply_style_preferences(ctx, &preferences);
+        let _ = self.config.save();
+    }
+
+    fn apply_branch_box_height(&mut self, height: f32) {
+        let mut preferences = self.config.preferences().clone();
+        if (preferences.branch_box_height() - height).abs() <= f32::EPSILON {
+            return;
+        }
+        preferences.set_branch_box_height(height);
+        self.config.set_preferences(preferences.clone());
+        self.repo_overview
+            .set_branch_box_height(preferences.branch_box_height());
         let _ = self.config.save();
     }
 
