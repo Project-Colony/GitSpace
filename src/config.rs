@@ -107,7 +107,7 @@ impl Default for LoggingOptions {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Preferences {
     #[serde(default)]
     theme: ThemeMode,
