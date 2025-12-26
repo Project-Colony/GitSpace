@@ -339,7 +339,7 @@ impl ClonePanel {
             return;
         }
         let provider = self.provider;
-        let token = auth.resolve_for_host(self.provider_host());
+        let token = self.resolve_search_token(auth);
         let network = self.network.clone();
         self.search_status = Some("Searching...".to_string());
         self.search_promise = Some(Promise::spawn_thread("search_repos", move || {
@@ -391,6 +391,15 @@ impl ClonePanel {
 
     fn provider_host(&self) -> &str {
         self.provider.host()
+    }
+
+    fn resolve_search_token(&self, auth: &AuthManager) -> Option<String> {
+        match self.provider {
+            Provider::GitHub => auth
+                .resolve_for_host(self.provider_host())
+                .or_else(|| auth.resolve_for_host("api.github.com")),
+            Provider::GitLab => auth.resolve_for_host(self.provider_host()),
+        }
     }
 
     fn poll_search(&mut self, notifications: &mut NotificationCenter) {

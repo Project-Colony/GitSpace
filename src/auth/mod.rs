@@ -48,7 +48,12 @@ impl AuthManager {
     }
 
     pub fn resolve_for_url(&self, url: &str) -> Option<String> {
-        extract_host(url).and_then(|host| self.resolve_for_host(&host))
+        let host = extract_host(url)?;
+        self.resolve_for_host(&host)
+            .or_else(|| match host.as_str() {
+                "github.com" => self.resolve_for_host("api.github.com"),
+                _ => None,
+            })
     }
 
     #[allow(dead_code)]
@@ -462,6 +467,8 @@ fn normalize_host(host: &str) -> String {
 fn validate_github(client: &Client, host: &str, token: &str) -> Result<(), String> {
     let api_base = if host.contains("api.github.com") {
         host.to_string()
+    } else if host.contains("github.com") {
+        "https://api.github.com".to_string()
     } else {
         format!("{}/api/v3", host)
     };
