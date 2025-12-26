@@ -1,5 +1,5 @@
 use chrono::{Datelike, NaiveDate, TimeZone, Utc};
-use eframe::egui::{self, Align, Layout, Pos2, RichText, Sense, Ui, Vec2};
+use eframe::egui::{self, Align, Layout, Pos2, RichText, Sense, Ui};
 
 use crate::git::{
     diff::{FileDiff, commit_diff},
@@ -189,60 +189,71 @@ impl HistoryPanel {
                         .map(|id| id == commit.id)
                         .unwrap_or(false);
 
-                    let (rect, response) = ui.allocate_exact_size(
-                        Vec2::new(ui.available_width(), ROW_HEIGHT),
-                        Sense::click(),
-                    );
-
-                    let stroke = egui::Stroke::new(2.0, palette.surface_highlight);
                     let bg_color = if is_selected {
                         palette.surface
                     } else {
                         palette.background
                     };
-                    ui.painter().rect(rect, 6.0, bg_color, stroke);
 
-                    self.paint_graph(ui, rect, idx, commit.parents.len() > 1);
+                    let stroke = egui::Stroke::new(2.0, palette.surface_highlight);
+                    let frame = egui::Frame::none()
+                        .fill(bg_color)
+                        .stroke(stroke)
+                        .rounding(6.0)
+                        .inner_margin(egui::Margin::symmetric(12.0, 8.0));
+                    let response = frame
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.set_min_height(ROW_HEIGHT);
+                            ui.with_layout(Layout::left_to_right(Align::Min), |ui| {
+                                ui.vertical(|ui| {
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.add(
+                                            egui::Label::new(
+                                                RichText::new(&commit.summary)
+                                                    .color(palette.text_primary)
+                                                    .strong(),
+                                            )
+                                            .wrap(true),
+                                        );
+                                        ui.add(
+                                            egui::Label::new(
+                                                RichText::new(format!(
+                                                    "{}",
+                                                    commit.id.chars().take(8).collect::<String>()
+                                                ))
+                                                .color(palette.text_secondary),
+                                            )
+                                            .wrap(true),
+                                        );
+                                    });
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(format!("{}", commit.author))
+                                                .color(palette.text_secondary),
+                                        )
+                                        .wrap(true),
+                                    );
+                                    let date = chrono::DateTime::<Utc>::from_timestamp(
+                                        commit.time.seconds(),
+                                        0,
+                                    )
+                                    .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+                                    .unwrap_or_else(|| "Unknown time".to_string());
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(date)
+                                                .color(palette.text_secondary),
+                                        )
+                                        .wrap(true),
+                                    );
+                                });
+                            });
+                        })
+                        .response
+                        .interact(Sense::click());
 
-                    let inner = rect.shrink2(Vec2::new(12.0, 8.0));
-                    let mut content = ui.child_ui(inner, Layout::left_to_right(Align::Min));
-                    content.vertical(|ui| {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.add(
-                                egui::Label::new(
-                                    RichText::new(&commit.summary)
-                                        .color(palette.text_primary)
-                                        .strong(),
-                                )
-                                .wrap(true),
-                            );
-                            ui.add(
-                                egui::Label::new(
-                                    RichText::new(format!(
-                                        "{}",
-                                        commit.id.chars().take(8).collect::<String>()
-                                    ))
-                                    .color(palette.text_secondary),
-                                )
-                                .wrap(true),
-                            );
-                        });
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(format!("{}", commit.author))
-                                    .color(palette.text_secondary),
-                            )
-                            .wrap(true),
-                        );
-                        let date =
-                            chrono::DateTime::<Utc>::from_timestamp(commit.time.seconds(), 0)
-                                .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
-                                .unwrap_or_else(|| "Unknown time".to_string());
-                        ui.add(
-                            egui::Label::new(RichText::new(date).color(palette.text_secondary))
-                                .wrap(true),
-                        );
-                    });
+                    self.paint_graph(ui, response.rect, idx, commit.parents.len() > 1);
 
                     if response.clicked() {
                         newly_selected = Some(commit.id.clone());
