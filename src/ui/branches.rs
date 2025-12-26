@@ -193,7 +193,12 @@ impl BranchPanel {
             return;
         }
 
+        let kind_id = match kind {
+            BranchKind::Local => "local",
+            BranchKind::Remote => "remote",
+        };
         egui::ScrollArea::vertical()
+            .id_source(("branch_scroll", kind_id))
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for node in root.children.values() {
