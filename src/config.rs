@@ -26,17 +26,13 @@ pub struct RecentRepo {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ThemeMode {
-    #[serde(alias = "Light")]
-    Latte,
-    Frappe,
-    Macchiato,
-    #[serde(alias = "Dark")]
-    Mocha,
+    Dark,
+    Light,
 }
 
 impl Default for ThemeMode {
     fn default() -> Self {
-        Self::Mocha
+        Self::Dark
     }
 }
 
@@ -132,7 +128,7 @@ pub struct Preferences {
 impl Default for Preferences {
     fn default() -> Self {
         Self {
-            theme: ThemeMode::Mocha,
+            theme: ThemeMode::Dark,
             default_clone_path: default_clone_path(),
             keybindings: default_keybindings(),
             network: NetworkOptions::default(),
