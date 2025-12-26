@@ -197,12 +197,9 @@ impl BranchPanel {
             BranchKind::Local => "local",
             BranchKind::Remote => "remote",
         };
-        let available_height = ui.available_height();
         egui::ScrollArea::vertical()
             .id_source(("branch_scroll", kind_id))
             .auto_shrink([false, false])
-            .min_scrolled_height(available_height)
-            .max_height(available_height)
             .show(ui, |ui| {
                 for node in root.children.values() {
                     self.render_node(ui, repo, node, 0);
