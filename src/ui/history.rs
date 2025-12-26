@@ -29,6 +29,7 @@ pub struct HistoryPanel {
     last_repo: Option<String>,
     error: Option<String>,
     diff_error: Option<String>,
+    pending_refresh: bool,
 }
 
 impl HistoryPanel {
@@ -43,11 +44,23 @@ impl HistoryPanel {
             last_repo: None,
             error: None,
             diff_error: None,
+            pending_refresh: false,
         }
     }
 
     pub fn set_theme(&mut self, theme: Theme) {
         self.theme = theme;
+    }
+
+    pub fn set_branch_filter(&mut self, branch: String, repo: Option<&RepoContext>) {
+        self.filters.branch = branch;
+        self.selected_commit = None;
+        if let Some(repo) = repo {
+            self.refresh(repo);
+            self.pending_refresh = false;
+        } else {
+            self.pending_refresh = true;
+        }
     }
 
     pub fn ui(&mut self, ui: &mut Ui, repo: Option<&RepoContext>) {
@@ -62,6 +75,10 @@ impl HistoryPanel {
         if let Some(repo) = repo {
             if self.last_repo.as_deref() != Some(&repo.path) {
                 self.refresh(repo);
+            }
+            if self.pending_refresh {
+                self.refresh(repo);
+                self.pending_refresh = false;
             }
 
             if let Some(error) = &self.error {
