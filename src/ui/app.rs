@@ -100,7 +100,8 @@ impl GitSpaceApp {
     fn initialize_if_needed(&mut self, ctx: &egui::Context) {
         if !self.initialized {
             fonts::install_fonts(ctx);
-            self.theme.apply(ctx);
+            let preferences = self.config.preferences().clone();
+            self.apply_style_preferences(ctx, &preferences);
             self.initialized = true;
         }
     }
@@ -184,6 +185,10 @@ impl eframe::App for GitSpaceApp {
 
         if let Some(updated_preferences) = self.settings_panel.take_changes() {
             self.apply_preferences(updated_preferences, ctx);
+        }
+
+        if let Some(control_height) = self.settings_panel.take_control_height_change() {
+            self.apply_control_height(control_height, ctx);
         }
 
         if self.settings_panel.take_telemetry_purge_request() {
@@ -314,7 +319,7 @@ impl GitSpaceApp {
     fn apply_preferences(&mut self, preferences: Preferences, ctx: &egui::Context) {
         self.config.set_preferences(preferences.clone());
         self.theme = Theme::from_mode(preferences.theme_mode());
-        self.theme.apply(ctx);
+        self.apply_style_preferences(ctx, &preferences);
 
         self.clone_panel.set_theme(self.theme.clone());
         self.clone_panel
@@ -348,6 +353,24 @@ impl GitSpaceApp {
 
         // Allow update settings to take effect immediately on the next frame.
         self.update_checked = false;
+    }
+
+    fn apply_style_preferences(&self, ctx: &egui::Context, preferences: &Preferences) {
+        self.theme.apply(ctx);
+        let mut style = (*ctx.style()).clone();
+        style.spacing.interact_size.y = preferences.control_height();
+        ctx.set_style(style);
+    }
+
+    fn apply_control_height(&mut self, control_height: f32, ctx: &egui::Context) {
+        let mut preferences = self.config.preferences().clone();
+        if (preferences.control_height() - control_height).abs() <= f32::EPSILON {
+            return;
+        }
+        preferences.set_control_height(control_height);
+        self.config.set_preferences(preferences.clone());
+        self.apply_style_preferences(ctx, &preferences);
+        let _ = self.config.save();
     }
 
     fn trigger_update_check(&mut self) {

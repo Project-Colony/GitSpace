@@ -1,4 +1,4 @@
-use eframe::egui::{ComboBox, RichText, TextEdit, Ui, collapsing_header::CollapsingState};
+use eframe::egui::{ComboBox, RichText, Slider, TextEdit, Ui, collapsing_header::CollapsingState};
 use rfd::FileDialog;
 
 use crate::config::{Keybinding, Preferences, ReleaseChannel, ThemeMode};
@@ -8,6 +8,7 @@ pub struct SettingsPanel {
     theme: Theme,
     preferences: Preferences,
     pending_preferences: Option<Preferences>,
+    pending_control_height: Option<f32>,
     import_status: Option<String>,
     export_status: Option<String>,
     update_request: bool,
@@ -22,6 +23,7 @@ impl SettingsPanel {
             theme,
             preferences,
             pending_preferences: None,
+            pending_control_height: None,
             import_status: None,
             export_status: None,
             update_request: false,
@@ -41,6 +43,10 @@ impl SettingsPanel {
 
     pub fn take_changes(&mut self) -> Option<Preferences> {
         self.pending_preferences.take()
+    }
+
+    pub fn take_control_height_change(&mut self) -> Option<f32> {
+        self.pending_control_height.take()
     }
 
     pub fn take_update_request(&mut self) -> bool {
@@ -115,6 +121,17 @@ impl SettingsPanel {
                     }
                     panel.preferences.set_theme_mode(selected_mode);
                 });
+
+                ui.add_space(6.0);
+                let mut control_height = panel.preferences.control_height();
+                let response = ui.add(
+                    Slider::new(&mut control_height, 20.0..=48.0)
+                        .text("Control height"),
+                );
+                if response.changed() {
+                    panel.preferences.set_control_height(control_height);
+                    panel.pending_control_height = Some(control_height);
+                }
             },
         );
     }
@@ -126,13 +143,14 @@ impl SettingsPanel {
             "Repositories",
             "Control defaults for new clones.",
             |ui, panel| {
+                let control_height = ui.spacing().interact_size.y;
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new("Default destination")
                             .color(panel.theme.palette.text_secondary),
                     );
                     ui.add_sized(
-                        [340.0, 28.0],
+                        [340.0, control_height],
                         TextEdit::singleline(panel.preferences.default_clone_path_mut())
                             .hint_text("/home/me/code"),
                     );
@@ -156,15 +174,16 @@ impl SettingsPanel {
             "Keybindings",
             "Map your favorite shortcuts to frequent actions.",
             |ui, panel| {
+                let control_height = ui.spacing().interact_size.y;
                 let mut remove_index: Option<usize> = None;
                 for (idx, binding) in panel.preferences.keybindings_mut().iter_mut().enumerate() {
                     ui.horizontal(|ui| {
                         ui.add_sized(
-                            [200.0, 26.0],
+                            [200.0, control_height],
                             TextEdit::singleline(&mut binding.action).hint_text("Action"),
                         );
                         ui.add_sized(
-                            [160.0, 26.0],
+                            [160.0, control_height],
                             TextEdit::singleline(&mut binding.binding).hint_text("Shortcut"),
                         );
                         if ui.button("Remove").clicked() {
@@ -195,11 +214,12 @@ impl SettingsPanel {
             "Network",
             "Control how GitSpace connects to providers and proxies.",
             |ui, panel| {
+                let control_height = ui.spacing().interact_size.y;
                 let network = panel.preferences.network_mut();
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("HTTP proxy").color(panel.theme.palette.text_secondary));
                     ui.add_sized(
-                        [200.0, 26.0],
+                        [200.0, control_height],
                         TextEdit::singleline(&mut network.http_proxy)
                             .hint_text("http://proxy:8080"),
                     );
@@ -211,7 +231,7 @@ impl SettingsPanel {
                         RichText::new("HTTPS proxy").color(panel.theme.palette.text_secondary),
                     );
                     ui.add_sized(
-                        [200.0, 26.0],
+                        [200.0, control_height],
                         TextEdit::singleline(&mut network.https_proxy)
                             .hint_text("https://proxy:8443"),
                     );
@@ -224,7 +244,7 @@ impl SettingsPanel {
                     );
                     let mut timeout_str = network.network_timeout_secs.to_string();
                     if ui
-                        .add_sized([90.0, 26.0], TextEdit::singleline(&mut timeout_str))
+                        .add_sized([90.0, control_height], TextEdit::singleline(&mut timeout_str))
                         .changed()
                         && let Ok(parsed) = timeout_str.parse()
                     {
