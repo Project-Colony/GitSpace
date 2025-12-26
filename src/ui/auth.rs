@@ -7,7 +7,6 @@ use crate::ui::theme::Theme;
 pub struct AuthPanel {
     theme: Theme,
     auth: AuthManager,
-    provider_gap: f32,
     github_host: String,
     github_token: String,
     github_status: Option<String>,
@@ -23,7 +22,6 @@ impl AuthPanel {
         Self {
             theme,
             auth,
-            provider_gap: DEFAULT_PROVIDER_GAP,
             github_host: "github.com".to_string(),
             github_token: String::new(),
             github_status: None,
@@ -81,7 +79,9 @@ impl AuthPanel {
             &mut self.github_validation,
             "github.com",
         );
-        self.provider_separator(ui);
+        ui.add_space(2.0);
+        ui.separator();
+        ui.add_space(2.0);
         provider_section(
             ui,
             &self.theme,
@@ -135,37 +135,6 @@ impl AuthPanel {
         }
     }
 
-}
-
-const MIN_PROVIDER_GAP: f32 = 4.0;
-const DEFAULT_PROVIDER_GAP: f32 = 8.0;
-
-impl AuthPanel {
-    fn provider_separator(&mut self, ui: &mut Ui) {
-        let gap_height = self.provider_gap.max(MIN_PROVIDER_GAP);
-        let (rect, _) = ui.allocate_exact_size(
-            egui::vec2(ui.available_width(), gap_height),
-            egui::Sense::hover(),
-        );
-        let grip_id = ui.make_persistent_id("auth_provider_separator_grip");
-        let grip_response = ui.interact(rect, grip_id, egui::Sense::click_and_drag());
-        if grip_response.hovered() || grip_response.dragged() {
-            ui.output_mut(|output| output.cursor_icon = egui::CursorIcon::ResizeVertical);
-        }
-
-        if grip_response.dragged() {
-            let delta = ui.input(|input| input.pointer.delta().y);
-            self.provider_gap = (self.provider_gap + delta).max(MIN_PROVIDER_GAP);
-        }
-
-        let painter = ui.painter();
-        let grip_line = egui::Stroke::new(1.0, self.theme.palette.surface_highlight);
-        let center = rect.center();
-        painter.line_segment(
-            [egui::pos2(rect.left() + 12.0, center.y), egui::pos2(rect.right() - 12.0, center.y)],
-            grip_line,
-        );
-    }
 }
 
 fn provider_section(
