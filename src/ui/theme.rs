@@ -82,10 +82,32 @@ impl Default for Typography {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct Spacing {
+    pub xs: f32,
+    pub sm: f32,
+    pub md: f32,
+    pub lg: f32,
+    pub xl: f32,
+}
+
+impl Default for Spacing {
+    fn default() -> Self {
+        Self {
+            xs: 4.0,
+            sm: 8.0,
+            md: 12.0,
+            lg: 16.0,
+            xl: 24.0,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Theme {
     pub palette: Palette,
     pub typography: Typography,
+    pub spacing: Spacing,
     is_dark: bool,
 }
 
@@ -94,6 +116,7 @@ impl Theme {
         Self {
             palette: Palette::latte(),
             typography: Typography::default(),
+            spacing: Spacing::default(),
             is_dark: false,
         }
     }
@@ -102,6 +125,7 @@ impl Theme {
         Self {
             palette: Palette::frappe(),
             typography: Typography::default(),
+            spacing: Spacing::default(),
             is_dark: true,
         }
     }
@@ -110,6 +134,7 @@ impl Theme {
         Self {
             palette: Palette::macchiato(),
             typography: Typography::default(),
+            spacing: Spacing::default(),
             is_dark: true,
         }
     }
@@ -118,6 +143,7 @@ impl Theme {
         Self {
             palette: Palette::mocha(),
             typography: Typography::default(),
+            spacing: Spacing::default(),
             is_dark: true,
         }
     }
