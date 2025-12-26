@@ -228,11 +228,16 @@ impl BranchPanel {
                 });
             } else if let Some(branch) = &node.branch {
                 let label = self.branch_label(branch);
-                let response = ui.add(egui::Label::new(label).sense(Sense::click()));
-                self.context_menu(repo, branch, &response);
-                if let Some(upstream) = &branch.upstream {
-                    response.on_hover_text(format!("Upstream: {upstream}"));
-                }
+                ui.horizontal(|ui| {
+                    let response = ui.add(egui::Label::new(label).sense(Sense::click()));
+                    self.context_menu(repo, branch, &response);
+                    if let Some(upstream) = &branch.upstream {
+                        response.on_hover_text(format!("Upstream: {upstream}"));
+                    }
+                    ui.menu_button("Actions", |ui| {
+                        self.branch_actions(ui, repo, branch);
+                    });
+                });
             }
         };
 
@@ -269,49 +274,53 @@ impl BranchPanel {
         response: &egui::Response,
     ) {
         response.context_menu(|ui| {
-            if ui.button("Checkout").clicked() {
-                self.run_branch_action(repo, || checkout_branch(&repo.path, &branch.name));
-                ui.close_menu();
-            }
-
-            if branch.kind == BranchKind::Local && !branch.is_head {
-                if ui.button("Delete").clicked() {
-                    self.run_branch_action(repo, || delete_branch(&repo.path, &branch.name));
-                    ui.close_menu();
-                }
-            }
-
-            if ui.button("Merge into current").clicked() {
-                self.run_merge_action(repo, &branch.name, MergeStrategy::Merge);
-                ui.close_menu();
-            }
-
-            if ui.button("Rebase onto current").clicked() {
-                self.run_merge_action(repo, &branch.name, MergeStrategy::Rebase);
-                ui.close_menu();
-            }
-
-            if branch.kind == BranchKind::Local {
-                ui.separator();
-                if self.rename_buffer.is_empty() {
-                    self.rename_buffer = branch.name.clone();
-                }
-                ui.horizontal(|ui| {
-                    ui.label("Rename:");
-                    ui.add(egui::TextEdit::singleline(&mut self.rename_buffer));
-                    if ui.button("Apply").clicked() {
-                        let new_name = self.rename_buffer.trim().to_string();
-                        if !new_name.is_empty() {
-                            self.run_branch_action(repo, || {
-                                rename_branch(&repo.path, &branch.name, new_name.as_str())
-                            });
-                            self.rename_buffer.clear();
-                            ui.close_menu();
-                        }
-                    }
-                });
-            }
+            self.branch_actions(ui, repo, branch);
         });
+    }
+
+    fn branch_actions(&mut self, ui: &mut Ui, repo: &RepoContext, branch: &BranchEntry) {
+        if ui.button("Checkout").clicked() {
+            self.run_branch_action(repo, || checkout_branch(&repo.path, &branch.name));
+            ui.close_menu();
+        }
+
+        if branch.kind == BranchKind::Local && !branch.is_head {
+            if ui.button("Delete").clicked() {
+                self.run_branch_action(repo, || delete_branch(&repo.path, &branch.name));
+                ui.close_menu();
+            }
+        }
+
+        if ui.button("Merge into current").clicked() {
+            self.run_merge_action(repo, &branch.name, MergeStrategy::Merge);
+            ui.close_menu();
+        }
+
+        if ui.button("Rebase onto current").clicked() {
+            self.run_merge_action(repo, &branch.name, MergeStrategy::Rebase);
+            ui.close_menu();
+        }
+
+        if branch.kind == BranchKind::Local {
+            ui.separator();
+            if self.rename_buffer.is_empty() {
+                self.rename_buffer = branch.name.clone();
+            }
+            ui.horizontal(|ui| {
+                ui.label("Rename:");
+                ui.add(egui::TextEdit::singleline(&mut self.rename_buffer));
+                if ui.button("Apply").clicked() {
+                    let new_name = self.rename_buffer.trim().to_string();
+                    if !new_name.is_empty() {
+                        self.run_branch_action(repo, || {
+                            rename_branch(&repo.path, &branch.name, new_name.as_str())
+                        });
+                        self.rename_buffer.clear();
+                        ui.close_menu();
+                    }
+                }
+            });
+        }
     }
 
     fn run_branch_action<F>(&mut self, repo: &RepoContext, action: F)
