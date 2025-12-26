@@ -129,8 +129,6 @@ pub struct Preferences {
     allow_encrypted_tokens: bool,
     #[serde(default = "default_control_height")]
     control_height: f32,
-    #[serde(default = "default_branch_box_height")]
-    branch_box_height: f32,
 }
 
 impl Default for Preferences {
@@ -146,7 +144,6 @@ impl Default for Preferences {
             telemetry_enabled: false,
             allow_encrypted_tokens: false,
             control_height: default_control_height(),
-            branch_box_height: default_branch_box_height(),
         }
     }
 }
@@ -260,12 +257,6 @@ fn default_control_height() -> f32 {
     28.0
 }
 
-pub const MIN_BRANCH_BOX_HEIGHT: f32 = 72.0;
-
-fn default_branch_box_height() -> f32 {
-    92.0
-}
-
 fn default_use_https() -> bool {
     true
 }
@@ -357,14 +348,6 @@ impl Preferences {
 
     pub fn set_control_height(&mut self, height: f32) {
         self.control_height = height.clamp(20.0, 48.0);
-    }
-
-    pub fn branch_box_height(&self) -> f32 {
-        self.branch_box_height
-    }
-
-    pub fn set_branch_box_height(&mut self, height: f32) {
-        self.branch_box_height = height.max(MIN_BRANCH_BOX_HEIGHT);
     }
 
     pub fn save_to_path<P: AsRef<Path>>(&self, path: P) -> std::io::Result<()> {
