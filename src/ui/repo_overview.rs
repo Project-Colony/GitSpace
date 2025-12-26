@@ -307,12 +307,57 @@ impl RepoOverviewPanel {
     }
 
     fn open_terminal(&self, repo: &RepoContext) -> Result<String, String> {
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "bash".to_string());
-        Command::new(shell)
-            .current_dir(&repo.path)
-            .spawn()
-            .map_err(|err| err.to_string())?;
-        Ok("Terminal opened".to_string())
+        #[cfg(target_os = "windows")]
+        {
+            Command::new("cmd")
+                .args(["/K", "cd", "/d", &repo.path])
+                .spawn()
+                .map_err(|err| err.to_string())?;
+            return Ok("Terminal opened".to_string());
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            Command::new("open")
+                .args(["-a", "Terminal", &repo.path])
+                .spawn()
+                .map_err(|err| err.to_string())?;
+            return Ok("Terminal opened".to_string());
+        }
+
+        #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+        {
+            let xterm_command = format!("cd '{}' && exec bash", repo.path);
+            let candidates: Vec<(&str, Vec<String>)> = vec![
+                ("x-terminal-emulator", Vec::new()),
+                ("gnome-terminal", vec!["--working-directory".into(), repo.path.clone()]),
+                ("konsole", vec!["--workdir".into(), repo.path.clone()]),
+                ("xfce4-terminal", vec!["--working-directory".into(), repo.path.clone()]),
+                (
+                    "xterm",
+                    vec![
+                        "-e".into(),
+                        "bash".into(),
+                        "-lc".into(),
+                        xterm_command,
+                    ],
+                ),
+                ("alacritty", vec!["--working-directory".into(), repo.path.clone()]),
+                ("kitty", vec!["--directory".into(), repo.path.clone()]),
+                ("wezterm", vec!["start".into(), "--cwd".into(), repo.path.clone()]),
+            ];
+
+            for (terminal, args) in candidates {
+                let mut command = Command::new(terminal);
+                command.args(args);
+                command.current_dir(&repo.path);
+                if command.spawn().is_ok() {
+                    return Ok("Terminal opened".to_string());
+                }
+            }
+
+            Err("No supported terminal emulator found on PATH".to_string())
+        }
     }
 
     fn open_file_explorer(&self, repo: &RepoContext) -> Result<String, String> {
