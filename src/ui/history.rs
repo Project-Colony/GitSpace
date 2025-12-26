@@ -8,7 +8,7 @@ use crate::git::{
 use crate::ui::{context::RepoContext, theme::Theme};
 
 const MAX_COMMITS: usize = 200;
-const ROW_HEIGHT: f32 = 144.0;
+const ROW_HEIGHT: f32 = 176.0;
 
 #[derive(Default, Clone)]
 pub struct HistoryFilters {
@@ -74,8 +74,10 @@ impl HistoryPanel {
             ui.separator();
             ui.add_space(6.0);
 
+            let available_height = ui.available_height();
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
+                    ui.set_min_height(available_height);
                     ui.set_width(ui.available_width() * 0.55);
                     self.commit_list(ui);
                 });
@@ -83,6 +85,7 @@ impl HistoryPanel {
                 ui.separator();
 
                 ui.vertical(|ui| {
+                    ui.set_min_height(available_height);
                     ui.set_width(ui.available_width());
                     self.details_pane(ui);
                 });
@@ -173,9 +176,11 @@ impl HistoryPanel {
             return;
         }
 
+        let available_height = ui.available_height();
         egui::ScrollArea::vertical()
             .id_source("history_commit_list")
             .auto_shrink([false, false])
+            .max_height(available_height)
             .show(ui, |ui| {
                 for (idx, commit) in self.commits.iter().enumerate() {
                     let is_selected = self
@@ -202,29 +207,41 @@ impl HistoryPanel {
                     let inner = rect.shrink2(Vec2::new(12.0, 8.0));
                     let mut content = ui.child_ui(inner, Layout::left_to_right(Align::Min));
                     content.vertical(|ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                RichText::new(&commit.summary)
-                                    .color(palette.text_primary)
-                                    .strong(),
+                        ui.horizontal_wrapped(|ui| {
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(&commit.summary)
+                                        .color(palette.text_primary)
+                                        .strong(),
+                                )
+                                .wrap(true),
                             );
-                            ui.label(
-                                RichText::new(format!(
-                                    "{}",
-                                    commit.id.chars().take(8).collect::<String>()
-                                ))
-                                .color(palette.text_secondary),
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(format!(
+                                        "{}",
+                                        commit.id.chars().take(8).collect::<String>()
+                                    ))
+                                    .color(palette.text_secondary),
+                                )
+                                .wrap(true),
                             );
                         });
-                        ui.label(
-                            RichText::new(format!("{}", commit.author))
-                                .color(palette.text_secondary),
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(format!("{}", commit.author))
+                                    .color(palette.text_secondary),
+                            )
+                            .wrap(true),
                         );
                         let date =
                             chrono::DateTime::<Utc>::from_timestamp(commit.time.seconds(), 0)
                                 .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
                                 .unwrap_or_else(|| "Unknown time".to_string());
-                        ui.label(RichText::new(date).color(palette.text_secondary));
+                        ui.add(
+                            egui::Label::new(RichText::new(date).color(palette.text_secondary))
+                                .wrap(true),
+                        );
                     });
 
                     if response.clicked() {
@@ -276,8 +293,12 @@ impl HistoryPanel {
                         .color(self.theme.palette.text_primary)
                         .strong(),
                 );
-                ui.label(
-                    RichText::new(commit.message.trim()).color(self.theme.palette.text_secondary),
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(commit.message.trim())
+                            .color(self.theme.palette.text_secondary),
+                    )
+                    .wrap(true),
                 );
                 if let (Some(files), Some(additions), Some(deletions)) = (
                     commit.files_changed,
@@ -298,34 +319,42 @@ impl HistoryPanel {
                 if let Some(error) = &self.diff_error {
                     ui.colored_label(self.theme.palette.accent, error);
                 }
-        egui::ScrollArea::vertical()
-            .id_source("history_details_files")
-            .show(ui, |ui| {
-                    if let Some(email) = &commit.email {
-                        ui.label(RichText::new(email).color(self.theme.palette.text_secondary));
-                        ui.add_space(6.0);
-                    }
-                    for (idx, diff) in self.diffs.iter().enumerate() {
-                        ui.push_id(idx, |ui| {
-                            ui.collapsing(
-                                RichText::new(format!(
-                                    "{} (+{}, -{})",
-                                    diff.path, diff.additions, diff.deletions
-                                ))
-                                .color(self.theme.palette.text_primary),
-                                |ui| {
-                                    ui.add(
-                                        egui::TextEdit::multiline(&mut diff.patch.clone())
-                                            .font(egui::TextStyle::Monospace)
-                                            .desired_width(f32::INFINITY)
-                                            .interactive(false),
-                                    );
-                                },
-                            );
-                            ui.add_space(6.0);
-                        });
-                    }
-                });
+                if let Some(email) = &commit.email {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(email).color(self.theme.palette.text_secondary),
+                        )
+                        .wrap(true),
+                    );
+                    ui.add_space(6.0);
+                }
+                let diff_height = ui.available_height().max(220.0);
+                egui::ScrollArea::vertical()
+                    .id_source("history_details_files")
+                    .auto_shrink([false, false])
+                    .min_scrolled_height(diff_height)
+                    .show(ui, |ui| {
+                        for (idx, diff) in self.diffs.iter().enumerate() {
+                            ui.push_id(idx, |ui| {
+                                ui.collapsing(
+                                    RichText::new(format!(
+                                        "{} (+{}, -{})",
+                                        diff.path, diff.additions, diff.deletions
+                                    ))
+                                    .color(self.theme.palette.text_primary),
+                                    |ui| {
+                                        ui.add(
+                                            egui::TextEdit::multiline(&mut diff.patch.clone())
+                                                .font(egui::TextStyle::Monospace)
+                                                .desired_width(f32::INFINITY)
+                                                .interactive(false),
+                                        );
+                                    },
+                                );
+                                ui.add_space(6.0);
+                            });
+                        }
+                    });
             } else {
                 ui.label(
                     RichText::new("Commit not found.").color(self.theme.palette.text_secondary),
