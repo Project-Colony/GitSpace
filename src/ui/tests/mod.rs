@@ -24,7 +24,7 @@ fn build_layout_components() -> (
     NotificationCenter,
     AuthManager,
 ) {
-    let theme = Theme::dark();
+    let theme = Theme::mocha();
     let preferences = Preferences::default();
     let auth_manager = AuthManager::default();
     (

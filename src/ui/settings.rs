@@ -97,15 +97,20 @@ impl SettingsPanel {
             ui,
             "settings-appearance",
             "Appearance",
-            "Switch between light and dark palettes.",
+            "Choose a Catppuccin flavor for the GitSpace UI.",
             |ui, panel| {
                 ComboBox::from_label(
-                    RichText::new("Theme mode").color(panel.theme.palette.text_secondary),
+                    RichText::new("Theme").color(panel.theme.palette.text_secondary),
                 )
                 .selected_text(mode_label(panel.preferences.theme_mode()))
                 .show_ui(ui, |ui| {
                     let mut selected_mode = panel.preferences.theme_mode();
-                    for mode in [ThemeMode::Dark, ThemeMode::Light] {
+                    for mode in [
+                        ThemeMode::Latte,
+                        ThemeMode::Frappe,
+                        ThemeMode::Macchiato,
+                        ThemeMode::Mocha,
+                    ] {
                         ui.selectable_value(&mut selected_mode, mode, mode_label(mode));
                     }
                     panel.preferences.set_theme_mode(selected_mode);
@@ -416,8 +421,10 @@ impl SettingsPanel {
 
 fn mode_label(mode: ThemeMode) -> &'static str {
     match mode {
-        ThemeMode::Dark => "Dark",
-        ThemeMode::Light => "Light",
+        ThemeMode::Latte => "Latte",
+        ThemeMode::Frappe => "Frappe",
+        ThemeMode::Macchiato => "Macchiato",
+        ThemeMode::Mocha => "Mocha",
     }
 }
 
