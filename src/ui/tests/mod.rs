@@ -39,7 +39,7 @@ fn build_layout_components() -> (
         RepoOverviewPanel::new(theme.clone(), preferences.branch_box_height()),
         StagePanel::new(theme.clone()),
         HistoryPanel::new(theme.clone()),
-        BranchPanel::new(theme.clone()),
+        BranchPanel::new(theme.clone(), preferences.pinned_branches().to_vec()),
         AuthPanel::new(theme.clone(), auth_manager.clone()),
         SettingsPanel::new(theme.clone(), preferences),
         NotificationCenter::default(),

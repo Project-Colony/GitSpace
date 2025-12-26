@@ -54,10 +54,12 @@ pub struct BranchPanel {
     conflict_files: Vec<String>,
     stale_only: bool,
     open_history_branch: Option<String>,
+    pinned_branches: Vec<String>,
+    pending_pinned: Option<Vec<String>>,
 }
 
 impl BranchPanel {
-    pub fn new(theme: Theme) -> Self {
+    pub fn new(theme: Theme, pinned_branches: Vec<String>) -> Self {
         Self {
             theme,
             branches: Vec::new(),
@@ -77,11 +79,21 @@ impl BranchPanel {
             conflict_files: Vec::new(),
             stale_only: false,
             open_history_branch: None,
+            pinned_branches,
+            pending_pinned: None,
         }
     }
 
     pub fn set_theme(&mut self, theme: Theme) {
         self.theme = theme;
+    }
+
+    pub fn set_pinned_branches(&mut self, pinned_branches: Vec<String>) {
+        self.pinned_branches = pinned_branches;
+    }
+
+    pub fn take_pinned_changes(&mut self) -> Option<Vec<String>> {
+        self.pending_pinned.take()
     }
 
     pub fn take_history_request(&mut self) -> Option<String> {
@@ -231,16 +243,26 @@ impl BranchPanel {
         ui.heading(RichText::new(label).color(self.theme.palette.text_primary));
         ui.add_space(4.0);
 
+        let mut pinned: Vec<BranchEntry> = self
+            .branches
+            .iter()
+            .filter(|branch| branch.kind == kind)
+            .filter(|branch| self.should_show_branch(branch))
+            .filter(|branch| self.is_branch_pinned(branch))
+            .cloned()
+            .collect();
+        pinned.sort_by(|a, b| a.name.cmp(&b.name));
+
         let mut root = BranchNode::default();
         for branch in self.branches.iter().filter(|b| b.kind == kind) {
-            if self.stale_only && !self.is_branch_stale(branch) {
+            if !self.should_show_branch(branch) || self.is_branch_pinned(branch) {
                 continue;
             }
             let segments: Vec<&str> = branch.name.split('/').collect();
             root.insert(&segments, branch.clone());
         }
 
-        if root.children.is_empty() {
+        if pinned.is_empty() && root.children.is_empty() {
             ui.label(RichText::new("No branches found.").color(self.theme.palette.text_secondary));
             return;
         }
@@ -253,6 +275,17 @@ impl BranchPanel {
             .id_source(("branch_scroll", kind_id))
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                if !pinned.is_empty() {
+                    ui.label(RichText::new("Pinned").color(self.theme.palette.text_secondary));
+                    for branch in &pinned {
+                        self.render_branch_entry(ui, repo, branch);
+                    }
+                    if !root.children.is_empty() {
+                        ui.add_space(6.0);
+                        ui.separator();
+                        ui.add_space(6.0);
+                    }
+                }
                 for node in root.children.values() {
                     self.render_node(ui, repo, node, 0);
                 }
@@ -276,14 +309,7 @@ impl BranchPanel {
                     }
                 });
             } else if let Some(branch) = &node.branch {
-                let response = self.branch_label(ui, branch);
-                if response.clicked() {
-                    self.select_branch(repo, &branch.name);
-                }
-                self.context_menu(repo, branch, &response);
-                if let Some(upstream) = &branch.upstream {
-                    response.on_hover_text(format!("Upstream: {upstream}"));
-                }
+                self.render_branch_entry(ui, repo, branch);
             }
         };
 
@@ -332,6 +358,17 @@ impl BranchPanel {
         .inner
     }
 
+    fn render_branch_entry(&mut self, ui: &mut Ui, repo: &RepoContext, branch: &BranchEntry) {
+        let response = self.branch_label(ui, branch);
+        if response.clicked() {
+            self.select_branch(repo, &branch.name);
+        }
+        self.context_menu(repo, branch, &response);
+        if let Some(upstream) = &branch.upstream {
+            response.on_hover_text(format!("Upstream: {upstream}"));
+        }
+    }
+
     fn context_menu(
         &mut self,
         repo: &RepoContext,
@@ -339,6 +376,16 @@ impl BranchPanel {
         response: &egui::Response,
     ) {
         response.context_menu(|ui| {
+            let pin_label = if self.is_branch_pinned(branch) {
+                "Unpin branch"
+            } else {
+                "Pin branch"
+            };
+            if ui.button(pin_label).clicked() {
+                self.toggle_pin(branch);
+                ui.close_menu();
+            }
+
             if ui.button("Checkout").clicked() {
                 self.run_branch_action(repo, || checkout_branch(&repo.path, &branch.name));
                 ui.close_menu();
@@ -646,6 +693,32 @@ impl BranchPanel {
         };
         let age_seconds = Utc::now().timestamp().saturating_sub(commit.time.seconds());
         age_seconds > STALE_DAYS * 24 * 60 * 60
+    }
+
+    fn should_show_branch(&self, branch: &BranchEntry) -> bool {
+        if self.stale_only && !self.is_branch_stale(branch) {
+            return false;
+        }
+        true
+    }
+
+    fn is_branch_pinned(&self, branch: &BranchEntry) -> bool {
+        self.pinned_branches
+            .iter()
+            .any(|name| name == &branch.name)
+    }
+
+    fn toggle_pin(&mut self, branch: &BranchEntry) {
+        if let Some(pos) = self
+            .pinned_branches
+            .iter()
+            .position(|name| name == &branch.name)
+        {
+            self.pinned_branches.remove(pos);
+        } else {
+            self.pinned_branches.push(branch.name.clone());
+        }
+        self.pending_pinned = Some(self.pinned_branches.clone());
     }
 
     fn compare_with_current(&mut self, repo: &RepoContext, branch_name: &str) {
