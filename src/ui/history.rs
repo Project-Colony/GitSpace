@@ -74,8 +74,10 @@ impl HistoryPanel {
             ui.separator();
             ui.add_space(6.0);
 
+            let available_height = ui.available_height();
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
+                    ui.set_min_height(available_height);
                     ui.set_width(ui.available_width() * 0.55);
                     self.commit_list(ui);
                 });
@@ -83,6 +85,7 @@ impl HistoryPanel {
                 ui.separator();
 
                 ui.vertical(|ui| {
+                    ui.set_min_height(available_height);
                     ui.set_width(ui.available_width());
                     self.details_pane(ui);
                 });
