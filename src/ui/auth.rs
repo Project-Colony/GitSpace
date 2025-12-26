@@ -15,6 +15,7 @@ pub struct AuthPanel {
     gitlab_token: String,
     gitlab_status: Option<String>,
     gitlab_validation: Option<Promise<Result<(), String>>>,
+    section_gap: f32,
 }
 
 impl AuthPanel {
@@ -30,6 +31,7 @@ impl AuthPanel {
             gitlab_token: String::new(),
             gitlab_status: None,
             gitlab_validation: None,
+            section_gap: DEFAULT_AUTH_SECTION_GAP,
         }
     }
 
@@ -79,9 +81,7 @@ impl AuthPanel {
             &mut self.github_validation,
             "github.com",
         );
-        ui.add_space(2.0);
-        ui.separator();
-        ui.add_space(2.0);
+        self.resizable_separator(ui);
         provider_section(
             ui,
             &self.theme,
@@ -135,6 +135,51 @@ impl AuthPanel {
         }
     }
 
+}
+
+const MIN_AUTH_SECTION_GAP: f32 = 8.0;
+const MAX_AUTH_SECTION_GAP: f32 = 96.0;
+const DEFAULT_AUTH_SECTION_GAP: f32 = 24.0;
+const AUTH_SECTION_GRIP_HEIGHT: f32 = 6.0;
+
+impl AuthPanel {
+    fn resizable_separator(&mut self, ui: &mut Ui) {
+        let gap_height = self.section_gap.clamp(MIN_AUTH_SECTION_GAP, MAX_AUTH_SECTION_GAP);
+        let total_height = gap_height + AUTH_SECTION_GRIP_HEIGHT;
+        let (rect, _) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), total_height),
+            egui::Sense::hover(),
+        );
+        let grip_rect = egui::Rect::from_min_size(
+            egui::pos2(rect.left(), rect.top() + gap_height),
+            egui::vec2(rect.width(), AUTH_SECTION_GRIP_HEIGHT),
+        );
+
+        let grip_id = ui.make_persistent_id("auth_section_resize_grip");
+        let grip_response = ui.interact(grip_rect, grip_id, egui::Sense::click_and_drag());
+        if grip_response.hovered() || grip_response.dragged() {
+            ui.output_mut(|output| output.cursor_icon = egui::CursorIcon::ResizeVertical);
+        }
+
+        if grip_response.dragged() {
+            let delta = ui.input(|input| input.pointer.delta().y);
+            self.section_gap = (self.section_gap + delta).clamp(
+                MIN_AUTH_SECTION_GAP,
+                MAX_AUTH_SECTION_GAP,
+            );
+        }
+
+        let painter = ui.painter();
+        let grip_center = grip_rect.center();
+        let grip_line = egui::Stroke::new(1.0, self.theme.palette.surface_highlight);
+        painter.line_segment(
+            [
+                egui::pos2(rect.left() + 12.0, grip_center.y),
+                egui::pos2(rect.right() - 12.0, grip_center.y),
+            ],
+            grip_line,
+        );
+    }
 }
 
 fn provider_section(
