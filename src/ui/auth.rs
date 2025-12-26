@@ -67,47 +67,47 @@ impl AuthPanel {
         );
         ui.add_space(8.0);
 
-        provider_section(
-            ui,
-            &self.theme,
-            &self.auth,
-            "GitHub",
-            '\u{f408}',
-            &mut self.github_host,
-            &mut self.github_token,
-            &mut self.github_status,
-            &mut self.github_validation,
-            "github.com",
-        );
-        ui.add_space(2.0);
-        ui.separator();
-        ui.add_space(2.0);
-        provider_section(
-            ui,
-            &self.theme,
-            &self.auth,
-            "GitLab",
-            '\u{f296}',
-            &mut self.gitlab_host,
-            &mut self.gitlab_token,
-            &mut self.gitlab_status,
-            &mut self.gitlab_validation,
-            "gitlab.com",
-        );
+        ui.vertical(|ui| {
+            provider_section(
+                ui,
+                &self.theme,
+                &self.auth,
+                "GitHub",
+                '\u{f408}',
+                &mut self.github_host,
+                &mut self.github_token,
+                &mut self.github_status,
+                &mut self.github_validation,
+                "github.com",
+            );
+            ui.add_space(6.0);
+            provider_section(
+                ui,
+                &self.theme,
+                &self.auth,
+                "GitLab",
+                '\u{f296}',
+                &mut self.gitlab_host,
+                &mut self.gitlab_token,
+                &mut self.gitlab_status,
+                &mut self.gitlab_validation,
+                "gitlab.com",
+            );
 
-        ui.add_space(12.0);
-        ui.label(
-            RichText::new("Examples (host only, no repository path):")
-                .color(self.theme.palette.text_secondary),
-        );
-        ui.label(
-            RichText::new("Remote host\ngithub.com\nExample: github.com/MotherSphere")
-                .color(self.theme.palette.text_secondary),
-        );
-        ui.label(
-            RichText::new("Remote host\ngitlab.com\nExample: gitlab.com/MotherSphere")
-                .color(self.theme.palette.text_secondary),
-        );
+            ui.add_space(10.0);
+            ui.label(
+                RichText::new("Examples (host only, no repository path):")
+                    .color(self.theme.palette.text_secondary),
+            );
+            ui.label(
+                RichText::new("Remote host\ngithub.com\nExample: github.com/MotherSphere")
+                    .color(self.theme.palette.text_secondary),
+            );
+            ui.label(
+                RichText::new("Remote host\ngitlab.com\nExample: gitlab.com/MotherSphere")
+                    .color(self.theme.palette.text_secondary),
+            );
+        });
 
         ui.add_space(12.0);
         ui.heading(RichText::new("Saved hosts").color(self.theme.palette.text_primary));
