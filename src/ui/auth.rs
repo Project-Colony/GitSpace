@@ -70,7 +70,7 @@ impl AuthPanel {
                 &mut self.github_token,
                 &mut self.github_status,
                 &mut self.github_validation,
-                "github.com",
+                "Example: api.github.com",
             );
         });
 
@@ -84,7 +84,7 @@ impl AuthPanel {
                 &mut self.gitlab_token,
                 &mut self.gitlab_status,
                 &mut self.gitlab_validation,
-                "gitlab.com",
+                "Example: gitlab.com",
             );
         });
 
@@ -93,18 +93,18 @@ impl AuthPanel {
             ui.vertical(|ui| {
                 layout.section(
                     ui,
-                    AuthSection::info("Examples", "Host only, no repository path needed."),
+                    AuthSection::info("Examples", "Use a host only (no username or repo path)."),
                     |ui| {
                         ui.label(
                             RichText::new(
-                                "Remote host\ngithub.com\nExample: github.com/MotherSphere",
+                                "GitHub.com\nUse: api.github.com\nDo not include /<user> or /<repo>",
                             )
                             .color(layout.theme.palette.text_secondary),
                         );
                         ui.add_space(layout.spacing.sm);
                         ui.label(
                             RichText::new(
-                                "Remote host\ngitlab.com\nExample: gitlab.com/MotherSphere",
+                                "GitLab.com\nUse: gitlab.com\nDo not include /<user> or /<repo>",
                             )
                             .color(layout.theme.palette.text_secondary),
                         );
@@ -302,7 +302,7 @@ impl<'a> AuthSection<'a> {
     fn provider(title: &'a str, icon: char) -> Self {
         Self {
             title,
-            subtitle: Some("Connect a token to enable Git operations."),
+            subtitle: Some("Save a personal access token so GitSpace can access remotes."),
             icon: Some(icon),
             tone: SectionTone::Provider,
         }

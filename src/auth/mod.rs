@@ -462,6 +462,8 @@ fn normalize_host(host: &str) -> String {
 fn validate_github(client: &Client, host: &str, token: &str) -> Result<(), String> {
     let api_base = if host.contains("api.github.com") {
         host.to_string()
+    } else if host.contains("github.com") {
+        "https://api.github.com".to_string()
     } else {
         format!("{}/api/v3", host)
     };
