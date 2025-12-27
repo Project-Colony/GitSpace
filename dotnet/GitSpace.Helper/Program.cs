@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 #if WINDOWS
@@ -53,6 +54,7 @@ var response = request.Command.ToLowerInvariant() switch
     }),
     "dialog.open" => HandleDialogOpen(request),
     "credential.request" => HandleCredentialRequest(request),
+    "library.call" => HandleLibraryCall(request),
     _ => Response.Error(
         request.Id,
         "InvalidRequest",
@@ -92,6 +94,8 @@ internal sealed record CredentialRequest(
     string Action);
 
 internal sealed record CredentialPayload(string? Username, string? Secret, string Status);
+
+internal sealed record LibraryCallRequest(string Name, JsonElement Payload);
 
 static Response HandleDialogOpen(Request request)
 {
@@ -240,6 +244,49 @@ static Response HandleCredentialRequest(Request request)
             "Unhandled exception",
             new { error = ex.Message });
     }
+}
+
+static Response HandleLibraryCall(Request request)
+{
+    LibraryCallRequest? payload;
+    try
+    {
+        payload = JsonSerializer.Deserialize<LibraryCallRequest>(
+            request.Payload.GetRawText(),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+    }
+    catch (JsonException ex)
+    {
+        return Response.Error(
+            request.Id,
+            "InvalidRequest",
+            $"Malformed library payload: {ex.Message}",
+            null);
+    }
+
+    if (payload is null || string.IsNullOrWhiteSpace(payload.Name))
+    {
+        return Response.Error(
+            request.Id,
+            "InvalidRequest",
+            "Missing payload.name",
+            new { field = "name" });
+    }
+
+    var name = payload.Name.ToLowerInvariant();
+    return name switch
+    {
+        "system.info" => Response.Ok(request.Id, new
+        {
+            os = RuntimeInformation.OSDescription,
+            version = Environment.OSVersion.VersionString
+        }),
+        _ => Response.Error(
+            request.Id,
+            "InvalidRequest",
+            "Unknown library name",
+            new { name = payload.Name })
+    };
 }
 
 internal interface ICredentialProvider
