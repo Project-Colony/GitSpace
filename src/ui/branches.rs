@@ -163,8 +163,6 @@ impl BranchPanel {
 
             ui.add_space(10.0);
             self.render_selection_panel(ui);
-            ui.add_space(10.0);
-            self.render_compare_panel(ui);
         } else {
             ui.add_space(8.0);
             ui.label(
@@ -555,149 +553,159 @@ impl BranchPanel {
     }
 
     fn render_selection_panel(&self, ui: &mut Ui) {
-        ui.heading(RichText::new("Selection details").color(self.theme.palette.text_primary));
-        ui.add_space(6.0);
-
-        let Some(branch_name) = &self.selected_branch else {
-            ui.label(
-                RichText::new("Select a branch to see its latest commit and comparison details.")
-                    .color(self.theme.palette.text_secondary),
-            );
-            return;
-        };
-
-        if let Some(error) = &self.selected_error {
-            ui.colored_label(self.theme.palette.accent, error);
-            return;
-        }
-
-        let Some(comparison) = &self.selected_comparison else {
-            ui.label(
-                RichText::new("No comparison data available yet.")
-                    .color(self.theme.palette.text_secondary),
-            );
-            return;
-        };
-
-        ui.label(
-            RichText::new(branch_name)
-                .color(self.theme.palette.text_primary)
-                .strong(),
-        );
-
-        if let Some(commit) = &comparison.commit {
-            ui.add_space(4.0);
-            ui.label(
-                RichText::new(commit.summary.clone())
-                    .color(self.theme.palette.text_primary)
-                    .strong(),
-            );
-            ui.label(
-                RichText::new(format!("Author: {}", commit.author))
-                    .color(self.theme.palette.text_secondary),
-            );
-            let date = chrono::DateTime::<Utc>::from_timestamp(commit.time.seconds(), 0)
-                .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
-                .unwrap_or_else(|| "Unknown time".to_string());
-            ui.label(RichText::new(date).color(self.theme.palette.text_secondary));
-        } else {
-            ui.label(
-                RichText::new("No commits found for this branch.")
-                    .color(self.theme.palette.text_secondary),
-            );
-        }
-
-        ui.add_space(8.0);
-        ui.label(
-            RichText::new("Comparison with current HEAD")
-                .color(self.theme.palette.text_primary)
-                .strong(),
-        );
-        if let Some(diff) = &comparison.diff {
-            ui.label(
-                RichText::new(format!(
-                    "{} files changed • +{} / -{}",
-                    diff.files_changed, diff.additions, diff.deletions
-                ))
-                .color(self.theme.palette.text_secondary),
-            );
-        } else {
-            ui.label(RichText::new("No diff available.").color(self.theme.palette.text_secondary));
-        }
-    }
-
-    fn render_compare_panel(&self, ui: &mut Ui) {
-        ui.heading(RichText::new("Compare with current").color(self.theme.palette.text_primary));
-        ui.add_space(6.0);
-
-        let Some(branch_name) = &self.compare_branch else {
-            ui.label(
-                RichText::new("Use the branch context menu to compare with current HEAD.")
-                    .color(self.theme.palette.text_secondary),
-            );
-            return;
-        };
-
-        if let Some(error) = &self.compare_error {
-            ui.colored_label(self.theme.palette.accent, error);
-            return;
-        }
-
-        ui.label(
-            RichText::new(branch_name)
-                .color(self.theme.palette.text_primary)
-                .strong(),
-        );
-
-        if let Some(diff) = &self.compare_diff {
-            ui.add_space(4.0);
-            ui.label(
-                RichText::new(format!(
-                    "{} files changed • +{} / -{}",
-                    diff.files_changed, diff.additions, diff.deletions
-                ))
-                .color(self.theme.palette.text_secondary),
-            );
-        }
-
-        ui.add_space(6.0);
-        ui.label(
-            RichText::new("Commits between current HEAD and branch")
-                .color(self.theme.palette.text_primary)
-                .strong(),
-        );
-
-        if self.compare_commits.is_empty() {
-            ui.label(
-                RichText::new("No commits found in the selected range.")
-                    .color(self.theme.palette.text_secondary),
-            );
-            return;
-        }
-
-        egui::ScrollArea::vertical()
-            .id_source("compare_commits")
-            .auto_shrink([false, false])
-            .max_height(220.0)
+        egui::Frame::none()
+            .fill(self.theme.palette.surface)
+            .stroke(egui::Stroke::new(1.0, self.theme.palette.surface_highlight))
+            .rounding(6.0)
+            .inner_margin(egui::Margin::same(10.0))
             .show(ui, |ui| {
-                for commit in &self.compare_commits {
-                    ui.vertical(|ui| {
+                ui.heading(RichText::new("Selection details").color(self.theme.palette.text_primary));
+                ui.add_space(6.0);
+
+                if let Some(branch_name) = &self.selected_branch {
+                    if let Some(error) = &self.selected_error {
+                        ui.colored_label(self.theme.palette.accent, error);
+                    } else if let Some(comparison) = &self.selected_comparison {
                         ui.label(
-                            RichText::new(commit.summary.clone())
+                            RichText::new(branch_name)
                                 .color(self.theme.palette.text_primary)
                                 .strong(),
                         );
+
+                        if let Some(commit) = &comparison.commit {
+                            ui.add_space(4.0);
+                            ui.label(
+                                RichText::new(commit.summary.clone())
+                                    .color(self.theme.palette.text_primary)
+                                    .strong(),
+                            );
+                            ui.label(
+                                RichText::new(format!("Author: {}", commit.author))
+                                    .color(self.theme.palette.text_secondary),
+                            );
+                            let date = chrono::DateTime::<Utc>::from_timestamp(
+                                commit.time.seconds(),
+                                0,
+                            )
+                            .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+                            .unwrap_or_else(|| "Unknown time".to_string());
+                            ui.label(RichText::new(date).color(self.theme.palette.text_secondary));
+                        } else {
+                            ui.label(
+                                RichText::new("No commits found for this branch.")
+                                    .color(self.theme.palette.text_secondary),
+                            );
+                        }
+
+                        ui.add_space(8.0);
                         ui.label(
-                            RichText::new(format!(
-                                "{} • {}",
-                                self.short_commit_id(&commit.id),
-                                commit.author
-                            ))
-                            .color(self.theme.palette.text_secondary),
+                            RichText::new("Comparison with current HEAD")
+                                .color(self.theme.palette.text_primary)
+                                .strong(),
                         );
-                        ui.add_space(4.0);
-                    });
-                    ui.separator();
+                        if let Some(diff) = &comparison.diff {
+                            ui.label(
+                                RichText::new(format!(
+                                    "{} files changed • +{} / -{}",
+                                    diff.files_changed, diff.additions, diff.deletions
+                                ))
+                                .color(self.theme.palette.text_secondary),
+                            );
+                        } else {
+                            ui.label(
+                                RichText::new("No diff available.")
+                                    .color(self.theme.palette.text_secondary),
+                            );
+                        }
+                    } else {
+                        ui.label(
+                            RichText::new("No comparison data available yet.")
+                                .color(self.theme.palette.text_secondary),
+                        );
+                    }
+                } else {
+                    ui.label(
+                        RichText::new(
+                            "Select a branch to see its latest commit and comparison details.",
+                        )
+                        .color(self.theme.palette.text_secondary),
+                    );
+                }
+
+                ui.add_space(10.0);
+                ui.separator();
+                ui.add_space(8.0);
+                ui.heading(
+                    RichText::new("Compare with current").color(self.theme.palette.text_primary),
+                );
+                ui.add_space(6.0);
+
+                if let Some(branch_name) = &self.compare_branch {
+                    if let Some(error) = &self.compare_error {
+                        ui.colored_label(self.theme.palette.accent, error);
+                    } else {
+                        ui.label(
+                            RichText::new(branch_name)
+                                .color(self.theme.palette.text_primary)
+                                .strong(),
+                        );
+
+                        if let Some(diff) = &self.compare_diff {
+                            ui.add_space(4.0);
+                            ui.label(
+                                RichText::new(format!(
+                                    "{} files changed • +{} / -{}",
+                                    diff.files_changed, diff.additions, diff.deletions
+                                ))
+                                .color(self.theme.palette.text_secondary),
+                            );
+                        }
+
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new("Commits between current HEAD and branch")
+                                .color(self.theme.palette.text_primary)
+                                .strong(),
+                        );
+
+                        if self.compare_commits.is_empty() {
+                            ui.label(
+                                RichText::new("No commits found in the selected range.")
+                                    .color(self.theme.palette.text_secondary),
+                            );
+                        } else {
+                            egui::ScrollArea::vertical()
+                                .id_source("compare_commits")
+                                .auto_shrink([false, false])
+                                .max_height(200.0)
+                                .show(ui, |ui| {
+                                    for commit in &self.compare_commits {
+                                        ui.vertical(|ui| {
+                                            ui.label(
+                                                RichText::new(commit.summary.clone())
+                                                    .color(self.theme.palette.text_primary)
+                                                    .strong(),
+                                            );
+                                            ui.label(
+                                                RichText::new(format!(
+                                                    "{} • {}",
+                                                    self.short_commit_id(&commit.id),
+                                                    commit.author
+                                                ))
+                                                .color(self.theme.palette.text_secondary),
+                                            );
+                                            ui.add_space(4.0);
+                                        });
+                                        ui.separator();
+                                    }
+                                });
+                        }
+                    }
+                } else {
+                    ui.label(
+                        RichText::new("Use the branch context menu to compare with current HEAD.")
+                            .color(self.theme.palette.text_secondary),
+                    );
                 }
             });
     }
