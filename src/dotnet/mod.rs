@@ -71,6 +71,17 @@ pub struct CredentialResponse {
     pub status: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct LibraryCallRequest {
+    pub name: String,
+    pub payload: Value,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LibraryCallResponse {
+    pub payload: Value,
+}
+
 pub struct DotnetClient {
     program: PathBuf,
     args: Vec<String>,
@@ -144,17 +155,7 @@ impl DotnetClient {
                 .map_err(|err| AppError::Unknown(err.to_string()))?,
         };
         let response = self.send_request(&request)?;
-        if response.status != "ok" {
-            let error = response
-                .error
-                .as_ref()
-                .map(map_dotnet_error)
-                .unwrap_or_else(|| AppError::Unknown("Unknown .NET error".to_string()));
-            return Err(error);
-        }
-        let payload = response
-            .payload
-            .ok_or_else(|| AppError::Unknown("Missing dialog response payload".to_string()))?;
+        let payload = response_payload(response, "dialog response payload")?;
         serde_json::from_value(payload).map_err(|err| {
             log_dotnet_json_parse_error(&err, "dialog_open_payload");
             AppError::Unknown(err.to_string())
@@ -172,21 +173,26 @@ impl DotnetClient {
                 .map_err(|err| AppError::Unknown(err.to_string()))?,
         };
         let response = self.send_request(&request)?;
-        if response.status != "ok" {
-            let error = response
-                .error
-                .as_ref()
-                .map(map_dotnet_error)
-                .unwrap_or_else(|| AppError::Unknown("Unknown .NET error".to_string()));
-            return Err(error);
-        }
-        let payload = response
-            .payload
-            .ok_or_else(|| AppError::Unknown("Missing credential response payload".to_string()))?;
+        let payload = response_payload(response, "credential response payload")?;
         serde_json::from_value(payload).map_err(|err| {
             log_dotnet_json_parse_error(&err, "credential_payload");
             AppError::Unknown(err.to_string())
         })
+    }
+
+    pub fn library_call(
+        &self,
+        payload: LibraryCallRequest,
+    ) -> Result<LibraryCallResponse, AppError> {
+        let request = DotnetRequest {
+            id: next_request_id(),
+            command: "library.call".to_string(),
+            payload: serde_json::to_value(payload)
+                .map_err(|err| AppError::Unknown(err.to_string()))?,
+        };
+        let response = self.send_request(&request)?;
+        let payload = response_payload(response, "library response payload")?;
+        Ok(LibraryCallResponse { payload })
     }
 }
 
@@ -207,6 +213,23 @@ fn map_dotnet_error(error: &DotnetError) -> AppError {
         "InvalidRequest" => AppError::Validation(message),
         "Internal" => AppError::Unknown(message),
         _ => AppError::Unknown(message),
+    }
+}
+
+fn response_payload(response: DotnetResponse, context: &str) -> Result<Value, AppError> {
+    match response.status.as_str() {
+        "ok" => response.payload.ok_or_else(|| {
+            AppError::Unknown(format!("Missing {context}"))
+        }),
+        "error" => Err(response
+            .error
+            .as_ref()
+            .map(map_dotnet_error)
+            .unwrap_or_else(|| AppError::Unknown("Unknown .NET error".to_string()))),
+        _ => Err(AppError::Unknown(format!(
+            "Unexpected .NET status '{}' for {context}",
+            response.status
+        ))),
     }
 }
 
