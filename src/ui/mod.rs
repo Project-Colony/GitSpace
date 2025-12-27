@@ -1,4 +1,5 @@
 pub mod app;
+pub mod animation;
 pub mod auth;
 pub mod branches;
 pub mod clone;

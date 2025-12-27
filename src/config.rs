@@ -133,6 +133,8 @@ pub struct Preferences {
     branch_box_height: f32,
     #[serde(default)]
     pinned_branches: Vec<String>,
+    #[serde(default)]
+    reduced_motion: bool,
 }
 
 impl Default for Preferences {
@@ -150,6 +152,7 @@ impl Default for Preferences {
             control_height: default_control_height(),
             branch_box_height: default_branch_box_height(),
             pinned_branches: Vec::new(),
+            reduced_motion: false,
         }
     }
 }
@@ -376,6 +379,14 @@ impl Preferences {
 
     pub fn set_pinned_branches(&mut self, branches: Vec<String>) {
         self.pinned_branches = branches;
+    }
+
+    pub fn reduced_motion(&self) -> bool {
+        self.reduced_motion
+    }
+
+    pub fn set_reduced_motion(&mut self, reduced_motion: bool) {
+        self.reduced_motion = reduced_motion;
     }
 
     pub fn save_to_path<P: AsRef<Path>>(&self, path: P) -> std::io::Result<()> {
