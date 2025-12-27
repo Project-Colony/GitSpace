@@ -11,10 +11,18 @@ fn dotnet_available() -> bool {
         .unwrap_or(false)
 }
 
+fn skip_if_dotnet_unavailable(test_name: &str) -> bool {
+    if !dotnet_available() {
+        eprintln!("Skipping {test_name}: dotnet runtime not available.");
+        return true;
+    }
+
+    false
+}
+
 #[test]
 fn ipc_handshake_ping_ok() {
-    if !dotnet_available() {
-        eprintln!("Skipping IPC handshake test: dotnet runtime not available.");
+    if skip_if_dotnet_unavailable("IPC handshake test") {
         return;
     }
 
@@ -49,4 +57,59 @@ fn dotnet_error_mapping_validation() {
 
     let mapped = super::map_dotnet_error(&error);
     assert!(matches!(mapped, AppError::Validation(_)));
+}
+
+#[test]
+fn ipc_credential_request_statuses() {
+    if skip_if_dotnet_unavailable("credential.request test") {
+        return;
+    }
+
+    let client = DotnetClient::helper();
+
+    let get_response = client
+        .credential_request(crate::dotnet::CredentialRequest {
+            service: "gitspace-test".to_string(),
+            account: Some("user@example.com".to_string()),
+            action: "get".to_string(),
+        })
+        .expect("credential request should succeed");
+    assert_eq!(get_response.status, "not_found");
+    assert!(get_response.username.is_none());
+    assert!(get_response.secret.is_none());
+
+    let store_response = client
+        .credential_request(crate::dotnet::CredentialRequest {
+            service: "gitspace-test".to_string(),
+            account: Some("user@example.com".to_string()),
+            action: "store".to_string(),
+        })
+        .expect("credential store should succeed");
+    assert_eq!(store_response.status, "denied");
+    assert!(store_response.username.is_none());
+    assert!(store_response.secret.is_none());
+}
+
+#[test]
+fn ipc_library_call() {
+    if skip_if_dotnet_unavailable("library.call test") {
+        return;
+    }
+
+    let client = DotnetClient::helper();
+
+    let response = client
+        .library_call(crate::dotnet::LibraryCallRequest {
+            name: "system.info".to_string(),
+            payload: json!({}),
+        })
+        .expect("library call should succeed");
+    assert!(response.payload.get("os").is_some());
+    assert!(response.payload.get("version").is_some());
+
+    let error = client.library_call(crate::dotnet::LibraryCallRequest {
+        name: "unknown.library".to_string(),
+        payload: json!({}),
+    });
+    assert!(matches!(error, Err(AppError::Validation(_))));
 }
