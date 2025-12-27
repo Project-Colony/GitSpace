@@ -52,6 +52,7 @@ var response = request.Command.ToLowerInvariant() switch
         version = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.1.0"
     }),
     "dialog.open" => HandleDialogOpen(request),
+    "credential.request" => HandleCredentialRequest(request),
     _ => Response.Error(
         request.Id,
         "InvalidRequest",
@@ -84,6 +85,13 @@ internal sealed record DialogFilter(string Label, string[] Extensions);
 internal sealed record DialogOptions(
     [property: JsonPropertyName("multi_select")] bool MultiSelect,
     [property: JsonPropertyName("show_hidden")] bool ShowHidden);
+
+internal sealed record CredentialRequest(
+    string Service,
+    string? Account,
+    string Action);
+
+internal sealed record CredentialPayload(string? Username, string? Secret, string Status);
 
 static Response HandleDialogOpen(Request request)
 {
@@ -158,6 +166,105 @@ static Response HandleDialogOpen(Request request)
             "Unhandled exception",
             new { error = ex.Message });
     }
+}
+
+static Response HandleCredentialRequest(Request request)
+{
+    CredentialRequest? payload;
+    try
+    {
+        payload = JsonSerializer.Deserialize<CredentialRequest>(
+            request.Payload.GetRawText(),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+    }
+    catch (JsonException ex)
+    {
+        return Response.Error(
+            request.Id,
+            "InvalidRequest",
+            $"Malformed credential payload: {ex.Message}",
+            null);
+    }
+
+    if (payload is null || string.IsNullOrWhiteSpace(payload.Service))
+    {
+        return Response.Error(
+            request.Id,
+            "InvalidRequest",
+            "Missing payload.service",
+            new { field = "service" });
+    }
+
+    if (string.IsNullOrWhiteSpace(payload.Action))
+    {
+        return Response.Error(
+            request.Id,
+            "InvalidRequest",
+            "Missing payload.action",
+            new { field = "action" });
+    }
+
+    var action = payload.Action.ToLowerInvariant();
+    if (action is not ("get" or "store" or "erase"))
+    {
+        return Response.Error(
+            request.Id,
+            "InvalidRequest",
+            "Unsupported payload.action",
+            new { action = payload.Action });
+    }
+
+    try
+    {
+        var provider = CredentialProviderFactory.Create();
+        var result = action switch
+        {
+            "get" => provider.Get(payload.Service, payload.Account),
+            "store" => provider.Store(payload.Service, payload.Account),
+            "erase" => provider.Erase(payload.Service, payload.Account),
+            _ => new CredentialPayload(null, null, "denied")
+        };
+
+        return Response.Ok(request.Id, new
+        {
+            username = result.Username,
+            secret = result.Secret,
+            status = result.Status
+        });
+    }
+    catch (Exception ex)
+    {
+        return Response.Error(
+            request.Id,
+            "Internal",
+            "Unhandled exception",
+            new { error = ex.Message });
+    }
+}
+
+internal interface ICredentialProvider
+{
+    CredentialPayload Get(string service, string? account);
+    CredentialPayload Store(string service, string? account);
+    CredentialPayload Erase(string service, string? account);
+}
+
+internal static class CredentialProviderFactory
+{
+    public static ICredentialProvider Create()
+        => new StubCredentialProvider();
+}
+
+internal sealed class StubCredentialProvider : ICredentialProvider
+{
+    public CredentialPayload Get(string service, string? account)
+        => new(null, null, "not_found");
+
+    public CredentialPayload Store(string service, string? account)
+        => new(null, null, "denied");
+
+    public CredentialPayload Erase(string service, string? account)
+        => new(null, null, "denied");
 }
 
 internal sealed record DialogOpenResult(string[] Paths, bool Cancelled)
