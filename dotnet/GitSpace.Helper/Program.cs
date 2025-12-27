@@ -390,32 +390,32 @@ static DialogOpenResult OpenFileDialogNative(DialogFilter[] filters, DialogOptio
     var filterList = BuildNativeFilter(filters);
     if (options.MultiSelect)
     {
-        var result = Nfd.OpenDialogMultiple(out var paths, filterList, null);
-        return result == NfdResult.Ok && paths is { Length: > 0 }
-            ? new DialogOpenResult(paths, false)
+        var result = Dialog.FileOpenMultiple(filterList, null);
+        return result.IsOk && result.Paths is { Count: > 0 }
+            ? new DialogOpenResult(result.Paths.ToArray(), false)
             : DialogOpenResult.CancelledResult;
     }
 
-    var singleResult = Nfd.OpenDialog(out var path, filterList, null);
-    return singleResult == NfdResult.Ok && !string.IsNullOrWhiteSpace(path)
-        ? new DialogOpenResult(new[] { path }, false)
+    var singleResult = Dialog.FileOpen(filterList, null);
+    return singleResult.IsOk && !string.IsNullOrWhiteSpace(singleResult.Path)
+        ? new DialogOpenResult(new[] { singleResult.Path }, false)
         : DialogOpenResult.CancelledResult;
 }
 
 static DialogOpenResult SaveFileDialogNative(DialogFilter[] filters)
 {
     var filterList = BuildNativeFilter(filters);
-    var result = Nfd.SaveDialog(out var path, filterList, null);
-    return result == NfdResult.Ok && !string.IsNullOrWhiteSpace(path)
-        ? new DialogOpenResult(new[] { path }, false)
+    var result = Dialog.FileSave(filterList, null);
+    return result.IsOk && !string.IsNullOrWhiteSpace(result.Path)
+        ? new DialogOpenResult(new[] { result.Path }, false)
         : DialogOpenResult.CancelledResult;
 }
 
 static DialogOpenResult OpenFolderDialogNative()
 {
-    var result = Nfd.PickFolder(out var path, null);
-    return result == NfdResult.Ok && !string.IsNullOrWhiteSpace(path)
-        ? new DialogOpenResult(new[] { path }, false)
+    var result = Dialog.FolderPicker(null);
+    return result.IsOk && !string.IsNullOrWhiteSpace(result.Path)
+        ? new DialogOpenResult(new[] { result.Path }, false)
         : DialogOpenResult.CancelledResult;
 }
 #endif
@@ -523,15 +523,52 @@ internal sealed class MacKeychainProvider : ICredentialProvider
         var serviceName = Encoding.UTF8.GetBytes(service);
         var accountName = string.IsNullOrWhiteSpace(account) ? Array.Empty<byte>() : Encoding.UTF8.GetBytes(account);
 
-        var status = SecKeychainFindGenericPassword(
+        int status;
+        if (accountName.Length == 0)
+        {
+            status = SecKeychainFindGenericPassword(
+                IntPtr.Zero,
+                (uint)serviceName.Length,
+                serviceName,
+                0,
+                IntPtr.Zero,
+                out var passwordLength,
+                out var passwordData,
+                out var itemRef);
+
+            if (status != ErrSecSuccess)
+            {
+                return new CredentialPayload(null, null, CredentialStatusMapper.FromMacStatus(status));
+            }
+
+            try
+            {
+                var secret = ReadSecret(passwordData, (int)passwordLength);
+                return new CredentialPayload(account, secret, CredentialStatus.Ok);
+            }
+            finally
+            {
+                if (passwordData != IntPtr.Zero)
+                {
+                    SecKeychainItemFreeContent(IntPtr.Zero, passwordData);
+                }
+
+                if (itemRef != IntPtr.Zero)
+                {
+                    CFRelease(itemRef);
+                }
+            }
+        }
+
+        status = SecKeychainFindGenericPassword(
             IntPtr.Zero,
             (uint)serviceName.Length,
             serviceName,
             (uint)accountName.Length,
-            accountName.Length == 0 ? IntPtr.Zero : accountName,
-            out var passwordLength,
-            out var passwordData,
-            out var itemRef);
+            accountName,
+            out var accountPasswordLength,
+            out var accountPasswordData,
+            out var accountItemRef);
 
         if (status != ErrSecSuccess)
         {
@@ -540,19 +577,19 @@ internal sealed class MacKeychainProvider : ICredentialProvider
 
         try
         {
-            var secret = ReadSecret(passwordData, (int)passwordLength);
+            var secret = ReadSecret(accountPasswordData, (int)accountPasswordLength);
             return new CredentialPayload(account, secret, CredentialStatus.Ok);
         }
         finally
         {
-            if (passwordData != IntPtr.Zero)
+            if (accountPasswordData != IntPtr.Zero)
             {
-                SecKeychainItemFreeContent(IntPtr.Zero, passwordData);
+                SecKeychainItemFreeContent(IntPtr.Zero, accountPasswordData);
             }
 
-            if (itemRef != IntPtr.Zero)
+            if (accountItemRef != IntPtr.Zero)
             {
-                CFRelease(itemRef);
+                CFRelease(accountItemRef);
             }
         }
     }
@@ -593,15 +630,54 @@ internal sealed class MacKeychainProvider : ICredentialProvider
         var serviceName = Encoding.UTF8.GetBytes(service);
         var accountName = string.IsNullOrWhiteSpace(account) ? Array.Empty<byte>() : Encoding.UTF8.GetBytes(account);
 
-        var status = SecKeychainFindGenericPassword(
+        int status;
+        if (accountName.Length == 0)
+        {
+            status = SecKeychainFindGenericPassword(
+                IntPtr.Zero,
+                (uint)serviceName.Length,
+                serviceName,
+                0,
+                IntPtr.Zero,
+                out var passwordLength,
+                out var passwordData,
+                out var itemRef);
+
+            if (status != ErrSecSuccess)
+            {
+                return new CredentialPayload(null, null, CredentialStatusMapper.FromMacStatus(status));
+            }
+
+            try
+            {
+                var deleteStatus = SecKeychainItemDelete(itemRef);
+                return deleteStatus == ErrSecSuccess
+                    ? new CredentialPayload(null, null, CredentialStatus.Ok)
+                    : new CredentialPayload(null, null, CredentialStatusMapper.FromMacStatus(deleteStatus));
+            }
+            finally
+            {
+                if (passwordData != IntPtr.Zero)
+                {
+                    SecKeychainItemFreeContent(IntPtr.Zero, passwordData);
+                }
+
+                if (itemRef != IntPtr.Zero)
+                {
+                    CFRelease(itemRef);
+                }
+            }
+        }
+
+        status = SecKeychainFindGenericPassword(
             IntPtr.Zero,
             (uint)serviceName.Length,
             serviceName,
             (uint)accountName.Length,
-            accountName.Length == 0 ? IntPtr.Zero : accountName,
-            out var passwordLength,
-            out var passwordData,
-            out var itemRef);
+            accountName,
+            out var accountPasswordLength,
+            out var accountPasswordData,
+            out var accountItemRef);
 
         if (status != ErrSecSuccess)
         {
@@ -610,21 +686,21 @@ internal sealed class MacKeychainProvider : ICredentialProvider
 
         try
         {
-            var deleteStatus = SecKeychainItemDelete(itemRef);
+            var deleteStatus = SecKeychainItemDelete(accountItemRef);
             return deleteStatus == ErrSecSuccess
                 ? new CredentialPayload(null, null, CredentialStatus.Ok)
                 : new CredentialPayload(null, null, CredentialStatusMapper.FromMacStatus(deleteStatus));
         }
         finally
         {
-            if (passwordData != IntPtr.Zero)
+            if (accountPasswordData != IntPtr.Zero)
             {
-                SecKeychainItemFreeContent(IntPtr.Zero, passwordData);
+                SecKeychainItemFreeContent(IntPtr.Zero, accountPasswordData);
             }
 
-            if (itemRef != IntPtr.Zero)
+            if (accountItemRef != IntPtr.Zero)
             {
-                CFRelease(itemRef);
+                CFRelease(accountItemRef);
             }
         }
     }
@@ -717,7 +793,7 @@ internal sealed class LinuxSecretServiceProvider : ICredentialProvider
 
     private static async Task<CredentialPayload> GetAsync(string service, string? account)
     {
-        await using var connection = new Connection(Address.Session);
+        using var connection = new Connection(Address.Session);
         await connection.ConnectAsync();
 
         var secretService = connection.CreateProxy<ISecretService>(ServiceName, ServicePath);
@@ -767,7 +843,7 @@ internal sealed class LinuxSecretServiceProvider : ICredentialProvider
             return new CredentialPayload(null, null, CredentialStatus.Denied);
         }
 
-        await using var connection = new Connection(Address.Session);
+        using var connection = new Connection(Address.Session);
         await connection.ConnectAsync();
 
         var secretService = connection.CreateProxy<ISecretService>(ServiceName, ServicePath);
@@ -802,7 +878,7 @@ internal sealed class LinuxSecretServiceProvider : ICredentialProvider
 
     private static async Task<CredentialPayload> EraseAsync(string service, string? account)
     {
-        await using var connection = new Connection(Address.Session);
+        using var connection = new Connection(Address.Session);
         await connection.ConnectAsync();
 
         var secretService = connection.CreateProxy<ISecretService>(ServiceName, ServicePath);
