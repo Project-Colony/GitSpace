@@ -229,7 +229,7 @@ static Response HandleCredentialRequest(Request request)
             "get" => provider.Get(payload.Service, payload.Account),
             "store" => provider.Store(payload.Service, payload.Account, payload.Secret),
             "erase" => provider.Erase(payload.Service, payload.Account),
-            _ => new CredentialPayload(null, null, "denied")
+            _ => new CredentialPayload(null, null, CredentialStatus.Denied)
         };
 
         return Response.Ok(request.Id, new
@@ -292,13 +292,6 @@ static Response HandleLibraryCall(Request request)
     };
 }
 
-internal interface ICredentialProvider
-{
-    CredentialPayload Get(string service, string? account);
-    CredentialPayload Store(string service, string? account, string? secret);
-    CredentialPayload Erase(string service, string? account);
-}
-
 internal static class CredentialProviderFactory
 {
     public static ICredentialProvider Create()
@@ -311,33 +304,88 @@ internal static class CredentialProviderFactory
 #endif
         if (OperatingSystem.IsMacOS())
         {
-            return new MacOsCredentialProvider();
+            return new MacKeychainProvider();
         }
         if (OperatingSystem.IsLinux())
         {
-            return new LinuxCredentialProvider();
+            return new LinuxSecretServiceProvider();
         }
         return new StubCredentialProvider();
+    }
+}
+
+internal interface ICredentialProvider
+{
+    CredentialPayload Get(string service, string? account);
+    CredentialPayload Store(string service, string? account, string? secret);
+    CredentialPayload Erase(string service, string? account);
+}
+
+internal static class CredentialStatus
+{
+    public const string Ok = "ok";
+    public const string NotFound = "not_found";
+    public const string Denied = "denied";
+    public const string Error = "error";
+}
+
+internal static class CredentialStatusMapper
+{
+#if WINDOWS
+    private const int ErrorNotFound = 1168;
+    private const int ErrorAccessDenied = 5;
+
+    public static string FromWindowsError(int error)
+    {
+        return error switch
+        {
+            ErrorNotFound => CredentialStatus.NotFound,
+            ErrorAccessDenied => CredentialStatus.Denied,
+            _ => CredentialStatus.Error
+        };
+    }
+#endif
+
+    private const int ErrSecItemNotFound = -25300;
+    private const int ErrSecAuthFailed = -25293;
+
+    public static string FromMacStatus(int status)
+    {
+        return status switch
+        {
+            ErrSecItemNotFound => CredentialStatus.NotFound,
+            ErrSecAuthFailed => CredentialStatus.Denied,
+            _ => CredentialStatus.Error
+        };
+    }
+
+    public static string FromLinuxErrorName(string errorName)
+    {
+        return errorName switch
+        {
+            "org.freedesktop.Secret.Error.NoSuchObject" => CredentialStatus.NotFound,
+            "org.freedesktop.Secret.Error.IsLocked" => CredentialStatus.Denied,
+            "org.freedesktop.Secret.Error.PermissionDenied" => CredentialStatus.Denied,
+            _ => CredentialStatus.Error
+        };
     }
 }
 
 internal sealed class StubCredentialProvider : ICredentialProvider
 {
     public CredentialPayload Get(string service, string? account)
-        => new(null, null, "not_found");
+        => new(null, null, CredentialStatus.NotFound);
 
     public CredentialPayload Store(string service, string? account, string? secret)
-        => new(null, null, "denied");
+        => new(null, null, CredentialStatus.Denied);
 
     public CredentialPayload Erase(string service, string? account)
-        => new(null, null, "denied");
+        => new(null, null, CredentialStatus.Denied);
 }
 
-internal sealed class MacOsCredentialProvider : ICredentialProvider
+internal sealed class MacKeychainProvider : ICredentialProvider
 {
     private const int ErrSecSuccess = 0;
-    private const int ErrSecItemNotFound = -25300;
-    private const int ErrSecAuthFailed = -25293;
     private const string SecurityLibrary = "/System/Library/Frameworks/Security.framework/Security";
     private const string CoreFoundationLibrary = "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation";
 
@@ -358,13 +406,13 @@ internal sealed class MacOsCredentialProvider : ICredentialProvider
 
         if (status != ErrSecSuccess)
         {
-            return new CredentialPayload(null, null, MapCredentialStatus(status));
+            return new CredentialPayload(null, null, CredentialStatusMapper.FromMacStatus(status));
         }
 
         try
         {
             var secret = ReadSecret(passwordData, (int)passwordLength);
-            return new CredentialPayload(account, secret, "ok");
+            return new CredentialPayload(account, secret, CredentialStatus.Ok);
         }
         finally
         {
@@ -384,7 +432,7 @@ internal sealed class MacOsCredentialProvider : ICredentialProvider
     {
         if (string.IsNullOrWhiteSpace(account) || string.IsNullOrWhiteSpace(secret))
         {
-            return new CredentialPayload(null, null, "denied");
+            return new CredentialPayload(null, null, CredentialStatus.Denied);
         }
 
         var serviceName = Encoding.UTF8.GetBytes(service);
@@ -407,8 +455,8 @@ internal sealed class MacOsCredentialProvider : ICredentialProvider
         }
 
         return status == ErrSecSuccess
-            ? new CredentialPayload(account, null, "ok")
-            : new CredentialPayload(null, null, MapCredentialStatus(status));
+            ? new CredentialPayload(account, null, CredentialStatus.Ok)
+            : new CredentialPayload(null, null, CredentialStatusMapper.FromMacStatus(status));
     }
 
     public CredentialPayload Erase(string service, string? account)
@@ -428,15 +476,15 @@ internal sealed class MacOsCredentialProvider : ICredentialProvider
 
         if (status != ErrSecSuccess)
         {
-            return new CredentialPayload(null, null, MapCredentialStatus(status));
+            return new CredentialPayload(null, null, CredentialStatusMapper.FromMacStatus(status));
         }
 
         try
         {
             var deleteStatus = SecKeychainItemDelete(itemRef);
             return deleteStatus == ErrSecSuccess
-                ? new CredentialPayload(null, null, "ok")
-                : new CredentialPayload(null, null, MapCredentialStatus(deleteStatus));
+                ? new CredentialPayload(null, null, CredentialStatus.Ok)
+                : new CredentialPayload(null, null, CredentialStatusMapper.FromMacStatus(deleteStatus));
         }
         finally
         {
@@ -462,16 +510,6 @@ internal sealed class MacOsCredentialProvider : ICredentialProvider
         var buffer = new byte[length];
         Marshal.Copy(passwordData, buffer, 0, length);
         return Encoding.UTF8.GetString(buffer);
-    }
-
-    private static string MapCredentialStatus(int status)
-    {
-        return status switch
-        {
-            ErrSecItemNotFound => "not_found",
-            ErrSecAuthFailed => "denied",
-            _ => "denied"
-        };
     }
 
     [DllImport(SecurityLibrary)]
@@ -517,7 +555,7 @@ internal sealed class MacOsCredentialProvider : ICredentialProvider
     private static extern void CFRelease(IntPtr cfRef);
 }
 
-internal sealed class LinuxCredentialProvider : ICredentialProvider
+internal sealed class LinuxSecretServiceProvider : ICredentialProvider
 {
     private const string ServiceName = "org.freedesktop.secrets";
     private static readonly ObjectPath ServicePath = new("/org/freedesktop/secrets");
@@ -540,11 +578,11 @@ internal sealed class LinuxCredentialProvider : ICredentialProvider
         }
         catch (DBusException ex)
         {
-            return new CredentialPayload(null, null, MapCredentialStatus(ex.ErrorName));
+            return new CredentialPayload(null, null, CredentialStatusMapper.FromLinuxErrorName(ex.ErrorName));
         }
         catch
         {
-            return new CredentialPayload(null, null, "denied");
+            return new CredentialPayload(null, null, CredentialStatus.Error);
         }
     }
 
@@ -564,14 +602,14 @@ internal sealed class LinuxCredentialProvider : ICredentialProvider
             var (_, promptPath) = await secretService.UnlockAsync(locked);
             if (promptPath != RootPromptPath)
             {
-                return new CredentialPayload(null, null, "denied");
+                return new CredentialPayload(null, null, CredentialStatus.Denied);
             }
         }
 
         var itemPath = unlocked.FirstOrDefault();
         if (itemPath == default)
         {
-            return new CredentialPayload(null, null, "not_found");
+            return new CredentialPayload(null, null, CredentialStatus.NotFound);
         }
 
         var item = connection.CreateProxy<ISecretItem>(ServiceName, itemPath);
@@ -590,14 +628,14 @@ internal sealed class LinuxCredentialProvider : ICredentialProvider
             ? Encoding.UTF8.GetString(secret.Value)
             : null;
 
-        return new CredentialPayload(username, secretValue, "ok");
+        return new CredentialPayload(username, secretValue, CredentialStatus.Ok);
     }
 
     private static async Task<CredentialPayload> StoreAsync(string service, string? account, string? secret)
     {
         if (string.IsNullOrWhiteSpace(account) || string.IsNullOrWhiteSpace(secret))
         {
-            return new CredentialPayload(null, null, "denied");
+            return new CredentialPayload(null, null, CredentialStatus.Denied);
         }
 
         await using var connection = new Connection(Address.Session);
@@ -609,7 +647,7 @@ internal sealed class LinuxCredentialProvider : ICredentialProvider
         var collectionPath = await secretService.ReadAliasAsync("default");
         if (collectionPath == default)
         {
-            return new CredentialPayload(null, null, "denied");
+            return new CredentialPayload(null, null, CredentialStatus.Denied);
         }
 
         var properties = new Dictionary<string, object>
@@ -627,10 +665,10 @@ internal sealed class LinuxCredentialProvider : ICredentialProvider
         var (_, promptPath) = await secretService.CreateItemAsync(collectionPath, properties, secretStruct, true);
         if (promptPath != RootPromptPath)
         {
-            return new CredentialPayload(null, null, "denied");
+            return new CredentialPayload(null, null, CredentialStatus.Denied);
         }
 
-        return new CredentialPayload(account, null, "ok");
+        return new CredentialPayload(account, null, CredentialStatus.Ok);
     }
 
     private static async Task<CredentialPayload> EraseAsync(string service, string? account)
@@ -648,7 +686,7 @@ internal sealed class LinuxCredentialProvider : ICredentialProvider
             var (unlockResult, promptPath) = await secretService.UnlockAsync(locked);
             if (promptPath != RootPromptPath)
             {
-                return new CredentialPayload(null, null, "denied");
+                return new CredentialPayload(null, null, CredentialStatus.Denied);
             }
 
             itemPath = unlockResult.FirstOrDefault();
@@ -656,17 +694,17 @@ internal sealed class LinuxCredentialProvider : ICredentialProvider
 
         if (itemPath == default)
         {
-            return new CredentialPayload(null, null, "not_found");
+            return new CredentialPayload(null, null, CredentialStatus.NotFound);
         }
 
         var item = connection.CreateProxy<ISecretItem>(ServiceName, itemPath);
         var prompt = await item.DeleteAsync();
         if (prompt != RootPromptPath)
         {
-            return new CredentialPayload(null, null, "denied");
+            return new CredentialPayload(null, null, CredentialStatus.Denied);
         }
 
-        return new CredentialPayload(null, null, "ok");
+        return new CredentialPayload(null, null, CredentialStatus.Ok);
     }
 
     private static IDictionary<string, string> BuildAttributes(string service, string? account)
@@ -690,16 +728,6 @@ internal sealed class LinuxCredentialProvider : ICredentialProvider
         return session;
     }
 
-    private static string MapCredentialStatus(string errorName)
-    {
-        return errorName switch
-        {
-            "org.freedesktop.Secret.Error.NoSuchObject" => "not_found",
-            "org.freedesktop.Secret.Error.IsLocked" => "denied",
-            "org.freedesktop.Secret.Error.PermissionDenied" => "denied",
-            _ => "denied"
-        };
-    }
 }
 
 [DBusInterface("org.freedesktop.Secret.Service")]
@@ -748,14 +776,12 @@ internal sealed class WindowsCredentialProvider : ICredentialProvider
 {
     private const uint CRED_TYPE_GENERIC = 1;
     private const uint CRED_PERSIST_LOCAL_MACHINE = 2;
-    private const int ERROR_NOT_FOUND = 1168;
-    private const int ERROR_ACCESS_DENIED = 5;
 
     public CredentialPayload Get(string service, string? account)
     {
         if (!CredRead(service, CRED_TYPE_GENERIC, 0, out var credentialPtr))
         {
-            return new CredentialPayload(null, null, MapCredentialStatus(Marshal.GetLastWin32Error()));
+            return new CredentialPayload(null, null, CredentialStatusMapper.FromWindowsError(Marshal.GetLastWin32Error()));
         }
 
         try
@@ -763,7 +789,7 @@ internal sealed class WindowsCredentialProvider : ICredentialProvider
             var credential = Marshal.PtrToStructure<CREDENTIAL>(credentialPtr);
             var username = string.IsNullOrWhiteSpace(credential.UserName) ? account : credential.UserName;
             var secret = ReadCredentialBlob(credential);
-            return new CredentialPayload(username, secret, "ok");
+            return new CredentialPayload(username, secret, CredentialStatus.Ok);
         }
         finally
         {
@@ -775,7 +801,7 @@ internal sealed class WindowsCredentialProvider : ICredentialProvider
     {
         if (string.IsNullOrWhiteSpace(account) || string.IsNullOrWhiteSpace(secret))
         {
-            return new CredentialPayload(null, null, "denied");
+            return new CredentialPayload(null, null, CredentialStatus.Denied);
         }
 
         var secretBytes = Encoding.UTF8.GetBytes(secret);
@@ -795,10 +821,10 @@ internal sealed class WindowsCredentialProvider : ICredentialProvider
 
             if (CredWrite(ref credential, 0))
             {
-                return new CredentialPayload(account, null, "ok");
+                return new CredentialPayload(account, null, CredentialStatus.Ok);
             }
 
-            return new CredentialPayload(null, null, MapCredentialStatus(Marshal.GetLastWin32Error()));
+            return new CredentialPayload(null, null, CredentialStatusMapper.FromWindowsError(Marshal.GetLastWin32Error()));
         }
         finally
         {
@@ -810,10 +836,10 @@ internal sealed class WindowsCredentialProvider : ICredentialProvider
     {
         if (CredDelete(service, CRED_TYPE_GENERIC, 0))
         {
-            return new CredentialPayload(null, null, "ok");
+            return new CredentialPayload(null, null, CredentialStatus.Ok);
         }
 
-        return new CredentialPayload(null, null, MapCredentialStatus(Marshal.GetLastWin32Error()));
+        return new CredentialPayload(null, null, CredentialStatusMapper.FromWindowsError(Marshal.GetLastWin32Error()));
     }
 
     private static string? ReadCredentialBlob(CREDENTIAL credential)
@@ -826,16 +852,6 @@ internal sealed class WindowsCredentialProvider : ICredentialProvider
         var blob = new byte[credential.CredentialBlobSize];
         Marshal.Copy(credential.CredentialBlob, blob, 0, (int)credential.CredentialBlobSize);
         return Encoding.UTF8.GetString(blob).TrimEnd('\0');
-    }
-
-    private static string MapCredentialStatus(int error)
-    {
-        return error switch
-        {
-            ERROR_NOT_FOUND => "not_found",
-            ERROR_ACCESS_DENIED => "denied",
-            _ => "denied"
-        };
     }
 
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
