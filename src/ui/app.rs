@@ -20,6 +20,7 @@ use crate::ui::{
     repo_overview::RepoOverviewPanel,
     settings::SettingsPanel,
     stage::StagePanel,
+    dev_gallery::DevGalleryPanel,
     theme::Theme,
 };
 use crate::update;
@@ -39,6 +40,7 @@ pub struct GitSpaceApp {
     auth_manager: AuthManager,
     auth_panel: AuthPanel,
     settings_panel: SettingsPanel,
+    dev_gallery_panel: DevGalleryPanel,
     notifications: NotificationCenter,
     update_promise: Option<Promise<update::UpdateResult>>,
     update_checked: bool,
@@ -54,6 +56,7 @@ impl GitSpaceApp {
         let default_clone_path = preferences.default_clone_path().to_string();
         let theme = Theme::from_mode(preferences.theme_mode());
         let settings_theme = theme.clone();
+        let dev_gallery_theme = theme.clone();
         let auth_manager =
             AuthManager::with_encrypted_fallback(preferences.allow_encrypted_tokens());
         let current_repo = config
@@ -89,12 +92,19 @@ impl GitSpaceApp {
             initialized: false,
             active_tab: MainTab::Clone,
             settings_panel: SettingsPanel::new(settings_theme, preferences),
+            dev_gallery_panel: DevGalleryPanel::new(dev_gallery_theme),
             notifications: NotificationCenter::default(),
             update_promise: None,
             update_checked: false,
             telemetry,
             telemetry_prompt_enqueued: false,
-            tab_order: MainTab::ALL.to_vec(),
+            tab_order: {
+                let mut tabs = MainTab::ALL.to_vec();
+                if !cfg!(debug_assertions) {
+                    tabs.retain(|tab| *tab != MainTab::DevGallery);
+                }
+                tabs
+            },
         }
     }
 
@@ -178,6 +188,7 @@ impl eframe::App for GitSpaceApp {
                         &mut self.notifications,
                         self.current_repo.as_ref(),
                         &self.auth_manager,
+                        Some(&mut self.dev_gallery_panel),
                     ) {
                         self.load_repo_context(selected);
                     }

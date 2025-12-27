@@ -3,8 +3,8 @@ use eframe::egui::{self, Align, Id, Layout, RichText, Sense, Ui, Vec2};
 use crate::auth::AuthManager;
 use crate::config::AppConfig;
 use crate::ui::{
-    auth::AuthPanel, branches::BranchPanel, clone::ClonePanel, context::RepoContext, menu,
-    notifications::NotificationCenter, perf::PerfScope, recent::RecentList,
+    auth::AuthPanel, branches::BranchPanel, clone::ClonePanel, context::RepoContext, dev_gallery,
+    menu, notifications::NotificationCenter, perf::PerfScope, recent::RecentList,
     repo_overview::RepoOverviewPanel, settings::SettingsPanel, stage::StagePanel, theme::Theme,
 };
 
@@ -18,6 +18,7 @@ pub enum MainTab {
     Branches,
     Auth,
     Settings,
+    DevGallery,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -52,7 +53,7 @@ pub struct TabInteraction {
 }
 
 impl MainTab {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Clone,
         Self::Open,
         Self::RepoOverview,
@@ -61,6 +62,7 @@ impl MainTab {
         Self::Branches,
         Self::Auth,
         Self::Settings,
+        Self::DevGallery,
     ];
 
     pub fn label(&self) -> &'static str {
@@ -73,6 +75,7 @@ impl MainTab {
             Self::Branches => "Branches",
             Self::Auth => "Auth",
             Self::Settings => "Settings",
+            Self::DevGallery => "Dev Gallery",
         }
     }
 }
@@ -378,6 +381,7 @@ impl<'a> ShellLayout<'a> {
         notifications: &mut NotificationCenter,
         repo: Option<&RepoContext>,
         auth_manager: &AuthManager,
+        dev_gallery_panel: Option<&mut dev_gallery::DevGalleryPanel>,
     ) -> Option<String> {
         ui.add_space(8.0);
         match tab {
@@ -408,6 +412,14 @@ impl<'a> ShellLayout<'a> {
             }
             MainTab::Settings => {
                 settings_panel.ui(ui, notifications);
+                None
+            }
+            MainTab::DevGallery => {
+                if let Some(panel) = dev_gallery_panel {
+                    panel.ui(ui);
+                } else {
+                    ui.label("Dev gallery is only available in debug builds.");
+                }
                 None
             }
         }
