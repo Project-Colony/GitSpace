@@ -1,8 +1,10 @@
-use eframe::egui::{self, RichText, ScrollArea, TextEdit, Ui};
+use eframe::egui::{self, Align2, FontId, RichText, ScrollArea, TextEdit, Ui};
 use rfd::FileDialog;
 use std::{collections::HashSet, path::Path};
 
 use crate::config::AppConfig;
+use crate::dotnet::{DialogOpenRequest, DialogOptions, DotnetClient};
+use crate::ui::effects;
 use crate::ui::theme::Theme;
 
 #[derive(Debug, Clone)]
@@ -39,9 +41,9 @@ impl RecentList {
             );
 
             if ui.button("Browse...").clicked() {
-                if let Some(path) = FileDialog::new().pick_folder() {
+                if let Some(path) = self.open_workspace_dialog() {
                     self.search.clear();
-                    return Some(path.display().to_string());
+                    return Some(path);
                 }
             }
 
@@ -73,14 +75,47 @@ impl RecentList {
                         continue;
                     }
 
-                    let button = ui.add_sized(
-                        [520.0, 34.0],
-                        egui::Button::new(
-                            RichText::new(format!("{}", name))
-                                .color(self.theme.palette.text_primary)
-                                .strong(),
-                        )
-                        .fill(self.theme.palette.surface_highlight),
+                    let (rect, button) = ui.allocate_exact_size(
+                        egui::vec2(520.0, 36.0),
+                        egui::Sense::click(),
+                    );
+                    let id = ui.make_persistent_id(("recent", &entry.path));
+                    let hovered = button.hovered();
+                    let active = button.is_pointer_button_down_on();
+                    let fill = effects::animated_color(
+                        ui.ctx(),
+                        id.with("fill"),
+                        self.theme.palette.surface,
+                        self.theme.palette.surface_highlight,
+                        self.theme.palette.accent_weak,
+                        hovered,
+                        active,
+                    );
+                    let stroke = effects::animated_stroke(
+                        ui.ctx(),
+                        id.with("stroke"),
+                        egui::Stroke::new(1.0, self.theme.palette.surface_highlight),
+                        egui::Stroke::new(1.5, self.theme.palette.accent_weak),
+                        egui::Stroke::new(2.0, self.theme.palette.accent),
+                        hovered,
+                        active,
+                    );
+                    ui.painter().rect(rect, 10.0, fill, stroke);
+                    let text_color = effects::animated_color(
+                        ui.ctx(),
+                        id.with("text"),
+                        self.theme.palette.text_primary,
+                        self.theme.palette.text_primary,
+                        self.theme.palette.text_primary,
+                        hovered,
+                        active,
+                    );
+                    ui.painter().text(
+                        rect.left_center() + egui::vec2(12.0, 0.0),
+                        Align2::LEFT_CENTER,
+                        name,
+                        FontId::proportional(self.theme.typography.body),
+                        text_color,
                     );
 
                     if button.hovered() {
@@ -122,9 +157,9 @@ impl RecentList {
                         }
 
                         if open_button.clicked() {
-                            if let Some(path) = FileDialog::new().pick_folder() {
+                            if let Some(path) = self.open_workspace_dialog() {
                                 self.search.clear();
-                                selected = Some(path.display().to_string());
+                                selected = Some(path);
                             }
                         }
 
@@ -186,5 +221,26 @@ impl RecentList {
         }
 
         paths
+    }
+
+    fn open_workspace_dialog(&self) -> Option<String> {
+        let request = DialogOpenRequest {
+            kind: "open_folder".to_string(),
+            title: Some("Select a workspace folder".to_string()),
+            filters: Vec::new(),
+            options: DialogOptions {
+                multi_select: false,
+                show_hidden: false,
+            },
+        };
+        match DotnetClient::helper().dialog_open(request) {
+            Ok(response) => response.selected_paths.first().cloned(),
+            Err(err) => {
+                tracing::warn!("Native dialog failed: {err}");
+                FileDialog::new()
+                    .pick_folder()
+                    .map(|path| path.display().to_string())
+            }
+        }
     }
 }
