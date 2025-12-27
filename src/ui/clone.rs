@@ -15,6 +15,7 @@ use crate::auth::AuthManager;
 use crate::config::NetworkOptions;
 use crate::error::{AppError, logs_directory};
 use crate::git::clone::{CloneProgress, CloneRequest, clone_repository};
+use crate::ui::menu;
 use crate::ui::notifications::{Notification, NotificationAction, NotificationCenter};
 use crate::ui::theme::Theme;
 
@@ -226,6 +227,7 @@ impl ClonePanel {
             });
 
             ui.add_space(8.0);
+            let icon_id = ui.make_persistent_id("clone-results-icon");
             ComboBox::from_label("Results")
                 .selected_text(
                     self.selected_repo
@@ -233,17 +235,25 @@ impl ClonePanel {
                         .map(|repo| repo.name.clone())
                         .unwrap_or_else(|| "Select a repository".to_string()),
                 )
+                .icon(menu::combo_icon(self.theme.clone(), icon_id))
                 .show_ui(ui, |ui| {
-                    for idx in 0..self.search_results.len() {
-                        let repo = self.search_results[idx].clone();
-                        if ui
-                            .selectable_label(self.selected_repo == Some(idx), &repo.name)
+                    menu::with_menu_popup_motion(ui, "clone-results-menu", |ui| {
+                        for idx in 0..self.search_results.len() {
+                            let repo = self.search_results[idx].clone();
+                            if menu::menu_item(
+                                ui,
+                                &self.theme,
+                                ("clone-result", idx),
+                                &repo.name,
+                                self.selected_repo == Some(idx),
+                            )
                             .clicked()
-                        {
-                            self.selected_repo = Some(idx);
-                            self.update_selection(&repo);
+                            {
+                                self.selected_repo = Some(idx);
+                                self.update_selection(&repo);
+                            }
                         }
-                    }
+                    });
                 });
 
             ui.add_space(10.0);

@@ -8,7 +8,7 @@ use crate::git::branch::restore_file_from_branch;
 use crate::git::diff::{diff_file, staged_diff, working_tree_diff};
 use crate::git::stash::{StashEntry, apply_stash, create_stash, drop_stash, list_stashes};
 use crate::git::status::read_repo_status;
-use crate::ui::{context::RepoContext, theme::Theme};
+use crate::ui::{context::RepoContext, menu, theme::Theme};
 
 #[derive(Debug, Clone)]
 struct FileEntry {
@@ -214,10 +214,24 @@ impl StagePanel {
                         }
 
                         response.context_menu(|ui| {
-                            if ui.button("Restore file...").clicked() {
-                                pending_restore = Some(entry.path.clone());
-                                ui.close_menu();
-                            }
+                            menu::with_menu_popup_motion(
+                                ui,
+                                ("stage-context", &entry.path),
+                                |ui| {
+                                    if menu::menu_item(
+                                        ui,
+                                        &self.theme,
+                                        ("stage-restore", &entry.path),
+                                        "Restore file...",
+                                        false,
+                                    )
+                                    .clicked()
+                                    {
+                                        pending_restore = Some(entry.path.clone());
+                                        ui.close_menu();
+                                    }
+                                },
+                            );
                         });
                     });
                 }
@@ -300,20 +314,29 @@ impl StagePanel {
 
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("Template").color(self.theme.palette.text_secondary));
+                    let icon_id = ui.make_persistent_id("commit-template-icon");
                     ComboBox::from_id_source("commit_template")
                         .selected_text(COMMIT_TEMPLATES[self.selected_template].0)
+                        .icon(menu::combo_icon(self.theme.clone(), icon_id))
                         .show_ui(ui, |ui| {
-                            for (idx, (label, _)) in COMMIT_TEMPLATES.iter().enumerate() {
-                                if ui
-                                    .selectable_label(self.selected_template == idx, *label)
+                            menu::with_menu_popup_motion(ui, "commit-template-menu", |ui| {
+                                for (idx, (label, _)) in COMMIT_TEMPLATES.iter().enumerate() {
+                                    if menu::menu_item(
+                                        ui,
+                                        &self.theme,
+                                        ("commit-template-item", idx),
+                                        *label,
+                                        self.selected_template == idx,
+                                    )
                                     .clicked()
-                                {
-                                    self.selected_template = idx;
-                                    self.commit_message = self.decorate_commit_message(
-                                        COMMIT_TEMPLATES[idx].1.to_string(),
-                                    );
+                                    {
+                                        self.selected_template = idx;
+                                        self.commit_message = self.decorate_commit_message(
+                                            COMMIT_TEMPLATES[idx].1.to_string(),
+                                        );
+                                    }
                                 }
-                            }
+                            });
                         });
                 });
 

@@ -5,7 +5,7 @@ use crate::git::{
     diff::{FileDiff, commit_diff},
     log::{CommitFilter, CommitInfo, list_local_branches, read_commit_log},
 };
-use crate::ui::{context::RepoContext, theme::Theme};
+use crate::ui::{context::RepoContext, menu, theme::Theme};
 
 const MAX_COMMITS: usize = 200;
 const ROW_HEIGHT: f32 = 88.0;
@@ -133,21 +133,41 @@ impl HistoryPanel {
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("Branch").color(self.theme.palette.text_secondary));
+                        let icon_id = ui.make_persistent_id("history-branch-icon");
                         egui::ComboBox::from_id_source("branch_filter")
                             .selected_text(if self.filters.branch.is_empty() {
                                 "All"
                             } else {
                                 &self.filters.branch
                             })
+                            .icon(menu::combo_icon(self.theme.clone(), icon_id))
                             .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut self.filters.branch, String::new(), "All");
-                                for branch in &self.branches {
-                                    ui.selectable_value(
-                                        &mut self.filters.branch,
-                                        branch.clone(),
-                                        branch,
-                                    );
-                                }
+                                menu::with_menu_popup_motion(ui, "branch-filter-menu", |ui| {
+                                    if menu::menu_item(
+                                        ui,
+                                        &self.theme,
+                                        "branch-filter-all",
+                                        "All",
+                                        self.filters.branch.is_empty(),
+                                    )
+                                    .clicked()
+                                    {
+                                        self.filters.branch.clear();
+                                    }
+                                    for branch in &self.branches {
+                                        if menu::menu_item(
+                                            ui,
+                                            &self.theme,
+                                            ("branch-filter-item", branch),
+                                            branch,
+                                            self.filters.branch == *branch,
+                                        )
+                                        .clicked()
+                                        {
+                                            self.filters.branch = branch.clone();
+                                        }
+                                    }
+                                });
                             });
 
                         ui.label(RichText::new("Author").color(self.theme.palette.text_secondary));
@@ -259,8 +279,7 @@ impl HistoryPanel {
                                     .unwrap_or_else(|| "Unknown time".to_string());
                                     ui.add(
                                         egui::Label::new(
-                                            RichText::new(date)
-                                                .color(palette.text_secondary),
+                                            RichText::new(date).color(palette.text_secondary),
                                         )
                                         .wrap(true),
                                     );
@@ -336,11 +355,9 @@ impl HistoryPanel {
                         .wrap(true),
                     );
                 }
-                if let (Some(files), Some(additions), Some(deletions)) = (
-                    commit.files_changed,
-                    commit.additions,
-                    commit.deletions,
-                ) {
+                if let (Some(files), Some(additions), Some(deletions)) =
+                    (commit.files_changed, commit.additions, commit.deletions)
+                {
                     ui.label(
                         RichText::new(format!(
                             "Files changed: {files} (+{additions}, -{deletions})"
