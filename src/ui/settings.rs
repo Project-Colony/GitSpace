@@ -2,6 +2,7 @@ use eframe::egui::{ComboBox, RichText, Slider, TextEdit, Ui, collapsing_header::
 use rfd::FileDialog;
 
 use crate::config::{Keybinding, Preferences, ReleaseChannel, ThemeMode};
+use crate::dotnet::{DialogOpenRequest, DialogOptions, DotnetClient};
 use crate::ui::theme::Theme;
 
 pub struct SettingsPanel {
@@ -11,6 +12,7 @@ pub struct SettingsPanel {
     pending_control_height: Option<f32>,
     import_status: Option<String>,
     export_status: Option<String>,
+    native_dialog_status: Option<String>,
     update_request: bool,
     update_status: Option<String>,
     telemetry_status: Option<String>,
@@ -26,6 +28,7 @@ impl SettingsPanel {
             pending_control_height: None,
             import_status: None,
             export_status: None,
+            native_dialog_status: None,
             update_request: false,
             update_status: None,
             telemetry_status: None,
@@ -162,7 +165,43 @@ impl SettingsPanel {
                             .preferences
                             .set_default_clone_path(path.display().to_string());
                     }
+
+                    if ui.button("Choose folder (native helper)").clicked() {
+                        let request = DialogOpenRequest {
+                            kind: "open_folder".to_string(),
+                            title: Some("Select default clone destination".to_string()),
+                            filters: Vec::new(),
+                            options: DialogOptions {
+                                multi_select: false,
+                                show_hidden: false,
+                            },
+                        };
+                        match DotnetClient::helper().dialog_open(request) {
+                            Ok(response) => {
+                                if response.cancelled || response.selected_paths.is_empty() {
+                                    panel.native_dialog_status =
+                                        Some("Native dialog cancelled.".to_string());
+                                } else {
+                                    let selected = &response.selected_paths[0];
+                                    panel
+                                        .preferences
+                                        .set_default_clone_path(selected.clone());
+                                    panel.native_dialog_status =
+                                        Some(format!("Selected {}", selected));
+                                }
+                            }
+                            Err(err) => {
+                                panel.native_dialog_status =
+                                    Some(format!("Native helper failed: {}", err));
+                            }
+                        }
+                    }
                 });
+
+                if let Some(status) = &panel.native_dialog_status {
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(status).color(panel.theme.palette.text_secondary));
+                }
             },
         );
     }
