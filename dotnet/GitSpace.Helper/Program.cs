@@ -879,7 +879,7 @@ internal interface ISecretItem : IDBusObject
     Task<Secret> GetSecretAsync(ObjectPath session);
     Task<ObjectPath> DeleteAsync();
 
-    [Property("Attributes")]
+    [Property]
     Task<IDictionary<string, string>> GetAttributesAsync();
 }
 
