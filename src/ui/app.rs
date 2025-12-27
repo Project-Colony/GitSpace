@@ -7,7 +7,6 @@ use crate::auth::AuthManager;
 use crate::config::{AppConfig, Preferences};
 use crate::telemetry::TelemetryEmitter;
 use crate::ui::{
-    animation::store_motion_settings,
     auth::AuthPanel,
     branches::BranchPanel,
     clone::ClonePanel,
@@ -77,9 +76,15 @@ impl GitSpaceApp {
                 preferences.network().clone(),
             ),
             recent_list: RecentList::new(theme.clone()),
-            repo_overview: RepoOverviewPanel::new(theme.clone(), preferences.branch_box_height()),
+            repo_overview: RepoOverviewPanel::new(
+                theme.clone(),
+                preferences.branch_box_height(),
+            ),
             history_panel: HistoryPanel::new(theme.clone()),
-            branches_panel: BranchPanel::new(theme.clone(), preferences.pinned_branches().to_vec()),
+            branches_panel: BranchPanel::new(
+                theme.clone(),
+                preferences.pinned_branches().to_vec(),
+            ),
             stage_panel: StagePanel::new(theme.clone()),
             config,
             current_repo,
@@ -383,7 +388,6 @@ impl GitSpaceApp {
         let mut style = (*ctx.style()).clone();
         style.spacing.interact_size.y = preferences.control_height();
         ctx.set_style(style);
-        store_motion_settings(ctx, preferences);
     }
 
     fn apply_control_height(&mut self, control_height: f32, ctx: &egui::Context) {

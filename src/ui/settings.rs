@@ -3,7 +3,6 @@ use rfd::FileDialog;
 
 use crate::config::{Keybinding, Preferences, ReleaseChannel, ThemeMode};
 use crate::dotnet::{DialogOpenRequest, DialogOptions, DotnetClient};
-use crate::ui::menu;
 use crate::ui::notifications::{Notification, NotificationCenter};
 use crate::ui::theme::Theme;
 
@@ -111,41 +110,29 @@ impl SettingsPanel {
             "Appearance",
             "Choose a Catppuccin flavor for the GitSpace UI.",
             |ui, panel| {
-                let icon_id = ui.make_persistent_id("settings-theme-icon");
                 ComboBox::from_label(
                     RichText::new("Theme").color(panel.theme.palette.text_secondary),
                 )
                 .selected_text(mode_label(panel.preferences.theme_mode()))
-                .icon(menu::combo_icon(panel.theme.clone(), icon_id))
                 .show_ui(ui, |ui| {
-                    menu::with_menu_popup_motion(ui, "settings-theme-menu", |ui| {
-                        let mut selected_mode = panel.preferences.theme_mode();
-                        for mode in [
-                            ThemeMode::Latte,
-                            ThemeMode::Frappe,
-                            ThemeMode::Macchiato,
-                            ThemeMode::Mocha,
-                        ] {
-                            if menu::menu_item(
-                                ui,
-                                &panel.theme,
-                                ("settings-theme-item", mode_label(mode)),
-                                mode_label(mode),
-                                selected_mode == mode,
-                            )
-                            .clicked()
-                            {
-                                selected_mode = mode;
-                            }
-                        }
-                        panel.preferences.set_theme_mode(selected_mode);
-                    });
+                    let mut selected_mode = panel.preferences.theme_mode();
+                    for mode in [
+                        ThemeMode::Latte,
+                        ThemeMode::Frappe,
+                        ThemeMode::Macchiato,
+                        ThemeMode::Mocha,
+                    ] {
+                        ui.selectable_value(&mut selected_mode, mode, mode_label(mode));
+                    }
+                    panel.preferences.set_theme_mode(selected_mode);
                 });
 
                 ui.add_space(6.0);
                 let mut control_height = panel.preferences.control_height();
-                let response =
-                    ui.add(Slider::new(&mut control_height, 20.0..=48.0).text("Control height"));
+                let response = ui.add(
+                    Slider::new(&mut control_height, 20.0..=48.0)
+                        .text("Control height"),
+                );
                 if response.changed() {
                     panel.preferences.set_control_height(control_height);
                     panel.pending_control_height = Some(control_height);
@@ -198,7 +185,9 @@ impl SettingsPanel {
                                         Some("Native dialog cancelled.".to_string());
                                 } else {
                                     let selected = &response.selected_paths[0];
-                                    panel.preferences.set_default_clone_path(selected.clone());
+                                    panel
+                                        .preferences
+                                        .set_default_clone_path(selected.clone());
                                     panel.native_dialog_status =
                                         Some(format!("Selected {}", selected));
                                 }
@@ -300,10 +289,7 @@ impl SettingsPanel {
                     );
                     let mut timeout_str = network.network_timeout_secs.to_string();
                     if ui
-                        .add_sized(
-                            [90.0, control_height],
-                            TextEdit::singleline(&mut timeout_str),
-                        )
+                        .add_sized([90.0, control_height], TextEdit::singleline(&mut timeout_str))
                         .changed()
                         && let Ok(parsed) = timeout_str.parse()
                     {
@@ -381,30 +367,16 @@ impl SettingsPanel {
                 panel.preferences.set_auto_check_updates(auto_check);
 
                 ui.add_space(4.0);
-                let icon_id = ui.make_persistent_id("settings-release-icon");
                 ComboBox::from_label(
                     RichText::new("Release channel").color(panel.theme.palette.text_secondary),
                 )
                 .selected_text(channel_label(panel.preferences.release_channel()))
-                .icon(menu::combo_icon(panel.theme.clone(), icon_id))
                 .show_ui(ui, |ui| {
-                    menu::with_menu_popup_motion(ui, "settings-release-menu", |ui| {
-                        let mut selected_channel = panel.preferences.release_channel();
-                        for channel in [ReleaseChannel::Stable, ReleaseChannel::Preview] {
-                            if menu::menu_item(
-                                ui,
-                                &panel.theme,
-                                ("settings-release-item", channel_label(channel)),
-                                channel_label(channel),
-                                selected_channel == channel,
-                            )
-                            .clicked()
-                            {
-                                selected_channel = channel;
-                            }
-                        }
-                        panel.preferences.set_release_channel(selected_channel);
-                    });
+                    let mut selected_channel = panel.preferences.release_channel();
+                    for channel in [ReleaseChannel::Stable, ReleaseChannel::Preview] {
+                        ui.selectable_value(&mut selected_channel, channel, channel_label(channel));
+                    }
+                    panel.preferences.set_release_channel(selected_channel);
                 });
 
                 ui.add_space(4.0);
