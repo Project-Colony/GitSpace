@@ -1,7 +1,7 @@
 use eframe::egui::{ComboBox, RichText, Slider, TextEdit, Ui, collapsing_header::CollapsingState};
 use rfd::FileDialog;
 
-use crate::config::{Keybinding, Preferences, ReleaseChannel, ThemeMode};
+use crate::config::{Keybinding, MotionIntensity, Preferences, ReleaseChannel, ThemeMode};
 use crate::dotnet::{DialogOpenRequest, DialogOptions, DotnetClient};
 use crate::ui::menu;
 use crate::ui::notifications::{Notification, NotificationCenter};
@@ -427,11 +427,53 @@ impl SettingsPanel {
             ui,
             "settings-motion",
             "Motion",
-            "Control animation timing and reduced-motion preferences.",
+            "Control animation timing, intensity, and accessibility preferences.",
             |ui, panel| {
+                let icon_id = ui.make_persistent_id("settings-motion-intensity-icon");
+                ComboBox::from_label(
+                    RichText::new("Motion intensity").color(panel.theme.palette.text_secondary),
+                )
+                .selected_text(motion_intensity_label(panel.preferences.motion_intensity()))
+                .icon(menu::combo_icon(panel.theme.clone(), icon_id))
+                .show_ui(ui, |ui| {
+                    menu::with_menu_popup_motion(ui, "settings-motion-intensity-menu", |ui| {
+                        let mut selected_intensity = panel.preferences.motion_intensity();
+                        for intensity in [
+                            MotionIntensity::Low,
+                            MotionIntensity::Medium,
+                            MotionIntensity::High,
+                        ] {
+                            if menu::menu_item(
+                                ui,
+                                &panel.theme,
+                                (
+                                    "settings-motion-intensity-item",
+                                    motion_intensity_label(intensity),
+                                ),
+                                motion_intensity_label(intensity),
+                                selected_intensity == intensity,
+                            )
+                            .clicked()
+                            {
+                                selected_intensity = intensity;
+                            }
+                        }
+                        panel.preferences.set_motion_intensity(selected_intensity);
+                    });
+                });
+
+                ui.add_space(6.0);
                 let mut reduced_motion = panel.preferences.reduced_motion();
                 ui.checkbox(&mut reduced_motion, "Reduce motion");
                 panel.preferences.set_reduced_motion(reduced_motion);
+
+                ui.add_space(4.0);
+                let mut performance_mode = panel.preferences.performance_mode();
+                ui.checkbox(&mut performance_mode, "Performance mode")
+                    .on_hover_text(
+                        "Reduce animation effects to keep the UI responsive on low-end hardware.",
+                    );
+                panel.preferences.set_performance_mode(performance_mode);
             },
         );
     }
@@ -539,5 +581,13 @@ fn channel_label(channel: ReleaseChannel) -> &'static str {
     match channel {
         ReleaseChannel::Stable => "Stable",
         ReleaseChannel::Preview => "Preview",
+    }
+}
+
+fn motion_intensity_label(intensity: MotionIntensity) -> &'static str {
+    match intensity {
+        MotionIntensity::Low => "Low",
+        MotionIntensity::Medium => "Medium",
+        MotionIntensity::High => "High",
     }
 }

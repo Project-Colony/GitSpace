@@ -22,7 +22,7 @@ use eframe::egui::{self, Id};
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::config::Preferences;
+use crate::config::{MotionIntensity, Preferences};
 use crate::dotnet::{DotnetClient, LibraryCallRequest};
 
 /// High-level intent buckets for animation decisions.
@@ -172,6 +172,8 @@ impl AnimationTimingSet {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MotionSettings {
     reduced_motion: bool,
+    intensity: MotionIntensity,
+    performance_mode: bool,
     profile: AnimationProfile,
 }
 
@@ -179,19 +181,33 @@ impl MotionSettings {
     pub const fn new(reduced_motion: bool) -> Self {
         Self {
             reduced_motion,
+            intensity: MotionIntensity::Medium,
+            performance_mode: false,
             profile: AnimationProfile::default_profile(),
         }
     }
 
-    pub const fn with_profile(reduced_motion: bool, profile: AnimationProfile) -> Self {
+    pub const fn with_profile(
+        reduced_motion: bool,
+        intensity: MotionIntensity,
+        performance_mode: bool,
+        profile: AnimationProfile,
+    ) -> Self {
         Self {
             reduced_motion,
+            intensity,
+            performance_mode,
             profile,
         }
     }
 
     pub fn from_preferences(preferences: &Preferences) -> Self {
-        Self::new(preferences.reduced_motion())
+        Self::with_profile(
+            preferences.reduced_motion(),
+            preferences.motion_intensity(),
+            preferences.performance_mode(),
+            AnimationProfile::default_profile(),
+        )
     }
 
     pub const fn reduced_motion(self) -> bool {
@@ -202,35 +218,64 @@ impl MotionSettings {
         self.reduced_motion = reduced_motion;
     }
 
-    pub const fn timing(self, intent: AnimationIntent) -> AnimationTiming {
+    pub fn timing(self, intent: AnimationIntent) -> AnimationTiming {
         let timing = self.profile.timings.timing(intent);
         if self.reduced_motion {
             timing.reduced()
         } else {
-            timing
+            AnimationTiming {
+                duration: scale_duration(timing.duration, self.duration_scale()),
+                easing: timing.easing,
+            }
         }
     }
 
-    pub const fn effects(self) -> AnimationEffectSet {
-        self.profile.effects
+    pub fn effects(self) -> AnimationEffectSet {
+        scale_effects(self.profile.effects, self.effect_scale())
     }
 
-    pub const fn slide_distance(self) -> f32 {
-        self.profile.slide_distance
+    pub fn slide_distance(self) -> f32 {
+        self.profile.slide_distance * self.effect_scale()
     }
 
-    pub const fn slide_up(self) -> SlideEffect {
+    pub fn slide_up(self) -> SlideEffect {
+        let distance = self.slide_distance();
         SlideEffect {
-            from_offset: [0.0, self.profile.slide_distance],
+            from_offset: [0.0, distance],
             to_offset: [0.0, 0.0],
         }
     }
 
-    pub const fn slide_down(self) -> SlideEffect {
+    pub fn slide_down(self) -> SlideEffect {
+        let distance = self.slide_distance();
         SlideEffect {
-            from_offset: [0.0, -self.profile.slide_distance],
+            from_offset: [0.0, -distance],
             to_offset: [0.0, 0.0],
         }
+    }
+
+    fn duration_scale(self) -> f32 {
+        let mut scale = match self.intensity {
+            MotionIntensity::Low => 0.8,
+            MotionIntensity::Medium => 1.0,
+            MotionIntensity::High => 1.2,
+        };
+        if self.performance_mode {
+            scale *= 0.85;
+        }
+        scale
+    }
+
+    fn effect_scale(self) -> f32 {
+        let mut scale = match self.intensity {
+            MotionIntensity::Low => 0.85,
+            MotionIntensity::Medium => 1.0,
+            MotionIntensity::High => 1.15,
+        };
+        if self.performance_mode {
+            scale *= 0.7;
+        }
+        scale
     }
 }
 
@@ -238,7 +283,12 @@ const MOTION_SETTINGS_KEY: &str = "motion_settings";
 
 pub fn store_motion_settings(ctx: &egui::Context, preferences: &Preferences) {
     let profile = load_dotnet_animation_profile().unwrap_or_else(AnimationProfile::default_profile);
-    let motion = MotionSettings::with_profile(preferences.reduced_motion(), profile);
+    let motion = MotionSettings::with_profile(
+        preferences.reduced_motion(),
+        preferences.motion_intensity(),
+        preferences.performance_mode(),
+        profile,
+    );
     ctx.data_mut(|data| {
         data.insert_persisted(Id::new(MOTION_SETTINGS_KEY), motion);
     });
@@ -375,6 +425,45 @@ struct AnimationProfilePayload {
     timings: AnimationTimingSetPayload,
     effects: AnimationEffectSetPayload,
     slide_distance: f32,
+}
+
+fn scale_duration(duration: Duration, scale: f32) -> Duration {
+    if scale <= 0.0 {
+        return durations::INSTANT;
+    }
+    let scaled_ms = (duration.as_millis() as f32 * scale).round().max(0.0);
+    Duration::from_millis(scaled_ms as u64)
+}
+
+fn scale_effects(effects: AnimationEffectSet, scale: f32) -> AnimationEffectSet {
+    AnimationEffectSet {
+        fade_in: effects.fade_in,
+        fade_out: effects.fade_out,
+        scale_in: scale_scale_effect(effects.scale_in, scale),
+        scale_out: scale_scale_effect(effects.scale_out, scale),
+        soft_blur: BlurEffect {
+            radius: effects.soft_blur.radius * scale,
+        },
+        subtle_glow: GlowEffect {
+            intensity: effects.subtle_glow.intensity * scale,
+            radius: effects.subtle_glow.radius * scale,
+        },
+        soft_shadow: ShadowEffect {
+            offset: [
+                effects.soft_shadow.offset[0] * scale,
+                effects.soft_shadow.offset[1] * scale,
+            ],
+            blur: effects.soft_shadow.blur * scale,
+            opacity: (effects.soft_shadow.opacity * scale).clamp(0.0, 1.0),
+        },
+    }
+}
+
+fn scale_scale_effect(effect: ScaleEffect, scale: f32) -> ScaleEffect {
+    ScaleEffect {
+        from_scale: 1.0 - (1.0 - effect.from_scale) * scale,
+        to_scale: 1.0 + (effect.to_scale - 1.0) * scale,
+    }
 }
 
 impl AnimationProfilePayload {
