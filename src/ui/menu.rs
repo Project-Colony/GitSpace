@@ -4,7 +4,7 @@ use eframe::egui::{
     Ui, Vec2, WidgetText,
 };
 
-use crate::ui::animation::{AnimationEffects, AnimationIntent, motion_settings};
+use crate::ui::animation::{AnimationIntent, motion_settings};
 use crate::ui::theme::Theme;
 
 fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
@@ -46,9 +46,11 @@ pub fn with_menu_popup_motion<R>(
         ui.ctx().request_repaint();
     }
 
-    let fade = AnimationEffects::fade_in();
-    let slide = AnimationEffects::slide_up(8.0);
-    let scale = AnimationEffects::scale_in();
+    let motion = motion_settings(ui.ctx());
+    let effects = motion.effects();
+    let fade = effects.fade_in;
+    let slide = motion.slide_up();
+    let scale = effects.scale_in;
     let opacity = egui::lerp(fade.from_opacity..=fade.to_opacity, progress);
     ui.set_opacity(opacity);
 
@@ -90,6 +92,7 @@ pub fn menu_item_sized(
     let id = ui.make_persistent_id(id_source);
     let (rect, response) = ui.allocate_exact_size(size, sense);
     let response = response.on_hover_cursor(CursorIcon::PointingHand);
+    let motion = motion_settings(ui.ctx());
     let hover_t = menu_animation_progress(
         ui,
         id.with("hover"),
@@ -113,7 +116,7 @@ pub fn menu_item_sized(
         ui.painter().rect_filled(rect, Rounding::same(6.0), fill);
     }
 
-    let glow = AnimationEffects::subtle_glow();
+    let glow = motion.effects().subtle_glow;
     let glow_alpha = glow.intensity * active_t;
     if glow_alpha > 0.01 {
         let glow_color = with_alpha(theme.palette.accent, glow_alpha);
