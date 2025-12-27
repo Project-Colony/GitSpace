@@ -45,6 +45,39 @@ internal sealed record CredentialPayload(string? Username, string? Secret, strin
 
 internal sealed record LibraryCallRequest(string Name, JsonElement Payload);
 
+internal sealed record AnimationTiming(int DurationMs, string Easing);
+
+internal sealed record AnimationTimingSet(
+    AnimationTiming Hover,
+    AnimationTiming Press,
+    AnimationTiming Focus,
+    AnimationTiming OpenClose,
+    AnimationTiming Load);
+
+internal sealed record AnimationEffectSet(
+    FadeEffect FadeIn,
+    FadeEffect FadeOut,
+    ScaleEffect ScaleIn,
+    ScaleEffect ScaleOut,
+    BlurEffect SoftBlur,
+    GlowEffect SubtleGlow,
+    ShadowEffect SoftShadow);
+
+internal sealed record FadeEffect(float FromOpacity, float ToOpacity);
+
+internal sealed record ScaleEffect(float FromScale, float ToScale);
+
+internal sealed record BlurEffect(float Radius);
+
+internal sealed record GlowEffect(float Intensity, float Radius);
+
+internal sealed record ShadowEffect(float[] Offset, float Blur, float Opacity);
+
+internal sealed record AnimationProfile(
+    AnimationTimingSet Timings,
+    AnimationEffectSet Effects,
+    float SlideDistance);
+
 internal sealed record DialogOpenResult(string[] Paths, bool Cancelled)
 {
     public static DialogOpenResult CancelledResult { get; } = new(Array.Empty<string>(), true);
@@ -307,6 +340,7 @@ static Response HandleLibraryCall(Request request)
     var name = payload.Name.ToLowerInvariant();
     return name switch
     {
+        "ui.animation_profile" => Response.Ok(request.Id, BuildAnimationProfile()),
         "system.info" => Response.Ok(request.Id, new
         {
             os = RuntimeInformation.OSDescription,
@@ -318,6 +352,29 @@ static Response HandleLibraryCall(Request request)
             "Unknown library name",
             new { name = payload.Name })
     };
+}
+
+static AnimationProfile BuildAnimationProfile()
+{
+    static int Ms(TimeSpan duration) => (int)duration.TotalMilliseconds;
+
+    var timings = new AnimationTimingSet(
+        new AnimationTiming(Ms(TimeSpan.FromMilliseconds(90)), "standard"),
+        new AnimationTiming(Ms(TimeSpan.FromMilliseconds(90)), "accelerate"),
+        new AnimationTiming(Ms(TimeSpan.FromMilliseconds(140)), "decelerate"),
+        new AnimationTiming(Ms(TimeSpan.FromMilliseconds(220)), "emphasized"),
+        new AnimationTiming(Ms(TimeSpan.FromMilliseconds(320)), "standard"));
+
+    var effects = new AnimationEffectSet(
+        new FadeEffect(0.0f, 1.0f),
+        new FadeEffect(1.0f, 0.0f),
+        new ScaleEffect(0.96f, 1.0f),
+        new ScaleEffect(1.0f, 0.96f),
+        new BlurEffect(6.0f),
+        new GlowEffect(0.18f, 10.0f),
+        new ShadowEffect(new[] { 0.0f, 6.0f }, 16.0f, 0.25f));
+
+    return new AnimationProfile(timings, effects, 8.0f);
 }
 
 static string BuildWindowsFilter(DialogFilter[] filters)
