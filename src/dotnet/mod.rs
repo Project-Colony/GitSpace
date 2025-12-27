@@ -57,6 +57,20 @@ pub struct DialogOpenResponse {
     pub cancelled: bool,
 }
 
+#[derive(Debug, Serialize)]
+pub struct CredentialRequest {
+    pub service: String,
+    pub account: Option<String>,
+    pub action: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CredentialResponse {
+    pub username: Option<String>,
+    pub secret: Option<String>,
+    pub status: String,
+}
+
 pub struct DotnetClient {
     program: PathBuf,
     args: Vec<String>,
@@ -131,18 +145,46 @@ impl DotnetClient {
         };
         let response = self.send_request(&request)?;
         if response.status != "ok" {
-            let message = response
+            let error = response
                 .error
                 .as_ref()
-                .map(|error| format!("{}: {}", error.category, error.message))
-                .unwrap_or_else(|| "Unknown .NET error".to_string());
-            return Err(AppError::Unknown(message));
+                .map(map_dotnet_error)
+                .unwrap_or_else(|| AppError::Unknown("Unknown .NET error".to_string()));
+            return Err(error);
         }
         let payload = response
             .payload
             .ok_or_else(|| AppError::Unknown("Missing dialog response payload".to_string()))?;
         serde_json::from_value(payload).map_err(|err| {
             log_dotnet_json_parse_error(&err, "dialog_open_payload");
+            AppError::Unknown(err.to_string())
+        })
+    }
+
+    pub fn credential_request(
+        &self,
+        payload: CredentialRequest,
+    ) -> Result<CredentialResponse, AppError> {
+        let request = DotnetRequest {
+            id: next_request_id(),
+            command: "credential.request".to_string(),
+            payload: serde_json::to_value(payload)
+                .map_err(|err| AppError::Unknown(err.to_string()))?,
+        };
+        let response = self.send_request(&request)?;
+        if response.status != "ok" {
+            let error = response
+                .error
+                .as_ref()
+                .map(map_dotnet_error)
+                .unwrap_or_else(|| AppError::Unknown("Unknown .NET error".to_string()));
+            return Err(error);
+        }
+        let payload = response
+            .payload
+            .ok_or_else(|| AppError::Unknown("Missing credential response payload".to_string()))?;
+        serde_json::from_value(payload).map_err(|err| {
+            log_dotnet_json_parse_error(&err, "credential_payload");
             AppError::Unknown(err.to_string())
         })
     }
@@ -153,6 +195,19 @@ static REQUEST_COUNTER: AtomicUsize = AtomicUsize::new(1);
 fn next_request_id() -> String {
     let id = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("req-{id:04}")
+}
+
+fn map_dotnet_error(error: &DotnetError) -> AppError {
+    let mut message = format!("{}: {}", error.category, error.message);
+    if let Some(details) = &error.details {
+        message = format!("{message} ({details})");
+    }
+
+    match error.category.as_str() {
+        "InvalidRequest" => AppError::Validation(message),
+        "Internal" => AppError::Unknown(message),
+        _ => AppError::Unknown(message),
+    }
 }
 
 #[cfg(test)]

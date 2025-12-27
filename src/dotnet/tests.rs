@@ -1,6 +1,7 @@
 use serde_json::json;
 
-use crate::dotnet::{DotnetClient, DotnetRequest};
+use crate::dotnet::{DotnetClient, DotnetError, DotnetRequest};
+use crate::error::AppError;
 
 fn dotnet_available() -> bool {
     std::process::Command::new("dotnet")
@@ -36,4 +37,16 @@ fn ipc_handshake_ping_ok() {
         payload.get("version").and_then(|value| value.as_str()).is_some(),
         "ping payload should include version string"
     );
+}
+
+#[test]
+fn dotnet_error_mapping_validation() {
+    let error = DotnetError {
+        category: "InvalidRequest".to_string(),
+        message: "Missing payload.kind".to_string(),
+        details: None,
+    };
+
+    let mapped = super::map_dotnet_error(&error);
+    assert!(matches!(mapped, AppError::Validation(_)));
 }
