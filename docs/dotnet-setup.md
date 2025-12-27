@@ -9,6 +9,8 @@ This guide covers installing the required .NET SDK for GitSpace interop work, al
 - **Windows**: Windows 10/11 with PowerShell and an available package manager (Winget recommended).
 - **macOS**: macOS 12+ with Homebrew installed.
 - **Linux**: A supported distro (Ubuntu/Debian/Fedora/openSUSE) with `curl` or `wget`.
+  - `dbus-daemon` available/running for session bus access.
+  - A secret service implementation such as GNOME Keyring or KWallet (`org.freedesktop.secrets`).
 
 ## Official Installation Commands
 
