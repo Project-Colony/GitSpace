@@ -2,9 +2,7 @@
   "id": "req-0300",
   "command": "library.call",
   "payload": {
-    "name": "system.credential_manager",
-    "payload": {
-      "action": "list"
-    }
+    "name": "system.info",
+    "payload": {}
   }
 }

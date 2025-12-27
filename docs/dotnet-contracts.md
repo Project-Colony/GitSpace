@@ -1,7 +1,7 @@
 # Contrats .NET (IPC)
 
 Ce document décrit les contrats d’échange entre le binaire Rust et le helper .NET via un canal IPC local.
-Note d’alignement : validé le 2025-12-27.
+Note d’alignement : validé le 2025-03-09.
 
 ## Endpoints / commands supportés
 
@@ -45,11 +45,13 @@ Demande un credential au provider système.
 Appelle une bibliothèque .NET spécifique (interop ciblée).
 
 **Payload (entrée)**
-- `name`: nom logique de la librairie/feature
+- `name`: `system.info`
 - `payload`: objet JSON libre (contrat propre à la librairie)
 
 **Réponse (sortie)**
-- `payload`: objet JSON libre
+- `payload`:
+  - `os`: description de l’OS
+  - `version`: version de l’OS
 - `status`: `ok` | `error`
 - `error`: erreur structurée (si `status` = `error`)
 
