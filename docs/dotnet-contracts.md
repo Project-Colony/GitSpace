@@ -1,6 +1,7 @@
 # Contrats .NET (IPC)
 
 Ce document décrit les contrats d’échange entre le binaire Rust et le helper .NET via un canal IPC local.
+Note d’alignement : validé le 2025-12-27.
 
 ## Endpoints / commands supportés
 
@@ -59,7 +60,6 @@ Vérifie la disponibilité du helper .NET.
 - `{}`
 
 **Réponse (sortie)**
-- `status`: `ok`
 - `version`: version du helper
 
 ## Format d’entrée/sortie
@@ -97,8 +97,6 @@ Les erreurs remontent toujours un objet structuré :
 
 | Catégorie | Quand ? | Message attendu |
 | --- | --- | --- |
-| `Cancelled` | L’utilisateur annule l’action. | "User cancelled" |
-| `Unavailable` | Helper .NET indisponible ou fonctionnalité non supportée. | "Helper unavailable" |
 | `InvalidRequest` | Paramètres manquants ou invalides. | "Missing payload.kind" |
 | `Internal` | Erreur interne .NET. | "Unhandled exception" |
 
