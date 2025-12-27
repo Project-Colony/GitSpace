@@ -52,3 +52,19 @@ To create a tagged release:
 1. Bump the crate version in `Cargo.toml` if needed.
 2. Tag the commit (e.g., `git tag v0.2.0 && git push origin v0.2.0`).
 3. Download the artifacts from the workflow run and publish them (or attach them to a GitHub Release page).
+
+## Packaging the .NET helper
+
+The helper is a .NET application that should be shipped as a self-contained, single-file binary so the desktop app does not require the .NET SDK at runtime.
+
+### Bundling the .NET runtime
+Use `dotnet publish` with `--self-contained` and `PublishSingleFile` enabled so the runtime is embedded in the helper binary:
+
+```bash
+scripts/build-dotnet.sh <rid>
+```
+
+Supported RIDs include `win-x64`, `osx-x64`, `osx-arm64`, and `linux-x64`. The script publishes the helper into `dist/dotnet/<rid>` and includes the required runtime in the single-file output.
+
+### Deploying the helper binary
+Copy the published helper (`GitSpace.Helper` on macOS/Linux, `GitSpace.Helper.exe` on Windows) into the release payload alongside the main GitSpace executable. Keep the helper name intact and ensure it remains in the same directory as the app binary (or a well-known `resources/dotnet/` folder inside the packaged app) so the app can locate and spawn it without requiring `dotnet` on `PATH`.
