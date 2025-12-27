@@ -258,124 +258,6 @@ static Response HandleLibraryCall(Request request)
     };
 }
 
-static string BuildWindowsFilter(DialogFilter[] filters)
-{
-    if (filters.Length == 0)
-    {
-        return "All Files|*.*";
-    }
-
-    return string.Join("|", filters.Select(filter =>
-    {
-        var extensions = filter.Extensions.Length == 0
-            ? "*.*"
-            : string.Join(";", filter.Extensions.Select(ext => $"*.{ext.TrimStart('.')}"));
-        return $"{filter.Label}|{extensions}";
-    }));
-}
-
-static string BuildNativeFilter(DialogFilter[] filters)
-{
-    var extensions = filters
-        .SelectMany(filter => filter.Extensions)
-        .Select(ext => ext.TrimStart('.'))
-        .Where(ext => !string.IsNullOrWhiteSpace(ext))
-        .Distinct(StringComparer.OrdinalIgnoreCase)
-        .ToArray();
-
-    return extensions.Length == 0 ? string.Empty : string.Join(",", extensions);
-}
-
-static void TrySetProperty(object target, string propertyName, object value)
-{
-    var property = target.GetType().GetProperty(propertyName);
-    if (property is not null && property.CanWrite)
-    {
-        property.SetValue(target, value);
-    }
-}
-
-#if WINDOWS
-static DialogOpenResult OpenFileDialogWindows(string title, DialogFilter[] filters, DialogOptions options)
-{
-    using var dialog = new OpenFileDialog
-    {
-        Title = title,
-        Filter = BuildWindowsFilter(filters),
-        Multiselect = options.MultiSelect
-    };
-    TrySetProperty(dialog, "ShowHiddenItems", options.ShowHidden);
-    TrySetProperty(dialog, "ShowHidden", options.ShowHidden);
-
-    return dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK
-        ? new DialogOpenResult(dialog.FileNames, false)
-        : DialogOpenResult.CancelledResult;
-}
-
-static DialogOpenResult SaveFileDialogWindows(string title, DialogFilter[] filters, DialogOptions options)
-{
-    using var dialog = new SaveFileDialog
-    {
-        Title = title,
-        Filter = BuildWindowsFilter(filters)
-    };
-    TrySetProperty(dialog, "ShowHiddenItems", options.ShowHidden);
-    TrySetProperty(dialog, "ShowHidden", options.ShowHidden);
-
-    return dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK && !string.IsNullOrWhiteSpace(dialog.FileName)
-        ? new DialogOpenResult(new[] { dialog.FileName }, false)
-        : DialogOpenResult.CancelledResult;
-}
-
-static DialogOpenResult OpenFolderDialogWindows(string title, DialogOptions options)
-{
-    using var dialog = new FolderBrowserDialog
-    {
-        Description = title,
-        ShowNewFolderButton = true
-    };
-    TrySetProperty(dialog, "ShowHiddenFiles", options.ShowHidden);
-
-    return dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK && !string.IsNullOrWhiteSpace(dialog.SelectedPath)
-        ? new DialogOpenResult(new[] { dialog.SelectedPath }, false)
-        : DialogOpenResult.CancelledResult;
-}
-#else
-static DialogOpenResult OpenFileDialogNative(DialogFilter[] filters, DialogOptions options)
-{
-    var filterList = BuildNativeFilter(filters);
-    if (options.MultiSelect)
-    {
-        var result = Nfd.OpenDialogMultiple(out var paths, filterList, null);
-        return result == NfdResult.Ok && paths is { Length: > 0 }
-            ? new DialogOpenResult(paths, false)
-            : DialogOpenResult.CancelledResult;
-    }
-
-    var singleResult = Nfd.OpenDialog(out var path, filterList, null);
-    return singleResult == NfdResult.Ok && !string.IsNullOrWhiteSpace(path)
-        ? new DialogOpenResult(new[] { path }, false)
-        : DialogOpenResult.CancelledResult;
-}
-
-static DialogOpenResult SaveFileDialogNative(DialogFilter[] filters)
-{
-    var filterList = BuildNativeFilter(filters);
-    var result = Nfd.SaveDialog(out var path, filterList, null);
-    return result == NfdResult.Ok && !string.IsNullOrWhiteSpace(path)
-        ? new DialogOpenResult(new[] { path }, false)
-        : DialogOpenResult.CancelledResult;
-}
-
-static DialogOpenResult OpenFolderDialogNative()
-{
-    var result = Nfd.PickFolder(out var path, null);
-    return result == NfdResult.Ok && !string.IsNullOrWhiteSpace(path)
-        ? new DialogOpenResult(new[] { path }, false)
-        : DialogOpenResult.CancelledResult;
-}
-#endif
-
 internal sealed record Request(string Id, string Command, JsonElement Payload);
 
 internal sealed record Response(string Id, string Status, object? Payload, ErrorDetails? Error)
@@ -1007,3 +889,121 @@ internal sealed record DialogOpenResult(string[] Paths, bool Cancelled)
 {
     public static DialogOpenResult CancelledResult { get; } = new(Array.Empty<string>(), true);
 }
+
+static string BuildWindowsFilter(DialogFilter[] filters)
+{
+    if (filters.Length == 0)
+    {
+        return "All Files|*.*";
+    }
+
+    return string.Join("|", filters.Select(filter =>
+    {
+        var extensions = filter.Extensions.Length == 0
+            ? "*.*"
+            : string.Join(";", filter.Extensions.Select(ext => $"*.{ext.TrimStart('.')}"));
+        return $"{filter.Label}|{extensions}";
+    }));
+}
+
+static string BuildNativeFilter(DialogFilter[] filters)
+{
+    var extensions = filters
+        .SelectMany(filter => filter.Extensions)
+        .Select(ext => ext.TrimStart('.'))
+        .Where(ext => !string.IsNullOrWhiteSpace(ext))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+
+    return extensions.Length == 0 ? string.Empty : string.Join(",", extensions);
+}
+
+static void TrySetProperty(object target, string propertyName, object value)
+{
+    var property = target.GetType().GetProperty(propertyName);
+    if (property is not null && property.CanWrite)
+    {
+        property.SetValue(target, value);
+    }
+}
+
+#if WINDOWS
+static DialogOpenResult OpenFileDialogWindows(string title, DialogFilter[] filters, DialogOptions options)
+{
+    using var dialog = new OpenFileDialog
+    {
+        Title = title,
+        Filter = BuildWindowsFilter(filters),
+        Multiselect = options.MultiSelect
+    };
+    TrySetProperty(dialog, "ShowHiddenItems", options.ShowHidden);
+    TrySetProperty(dialog, "ShowHidden", options.ShowHidden);
+
+    return dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK
+        ? new DialogOpenResult(dialog.FileNames, false)
+        : DialogOpenResult.CancelledResult;
+}
+
+static DialogOpenResult SaveFileDialogWindows(string title, DialogFilter[] filters, DialogOptions options)
+{
+    using var dialog = new SaveFileDialog
+    {
+        Title = title,
+        Filter = BuildWindowsFilter(filters)
+    };
+    TrySetProperty(dialog, "ShowHiddenItems", options.ShowHidden);
+    TrySetProperty(dialog, "ShowHidden", options.ShowHidden);
+
+    return dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK && !string.IsNullOrWhiteSpace(dialog.FileName)
+        ? new DialogOpenResult(new[] { dialog.FileName }, false)
+        : DialogOpenResult.CancelledResult;
+}
+
+static DialogOpenResult OpenFolderDialogWindows(string title, DialogOptions options)
+{
+    using var dialog = new FolderBrowserDialog
+    {
+        Description = title,
+        ShowNewFolderButton = true
+    };
+    TrySetProperty(dialog, "ShowHiddenFiles", options.ShowHidden);
+
+    return dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK && !string.IsNullOrWhiteSpace(dialog.SelectedPath)
+        ? new DialogOpenResult(new[] { dialog.SelectedPath }, false)
+        : DialogOpenResult.CancelledResult;
+}
+#else
+static DialogOpenResult OpenFileDialogNative(DialogFilter[] filters, DialogOptions options)
+{
+    var filterList = BuildNativeFilter(filters);
+    if (options.MultiSelect)
+    {
+        var result = Nfd.OpenDialogMultiple(out var paths, filterList, null);
+        return result == NfdResult.Ok && paths is { Length: > 0 }
+            ? new DialogOpenResult(paths, false)
+            : DialogOpenResult.CancelledResult;
+    }
+
+    var singleResult = Nfd.OpenDialog(out var path, filterList, null);
+    return singleResult == NfdResult.Ok && !string.IsNullOrWhiteSpace(path)
+        ? new DialogOpenResult(new[] { path }, false)
+        : DialogOpenResult.CancelledResult;
+}
+
+static DialogOpenResult SaveFileDialogNative(DialogFilter[] filters)
+{
+    var filterList = BuildNativeFilter(filters);
+    var result = Nfd.SaveDialog(out var path, filterList, null);
+    return result == NfdResult.Ok && !string.IsNullOrWhiteSpace(path)
+        ? new DialogOpenResult(new[] { path }, false)
+        : DialogOpenResult.CancelledResult;
+}
+
+static DialogOpenResult OpenFolderDialogNative()
+{
+    var result = Nfd.PickFolder(out var path, null);
+    return result == NfdResult.Ok && !string.IsNullOrWhiteSpace(path)
+        ? new DialogOpenResult(new[] { path }, false)
+        : DialogOpenResult.CancelledResult;
+}
+#endif
