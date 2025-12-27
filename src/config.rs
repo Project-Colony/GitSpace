@@ -81,9 +81,22 @@ pub enum ReleaseChannel {
     Preview,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum MotionIntensity {
+    Low,
+    Medium,
+    High,
+}
+
 impl Default for ReleaseChannel {
     fn default() -> Self {
         Self::Stable
+    }
+}
+
+impl Default for MotionIntensity {
+    fn default() -> Self {
+        Self::Medium
     }
 }
 
@@ -135,6 +148,10 @@ pub struct Preferences {
     pinned_branches: Vec<String>,
     #[serde(default)]
     reduced_motion: bool,
+    #[serde(default = "default_motion_intensity")]
+    motion_intensity: MotionIntensity,
+    #[serde(default)]
+    performance_mode: bool,
 }
 
 impl Default for Preferences {
@@ -153,6 +170,8 @@ impl Default for Preferences {
             branch_box_height: default_branch_box_height(),
             pinned_branches: Vec::new(),
             reduced_motion: false,
+            motion_intensity: default_motion_intensity(),
+            performance_mode: false,
         }
     }
 }
@@ -284,6 +303,10 @@ fn default_auto_check_updates() -> bool {
     true
 }
 
+fn default_motion_intensity() -> MotionIntensity {
+    MotionIntensity::Medium
+}
+
 fn default_log_retention_files() -> usize {
     7
 }
@@ -387,6 +410,22 @@ impl Preferences {
 
     pub fn set_reduced_motion(&mut self, reduced_motion: bool) {
         self.reduced_motion = reduced_motion;
+    }
+
+    pub fn motion_intensity(&self) -> MotionIntensity {
+        self.motion_intensity
+    }
+
+    pub fn set_motion_intensity(&mut self, motion_intensity: MotionIntensity) {
+        self.motion_intensity = motion_intensity;
+    }
+
+    pub fn performance_mode(&self) -> bool {
+        self.performance_mode
+    }
+
+    pub fn set_performance_mode(&mut self, performance_mode: bool) {
+        self.performance_mode = performance_mode;
     }
 
     pub fn save_to_path<P: AsRef<Path>>(&self, path: P) -> std::io::Result<()> {
