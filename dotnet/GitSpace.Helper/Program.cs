@@ -74,10 +74,16 @@ internal static class Program
             return;
         }
 
+        var jsonOptions = new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        };
+
         Request? request;
         try
         {
-            request = JsonSerializer.Deserialize<Request>(input);
+            request = JsonSerializer.Deserialize<Request>(input, jsonOptions);
         }
         catch (JsonException ex)
         {
@@ -88,6 +94,18 @@ internal static class Program
         if (request is null)
         {
             logger.LogError("Request payload was empty after deserialization.");
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Id))
+        {
+            logger.LogError("Request payload missing id.");
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Command))
+        {
+            logger.LogError("Request payload missing command.");
             return;
         }
 
@@ -107,7 +125,7 @@ internal static class Program
                 new { command = request.Command })
         };
 
-        Console.WriteLine(JsonSerializer.Serialize(response));
+        Console.WriteLine(JsonSerializer.Serialize(response, jsonOptions));
     }
 
 static Response HandleDialogOpen(Request request)
