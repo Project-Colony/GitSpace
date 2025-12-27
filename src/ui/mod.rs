@@ -4,6 +4,7 @@ pub mod auth;
 pub mod branches;
 pub mod clone;
 pub mod context;
+pub mod dev_gallery;
 pub mod fonts;
 pub mod history;
 pub mod layout;

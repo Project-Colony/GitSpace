@@ -91,6 +91,7 @@ fn layout_panels_render_without_panic() {
                 &mut notifications,
                 None,
                 &auth_manager,
+                None,
             );
         });
     });
@@ -139,6 +140,7 @@ fn layout_switches_tabs_in_run_loop() {
                 &mut notifications,
                 None,
                 &auth_manager,
+                None,
             );
         });
     });
