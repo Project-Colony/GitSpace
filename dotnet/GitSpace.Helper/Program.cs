@@ -66,6 +66,40 @@ var response = request.Command.ToLowerInvariant() switch
 
 Console.WriteLine(JsonSerializer.Serialize(response));
 
+internal sealed record Request(string Id, string Command, JsonElement Payload);
+
+internal sealed record Response(string Id, string Status, object? Payload, ErrorDetails? Error)
+{
+    public static Response Ok(string id, object? payload) => new(id, "ok", payload, null);
+
+    public static Response Error(string id, string category, string message, object? details)
+        => new(id, "error", null, new ErrorDetails(category, message, details));
+}
+
+internal sealed record ErrorDetails(string Category, string Message, object? Details);
+
+internal sealed record DialogOpenRequest(
+    string Kind,
+    string? Title,
+    DialogFilter[]? Filters,
+    DialogOptions? Options);
+
+internal sealed record DialogFilter(string Label, string[] Extensions);
+
+internal sealed record DialogOptions(
+    [property: JsonPropertyName("multi_select")] bool MultiSelect,
+    [property: JsonPropertyName("show_hidden")] bool ShowHidden);
+
+internal sealed record CredentialRequest(
+    string Service,
+    string? Account,
+    string Action,
+    string? Secret);
+
+internal sealed record CredentialPayload(string? Username, string? Secret, string Status);
+
+internal sealed record LibraryCallRequest(string Name, JsonElement Payload);
+
 static Response HandleDialogOpen(Request request)
 {
     DialogOpenRequest? payload;
@@ -257,40 +291,6 @@ static Response HandleLibraryCall(Request request)
             new { name = payload.Name })
     };
 }
-
-internal sealed record Request(string Id, string Command, JsonElement Payload);
-
-internal sealed record Response(string Id, string Status, object? Payload, ErrorDetails? Error)
-{
-    public static Response Ok(string id, object? payload) => new(id, "ok", payload, null);
-
-    public static Response Error(string id, string category, string message, object? details)
-        => new(id, "error", null, new ErrorDetails(category, message, details));
-}
-
-internal sealed record ErrorDetails(string Category, string Message, object? Details);
-
-internal sealed record DialogOpenRequest(
-    string Kind,
-    string? Title,
-    DialogFilter[]? Filters,
-    DialogOptions? Options);
-
-internal sealed record DialogFilter(string Label, string[] Extensions);
-
-internal sealed record DialogOptions(
-    [property: JsonPropertyName("multi_select")] bool MultiSelect,
-    [property: JsonPropertyName("show_hidden")] bool ShowHidden);
-
-internal sealed record CredentialRequest(
-    string Service,
-    string? Account,
-    string Action,
-    string? Secret);
-
-internal sealed record CredentialPayload(string? Username, string? Secret, string Status);
-
-internal sealed record LibraryCallRequest(string Name, JsonElement Payload);
 
 internal static class CredentialProviderFactory
 {
