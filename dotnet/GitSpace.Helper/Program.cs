@@ -77,7 +77,9 @@ internal static class Program
         Request? request;
         try
         {
-            request = JsonSerializer.Deserialize<Request>(input);
+            request = JsonSerializer.Deserialize<Request>(
+                input,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
         }
         catch (JsonException ex)
         {
@@ -88,6 +90,18 @@ internal static class Program
         if (request is null)
         {
             logger.LogError("Request payload was empty after deserialization.");
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Id))
+        {
+            logger.LogError("Request payload missing id.");
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Command))
+        {
+            logger.LogError("Request payload missing command.");
             return;
         }
 
