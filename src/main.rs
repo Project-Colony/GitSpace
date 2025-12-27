@@ -1,6 +1,5 @@
 mod auth;
 mod config;
-mod dotnet;
 mod error;
 mod git;
 mod logging;
