@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Tmds.DBus;
 #if WINDOWS
 using System.Windows.Forms;
 #else
@@ -312,6 +313,10 @@ internal static class CredentialProviderFactory
         {
             return new MacOsCredentialProvider();
         }
+        if (OperatingSystem.IsLinux())
+        {
+            return new LinuxCredentialProvider();
+        }
         return new StubCredentialProvider();
     }
 }
@@ -510,6 +515,232 @@ internal sealed class MacOsCredentialProvider : ICredentialProvider
 
     [DllImport(CoreFoundationLibrary)]
     private static extern void CFRelease(IntPtr cfRef);
+}
+
+internal sealed class LinuxCredentialProvider : ICredentialProvider
+{
+    private const string ServiceName = "org.freedesktop.secrets";
+    private static readonly ObjectPath ServicePath = new("/org/freedesktop/secrets");
+    private static readonly ObjectPath RootPromptPath = new("/");
+
+    public CredentialPayload Get(string service, string? account)
+        => Execute(() => GetAsync(service, account));
+
+    public CredentialPayload Store(string service, string? account, string? secret)
+        => Execute(() => StoreAsync(service, account, secret));
+
+    public CredentialPayload Erase(string service, string? account)
+        => Execute(() => EraseAsync(service, account));
+
+    private static CredentialPayload Execute(Func<Task<CredentialPayload>> operation)
+    {
+        try
+        {
+            return operation().GetAwaiter().GetResult();
+        }
+        catch (DBusException ex)
+        {
+            return new CredentialPayload(null, null, MapCredentialStatus(ex.ErrorName));
+        }
+        catch
+        {
+            return new CredentialPayload(null, null, "denied");
+        }
+    }
+
+    private static async Task<CredentialPayload> GetAsync(string service, string? account)
+    {
+        await using var connection = new Connection(Address.Session);
+        await connection.ConnectAsync();
+
+        var secretService = connection.CreateProxy<ISecretService>(ServiceName, ServicePath);
+        var session = await OpenSessionAsync(secretService);
+
+        var attributes = BuildAttributes(service, account);
+        var (unlocked, locked) = await secretService.SearchItemsAsync(attributes);
+
+        if (locked.Length > 0)
+        {
+            var (_, promptPath) = await secretService.UnlockAsync(locked);
+            if (promptPath != RootPromptPath)
+            {
+                return new CredentialPayload(null, null, "denied");
+            }
+        }
+
+        var itemPath = unlocked.FirstOrDefault();
+        if (itemPath == default)
+        {
+            return new CredentialPayload(null, null, "not_found");
+        }
+
+        var item = connection.CreateProxy<ISecretItem>(ServiceName, itemPath);
+        var secret = await item.GetSecretAsync(session);
+        var username = account;
+        if (string.IsNullOrWhiteSpace(username))
+        {
+            var itemAttributes = await item.GetAttributesAsync();
+            if (itemAttributes.TryGetValue("account", out var foundAccount))
+            {
+                username = foundAccount;
+            }
+        }
+
+        var secretValue = secret.Value.Length > 0
+            ? Encoding.UTF8.GetString(secret.Value)
+            : null;
+
+        return new CredentialPayload(username, secretValue, "ok");
+    }
+
+    private static async Task<CredentialPayload> StoreAsync(string service, string? account, string? secret)
+    {
+        if (string.IsNullOrWhiteSpace(account) || string.IsNullOrWhiteSpace(secret))
+        {
+            return new CredentialPayload(null, null, "denied");
+        }
+
+        await using var connection = new Connection(Address.Session);
+        await connection.ConnectAsync();
+
+        var secretService = connection.CreateProxy<ISecretService>(ServiceName, ServicePath);
+        var session = await OpenSessionAsync(secretService);
+
+        var collectionPath = await secretService.ReadAliasAsync("default");
+        if (collectionPath == default)
+        {
+            return new CredentialPayload(null, null, "denied");
+        }
+
+        var properties = new Dictionary<string, object>
+        {
+            ["org.freedesktop.Secret.Item.Label"] = $"{service}:{account}",
+            ["org.freedesktop.Secret.Item.Attributes"] = BuildAttributes(service, account)
+        };
+
+        var secretStruct = new Secret(
+            session,
+            Array.Empty<byte>(),
+            Encoding.UTF8.GetBytes(secret),
+            "text/plain");
+
+        var (_, promptPath) = await secretService.CreateItemAsync(collectionPath, properties, secretStruct, true);
+        if (promptPath != RootPromptPath)
+        {
+            return new CredentialPayload(null, null, "denied");
+        }
+
+        return new CredentialPayload(account, null, "ok");
+    }
+
+    private static async Task<CredentialPayload> EraseAsync(string service, string? account)
+    {
+        await using var connection = new Connection(Address.Session);
+        await connection.ConnectAsync();
+
+        var secretService = connection.CreateProxy<ISecretService>(ServiceName, ServicePath);
+        var attributes = BuildAttributes(service, account);
+        var (unlocked, locked) = await secretService.SearchItemsAsync(attributes);
+        var itemPath = unlocked.FirstOrDefault();
+
+        if (itemPath == default && locked.Length > 0)
+        {
+            var (unlockResult, promptPath) = await secretService.UnlockAsync(locked);
+            if (promptPath != RootPromptPath)
+            {
+                return new CredentialPayload(null, null, "denied");
+            }
+
+            itemPath = unlockResult.FirstOrDefault();
+        }
+
+        if (itemPath == default)
+        {
+            return new CredentialPayload(null, null, "not_found");
+        }
+
+        var item = connection.CreateProxy<ISecretItem>(ServiceName, itemPath);
+        var prompt = await item.DeleteAsync();
+        if (prompt != RootPromptPath)
+        {
+            return new CredentialPayload(null, null, "denied");
+        }
+
+        return new CredentialPayload(null, null, "ok");
+    }
+
+    private static IDictionary<string, string> BuildAttributes(string service, string? account)
+    {
+        var attributes = new Dictionary<string, string>
+        {
+            ["service"] = service
+        };
+
+        if (!string.IsNullOrWhiteSpace(account))
+        {
+            attributes["account"] = account;
+        }
+
+        return attributes;
+    }
+
+    private static async Task<ObjectPath> OpenSessionAsync(ISecretService secretService)
+    {
+        var (session, _) = await secretService.OpenSessionAsync("plain", string.Empty);
+        return session;
+    }
+
+    private static string MapCredentialStatus(string errorName)
+    {
+        return errorName switch
+        {
+            "org.freedesktop.Secret.Error.NoSuchObject" => "not_found",
+            "org.freedesktop.Secret.Error.IsLocked" => "denied",
+            "org.freedesktop.Secret.Error.PermissionDenied" => "denied",
+            _ => "denied"
+        };
+    }
+}
+
+[DBusInterface("org.freedesktop.Secret.Service")]
+internal interface ISecretService : IDBusObject
+{
+    Task<(ObjectPath session, object output)> OpenSessionAsync(string algorithm, object input);
+    Task<(ObjectPath[] unlocked, ObjectPath[] locked)> SearchItemsAsync(IDictionary<string, string> attributes);
+    Task<(ObjectPath[] unlocked, ObjectPath prompt)> UnlockAsync(ObjectPath[] items);
+    Task<ObjectPath> ReadAliasAsync(string name);
+    Task<(ObjectPath item, ObjectPath prompt)> CreateItemAsync(
+        ObjectPath collection,
+        IDictionary<string, object> properties,
+        Secret secret,
+        bool replace);
+}
+
+[DBusInterface("org.freedesktop.Secret.Item")]
+internal interface ISecretItem : IDBusObject
+{
+    Task<Secret> GetSecretAsync(ObjectPath session);
+    Task<ObjectPath> DeleteAsync();
+
+    [DBusProperty("Attributes")]
+    Task<IDictionary<string, string>> GetAttributesAsync();
+}
+
+[DBusStruct]
+internal readonly struct Secret
+{
+    public ObjectPath Session { get; }
+    public byte[] Parameters { get; }
+    public byte[] Value { get; }
+    public string ContentType { get; }
+
+    public Secret(ObjectPath session, byte[] parameters, byte[] value, string contentType)
+    {
+        Session = session;
+        Parameters = parameters;
+        Value = value;
+        ContentType = contentType;
+    }
 }
 
 #if WINDOWS

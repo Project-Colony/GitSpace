@@ -14,5 +14,6 @@
     <PackageReference Include="Microsoft.Extensions.Logging" Version="8.0.0" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="8.0.0" />
     <PackageReference Include="NativeFileDialogSharp" Version="0.6.5" />
+    <PackageReference Include="Tmds.DBus" Version="0.21.3" />
   </ItemGroup>
 </Project>
