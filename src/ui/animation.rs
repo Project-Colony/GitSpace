@@ -293,6 +293,17 @@ pub struct ShadowEffect {
     pub opacity: f32,
 }
 
+impl ShadowEffect {
+    pub fn to_egui_shadow(self, color: egui::Color32) -> egui::epaint::Shadow {
+        egui::epaint::Shadow {
+            offset: egui::vec2(self.offset[0], self.offset[1]),
+            blur: self.blur,
+            spread: 0.0,
+            color: color.linear_multiply(self.opacity),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AnimationEffectSet {
     pub fade_in: FadeEffect,

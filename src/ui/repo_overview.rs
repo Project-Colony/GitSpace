@@ -2,12 +2,12 @@ use std::process::Command;
 
 use eframe::egui::{self, Align, Layout, Margin, RichText, Ui};
 
+use crate::config::MIN_BRANCH_BOX_HEIGHT;
 use crate::git::{
     remote::{RemoteInfo, list_remotes},
     status::{RepoStatus, read_repo_status},
 };
-use crate::config::MIN_BRANCH_BOX_HEIGHT;
-use crate::ui::{context::RepoContext, theme::Theme};
+use crate::ui::{animation::motion_settings, context::RepoContext, perf::PerfScope, theme::Theme};
 
 #[derive(Debug, Clone)]
 pub struct RepoOverviewPanel {
@@ -19,6 +19,8 @@ pub struct RepoOverviewPanel {
     action_status: Option<String>,
     branch_box_height: f32,
     pending_branch_box_height: Option<f32>,
+    resize_delta_accumulator: f32,
+    last_resize_update: Option<f64>,
 }
 
 impl RepoOverviewPanel {
@@ -32,6 +34,8 @@ impl RepoOverviewPanel {
             action_status: None,
             branch_box_height,
             pending_branch_box_height: None,
+            resize_delta_accumulator: 0.0,
+            last_resize_update: None,
         }
     }
 
@@ -121,18 +125,25 @@ impl RepoOverviewPanel {
     }
 
     fn branch_section(&mut self, ui: &mut Ui) {
+        let _scope = PerfScope::new("repo_overview::branch_section");
         let status = self.status.clone().unwrap_or_default();
         let branch = status.branch.unwrap_or_else(|| "(detached)".to_string());
         let upstream = status.upstream.unwrap_or_else(|| "No upstream".to_string());
         let ahead = status.ahead.unwrap_or(0);
         let behind = status.behind.unwrap_or(0);
 
+        let motion = motion_settings(ui.ctx());
+        let shadow = motion
+            .effects()
+            .soft_shadow
+            .to_egui_shadow(self.theme.palette.text_primary);
         let branch_height = self.branch_box_height.max(MIN_BRANCH_BOX_HEIGHT);
         let grip_height = 6.0;
         let frame = egui::Frame::none()
             .fill(self.theme.palette.surface)
             .stroke(egui::Stroke::new(1.0, self.theme.palette.surface_highlight))
             .rounding(8.0)
+            .shadow(shadow)
             .inner_margin(Margin {
                 left: 10.0,
                 right: 10.0,
@@ -148,10 +159,8 @@ impl RepoOverviewPanel {
             egui::vec2(ui.available_width(), total_height),
             egui::Sense::hover(),
         );
-        let frame_rect = egui::Rect::from_min_size(
-            rect.min,
-            egui::vec2(rect.width(), branch_height),
-        );
+        let frame_rect =
+            egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), branch_height));
         let grip_rect = egui::Rect::from_min_size(
             egui::pos2(rect.left(), rect.top() + branch_height),
             egui::vec2(rect.width(), grip_height),
@@ -185,12 +194,27 @@ impl RepoOverviewPanel {
         }
 
         if grip_response.dragged() {
-            let delta = ui.input(|input| input.pointer.delta().y);
-            self.branch_box_height = (self.branch_box_height + delta).max(MIN_BRANCH_BOX_HEIGHT);
+            let (delta, now) = ui.input(|input| (input.pointer.delta().y, input.time));
+            self.resize_delta_accumulator += delta;
+            let should_apply = self
+                .last_resize_update
+                .map_or(true, |last| (now - last) >= 0.016);
+            if should_apply && self.resize_delta_accumulator.abs() > f32::EPSILON {
+                self.branch_box_height = (self.branch_box_height + self.resize_delta_accumulator)
+                    .max(MIN_BRANCH_BOX_HEIGHT);
+                self.resize_delta_accumulator = 0.0;
+                self.last_resize_update = Some(now);
+            }
         }
 
         if grip_response.drag_stopped() {
+            if self.resize_delta_accumulator.abs() > f32::EPSILON {
+                self.branch_box_height = (self.branch_box_height + self.resize_delta_accumulator)
+                    .max(MIN_BRANCH_BOX_HEIGHT);
+                self.resize_delta_accumulator = 0.0;
+            }
             self.pending_branch_box_height = Some(self.branch_box_height);
+            self.last_resize_update = None;
         }
 
         let painter = ui.painter();
@@ -230,6 +254,7 @@ impl RepoOverviewPanel {
     }
 
     fn remotes_section(&self, ui: &mut Ui) {
+        let motion = motion_settings(ui.ctx());
         ui.heading(RichText::new("Remotes").color(self.theme.palette.text_primary));
         ui.add_space(4.0);
 
@@ -242,9 +267,14 @@ impl RepoOverviewPanel {
         }
 
         for remote in &self.remotes {
+            let shadow = motion
+                .effects()
+                .soft_shadow
+                .to_egui_shadow(self.theme.palette.text_primary);
             let frame = egui::Frame::none()
                 .fill(self.theme.palette.surface)
                 .stroke(egui::Stroke::new(1.0, self.theme.palette.surface_highlight))
+                .shadow(shadow)
                 .rounding(6.0)
                 .inner_margin(Margin::same(10.0));
 
@@ -330,21 +360,28 @@ impl RepoOverviewPanel {
             let xterm_command = format!("cd '{}' && exec bash", repo.path);
             let candidates: Vec<(&str, Vec<String>)> = vec![
                 ("x-terminal-emulator", Vec::new()),
-                ("gnome-terminal", vec!["--working-directory".into(), repo.path.clone()]),
+                (
+                    "gnome-terminal",
+                    vec!["--working-directory".into(), repo.path.clone()],
+                ),
                 ("konsole", vec!["--workdir".into(), repo.path.clone()]),
-                ("xfce4-terminal", vec!["--working-directory".into(), repo.path.clone()]),
+                (
+                    "xfce4-terminal",
+                    vec!["--working-directory".into(), repo.path.clone()],
+                ),
                 (
                     "xterm",
-                    vec![
-                        "-e".into(),
-                        "bash".into(),
-                        "-lc".into(),
-                        xterm_command,
-                    ],
+                    vec!["-e".into(), "bash".into(), "-lc".into(), xterm_command],
                 ),
-                ("alacritty", vec!["--working-directory".into(), repo.path.clone()]),
+                (
+                    "alacritty",
+                    vec!["--working-directory".into(), repo.path.clone()],
+                ),
                 ("kitty", vec!["--directory".into(), repo.path.clone()]),
-                ("wezterm", vec!["start".into(), "--cwd".into(), repo.path.clone()]),
+                (
+                    "wezterm",
+                    vec!["start".into(), "--cwd".into(), repo.path.clone()],
+                ),
             ];
 
             for (terminal, args) in candidates {
