@@ -1,9 +1,9 @@
-use eframe::egui::{self, Align, Align2, FontId, Id, Layout, RichText, Sense, Stroke, Ui};
+use eframe::egui::{self, Align, Id, Layout, RichText, Sense, Ui};
 
 use crate::auth::AuthManager;
 use crate::config::AppConfig;
 use crate::ui::{
-    auth::AuthPanel, branches::BranchPanel, clone::ClonePanel, context::RepoContext, effects,
+    auth::AuthPanel, branches::BranchPanel, clone::ClonePanel, context::RepoContext,
     notifications::NotificationCenter, recent::RecentList, repo_overview::RepoOverviewPanel,
     settings::SettingsPanel, stage::StagePanel, theme::Theme,
 };
@@ -126,12 +126,7 @@ impl<'a> ShellLayout<'a> {
                     ("Remote Repos", MainTab::Clone),
                 ] {
                     ui.add_space(4.0);
-                    let response = self.nav_item(
-                        ui,
-                        format!("sidebar-workspace-{label}"),
-                        label,
-                        active_tab == tab,
-                    );
+                    let response = ui.add(egui::SelectableLabel::new(active_tab == tab, label));
 
                     if response.hovered() {
                         ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
@@ -153,12 +148,10 @@ impl<'a> ShellLayout<'a> {
                     ("New Branch", MainTab::Branches),
                     ("Sync", MainTab::Stage),
                 ] {
-                    let response = self.nav_item(
-                        ui,
-                        format!("sidebar-action-{action}"),
-                        action,
+                    let response = ui.add(egui::SelectableLabel::new(
                         active_tab == tab,
-                    );
+                        RichText::new(action).strong(),
+                    ));
                     if response.hovered() {
                         ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
                     }
@@ -269,48 +262,22 @@ impl<'a> ShellLayout<'a> {
 
             for (index, tab) in tab_order.iter().copied().enumerate() {
                 let is_active = *active == tab;
-                let (rect, response) =
-                    ui.allocate_exact_size(egui::vec2(128.0, 34.0), Sense::click_and_drag());
-                let id = ui.make_persistent_id(("tab", tab.label()));
-                let hovered = response.hovered();
-                let fill = effects::animated_color(
-                    ui.ctx(),
-                    id.with("fill"),
-                    self.theme.palette.surface,
-                    self.theme.palette.surface_highlight,
-                    self.theme.palette.accent_weak,
-                    hovered,
-                    is_active,
-                );
-                let stroke = effects::animated_stroke(
-                    ui.ctx(),
-                    id.with("stroke"),
-                    Stroke::new(1.0, self.theme.palette.surface_highlight),
-                    Stroke::new(1.5, self.theme.palette.accent_weak),
-                    Stroke::new(2.0, self.theme.palette.accent),
-                    hovered,
-                    is_active,
-                );
-                ui.painter().rect(rect, 10.0, fill, stroke);
-                let text_color = effects::animated_color(
-                    ui.ctx(),
-                    id.with("text"),
-                    self.theme.palette.text_secondary,
-                    self.theme.palette.text_primary,
-                    self.theme.palette.text_primary,
-                    hovered,
-                    is_active,
-                );
-                ui.painter().text(
-                    rect.center(),
-                    Align2::CENTER_CENTER,
-                    tab.label(),
-                    FontId::proportional(self.theme.typography.body),
-                    text_color,
+                let label = RichText::new(tab.label())
+                    .color(if is_active {
+                        self.theme.palette.text_primary
+                    } else {
+                        self.theme.palette.text_secondary
+                    })
+                    .strong();
+
+                let response = ui.add_sized(
+                    [120.0, 32.0],
+                    egui::Label::new(label).sense(Sense::click_and_drag()),
                 );
 
                 if is_active {
-                    let stroke = Stroke::new(2.5, self.theme.palette.accent);
+                    let rect = response.rect;
+                    let stroke = egui::Stroke::new(2.0, self.theme.palette.accent);
                     ui.painter()
                         .line_segment([rect.left_bottom(), rect.right_bottom()], stroke);
                 }
@@ -410,55 +377,5 @@ impl<'a> ShellLayout<'a> {
                 None
             }
         }
-    }
-
-    fn nav_item(
-        &self,
-        ui: &mut Ui,
-        id_source: impl std::hash::Hash,
-        label: &str,
-        active: bool,
-    ) -> egui::Response {
-        let height = 30.0;
-        let (rect, response) =
-            ui.allocate_exact_size(egui::vec2(ui.available_width(), height), Sense::click());
-        let id = ui.make_persistent_id(id_source);
-        let hovered = response.hovered();
-        let fill = effects::animated_color(
-            ui.ctx(),
-            id.with("fill"),
-            self.theme.palette.surface,
-            self.theme.palette.surface_highlight,
-            self.theme.palette.accent_weak,
-            hovered,
-            active,
-        );
-        let stroke = effects::animated_stroke(
-            ui.ctx(),
-            id.with("stroke"),
-            Stroke::new(1.0, self.theme.palette.surface_highlight),
-            Stroke::new(1.5, self.theme.palette.accent_weak),
-            Stroke::new(2.0, self.theme.palette.accent),
-            hovered,
-            active,
-        );
-        ui.painter().rect(rect, 8.0, fill, stroke);
-        let text_color = effects::animated_color(
-            ui.ctx(),
-            id.with("text"),
-            self.theme.palette.text_secondary,
-            self.theme.palette.text_primary,
-            self.theme.palette.text_primary,
-            hovered,
-            active,
-        );
-        ui.painter().text(
-            rect.left_center() + egui::vec2(12.0, 0.0),
-            Align2::LEFT_CENTER,
-            label,
-            FontId::proportional(self.theme.typography.body),
-            text_color,
-        );
-        response
     }
 }
