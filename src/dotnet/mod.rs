@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use crate::error::AppError;
+use crate::telemetry::{log_dotnet_helper_launch_failure, log_dotnet_json_parse_error};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -88,7 +89,11 @@ impl DotnetClient {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .spawn()?;
+            .spawn()
+            .map_err(|err| {
+                log_dotnet_helper_launch_failure(&err);
+                AppError::from(err)
+            })?;
 
         let mut stdin = child
             .stdin
@@ -108,7 +113,10 @@ impl DotnetClient {
             )));
         }
 
-        serde_json::from_slice(&output.stdout).map_err(|err| AppError::Unknown(err.to_string()))
+        serde_json::from_slice(&output.stdout).map_err(|err| {
+            log_dotnet_json_parse_error(&err, "dotnet_response");
+            AppError::Unknown(err.to_string())
+        })
     }
 
     pub fn dialog_open(
@@ -133,7 +141,10 @@ impl DotnetClient {
         let payload = response
             .payload
             .ok_or_else(|| AppError::Unknown("Missing dialog response payload".to_string()))?;
-        serde_json::from_value(payload).map_err(|err| AppError::Unknown(err.to_string()))
+        serde_json::from_value(payload).map_err(|err| {
+            log_dotnet_json_parse_error(&err, "dialog_open_payload");
+            AppError::Unknown(err.to_string())
+        })
     }
 }
 

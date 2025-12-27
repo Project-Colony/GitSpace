@@ -3,6 +3,7 @@ use rfd::FileDialog;
 
 use crate::config::{Keybinding, Preferences, ReleaseChannel, ThemeMode};
 use crate::dotnet::{DialogOpenRequest, DialogOptions, DotnetClient};
+use crate::ui::notifications::{Notification, NotificationCenter};
 use crate::ui::theme::Theme;
 
 pub struct SettingsPanel {
@@ -78,7 +79,7 @@ impl SettingsPanel {
         false
     }
 
-    pub fn ui(&mut self, ui: &mut Ui) {
+    pub fn ui(&mut self, ui: &mut Ui, notifications: &mut NotificationCenter) {
         ui.add_space(8.0);
         ui.heading(RichText::new("Settings").color(self.theme.palette.text_primary));
         ui.label(
@@ -90,7 +91,7 @@ impl SettingsPanel {
         ui.add_space(12.0);
 
         self.theme_section(ui);
-        self.clone_section(ui);
+        self.clone_section(ui, notifications);
         self.keybinding_section(ui);
         self.network_section(ui);
         self.privacy_section(ui);
@@ -139,7 +140,7 @@ impl SettingsPanel {
         );
     }
 
-    fn clone_section(&mut self, ui: &mut Ui) {
+    fn clone_section(&mut self, ui: &mut Ui, notifications: &mut NotificationCenter) {
         self.collapsible_section(
             ui,
             "settings-repositories",
@@ -191,6 +192,10 @@ impl SettingsPanel {
                                 }
                             }
                             Err(err) => {
+                                notifications.push(Notification::error(
+                                    "Native helper failed",
+                                    err.user_message(),
+                                ));
                                 panel.native_dialog_status =
                                     Some(format!("Native helper failed: {}", err));
                             }

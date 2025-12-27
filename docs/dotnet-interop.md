@@ -1,46 +1,89 @@
 # .NET interop
 
-Ce document décrit la communication JSON entre GitSpace (Rust) et le helper .NET.
+Ce document décrit la communication JSON entre GitSpace (Rust) et le helper .NET, ainsi que la
+taxonomie d'erreurs utilisée pour la télémétrie et l'UX.
 
-## Commande `ping`
+## Format de requête
 
-Le helper .NET accepte un JSON sur `stdin` et renvoie un JSON sur `stdout`.
-
-### Requête
-
-```json
-{"command":"ping"}
-```
-
-### Réponse
+Le helper .NET accepte une requête JSON sur `stdin` et renvoie une réponse JSON sur `stdout`.
 
 ```json
-{"status":"ok","message":"pong"}
+{
+  "id": "req-0001",
+  "command": "dialog.open",
+  "payload": {
+    "kind": "open_folder",
+    "title": "Sélectionner un dossier",
+    "filters": [],
+    "options": {
+      "multi_select": false,
+      "show_hidden": false
+    }
+  }
+}
 ```
+
+## Format de réponse
+
+```json
+{
+  "id": "req-0001",
+  "status": "ok",
+  "payload": {
+    "selected_paths": ["/tmp/example"],
+    "cancelled": false
+  },
+  "error": null
+}
+```
+
+En cas d'échec côté helper, `status` vaut `error` et `error` contient des détails.
+
+```json
+{
+  "id": "req-0001",
+  "status": "error",
+  "payload": null,
+  "error": {
+    "category": "dialog",
+    "message": "Native dialog failed to open",
+    "details": {"os_error": "E_ACCESSDENIED"}
+  }
+}
+```
+
+## Taxonomie d'erreurs
+
+Ces catégories sont utilisées côté Rust pour logger et exposer un message UX cohérent.
+
+| Catégorie | Source | Description | Signal |
+| --- | --- | --- | --- |
+| `dotnet.helper.launch_failed` | Rust | Échec au lancement du helper .NET (`Command::spawn`). | Log `gitspace::telemetry` |
+| `dotnet.helper.json_parse_failed` | Rust | Erreur de parsing JSON sur la réponse helper (ou payload). | Log `gitspace::telemetry` |
+| `dotnet.helper.process_failed` | Rust | Le helper s'est terminé avec un code non nul. | Message UX + `AppError::Unknown` |
+| `dotnet.helper.response_error` | Helper | Réponse `status = error` avec `error.category`/`error.message`. | Message UX |
 
 ## Exemple côté Rust
 
 ```rust
-use crate::dotnet::{DotnetClient, DotnetRequest};
+use crate::dotnet::{DialogOpenRequest, DialogOptions, DotnetClient};
 
-let request = DotnetRequest {
-    command: "ping".to_string(),
+let request = DialogOpenRequest {
+    kind: "open_folder".to_string(),
+    title: Some("Select default clone destination".to_string()),
+    filters: Vec::new(),
+    options: DialogOptions {
+        multi_select: false,
+        show_hidden: false,
+    },
 };
 
-let response = DotnetClient::new("dotnet")
-    .with_args([
-        "run",
-        "--project",
-        "dotnet/GitSpace.Helper/GitSpace.Helper.csproj",
-    ])
-    .send_request(&request)?;
-
-assert_eq!(response.status, "ok");
-assert_eq!(response.message, "pong");
+let response = DotnetClient::helper().dialog_open(request)?;
 ```
 
 ## Exemple côté shell
 
 ```bash
-echo '{"command":"ping"}' | dotnet run --project dotnet/GitSpace.Helper/GitSpace.Helper.csproj
+echo '{"id":"req-0001","command":"ping","payload":{}}' \
+  | dotnet run --project dotnet/GitSpace.Helper/GitSpace.Helper.csproj
 ```

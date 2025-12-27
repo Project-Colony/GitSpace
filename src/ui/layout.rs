@@ -373,7 +373,7 @@ impl<'a> ShellLayout<'a> {
                 None
             }
             MainTab::Settings => {
-                settings_panel.ui(ui);
+                settings_panel.ui(ui, notifications);
                 None
             }
         }
