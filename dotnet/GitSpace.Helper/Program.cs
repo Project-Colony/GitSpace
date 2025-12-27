@@ -11,6 +11,253 @@ using System.Windows.Forms;
 using NativeFileDialogSharp;
 #endif
 
+using var loggerFactory = LoggerFactory.Create(builder =>
+{
+    builder
+        .SetMinimumLevel(LogLevel.Information)
+        .AddSimpleConsole(options =>
+        {
+            options.SingleLine = true;
+            options.TimestampFormat = "HH:mm:ss ";
+        });
+});
+
+var logger = loggerFactory.CreateLogger("GitSpace.Helper");
+
+var input = await Console.In.ReadToEndAsync();
+if (string.IsNullOrWhiteSpace(input))
+{
+    logger.LogWarning("No JSON request provided on stdin.");
+    return;
+}
+
+Request? request;
+try
+{
+    request = JsonSerializer.Deserialize<Request>(input);
+}
+catch (JsonException ex)
+{
+    logger.LogError(ex, "Invalid JSON payload.");
+    return;
+}
+
+if (request is null)
+{
+    logger.LogError("Request payload was empty after deserialization.");
+    return;
+}
+
+var response = request.Command.ToLowerInvariant() switch
+{
+    "ping" => Response.Ok(request.Id, new
+    {
+        version = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.1.0"
+    }),
+    "dialog.open" => HandleDialogOpen(request),
+    "credential.request" => HandleCredentialRequest(request),
+    "library.call" => HandleLibraryCall(request),
+    _ => Response.Error(
+        request.Id,
+        "InvalidRequest",
+        "Unknown command",
+        new { command = request.Command })
+};
+
+Console.WriteLine(JsonSerializer.Serialize(response));
+
+static Response HandleDialogOpen(Request request)
+{
+    DialogOpenRequest? payload;
+    try
+    {
+        payload = JsonSerializer.Deserialize<DialogOpenRequest>(
+            request.Payload.GetRawText(),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+    }
+    catch (JsonException ex)
+    {
+        return Response.Error(
+            request.Id,
+            "InvalidRequest",
+            $"Malformed dialog payload: {ex.Message}",
+            null);
+    }
+
+    if (payload is null || string.IsNullOrWhiteSpace(payload.Kind))
+    {
+        return Response.Error(
+            request.Id,
+            "InvalidRequest",
+            "Missing payload.kind",
+            new { field = "kind" });
+    }
+
+    var title = payload.Title ?? string.Empty;
+    var filters = payload.Filters ?? Array.Empty<DialogFilter>();
+    var options = payload.Options ?? new DialogOptions(false, false);
+
+    try
+    {
+#if WINDOWS
+        var result = payload.Kind switch
+        {
+            "open_file" => OpenFileDialogWindows(title, filters, options),
+            "open_folder" => OpenFolderDialogWindows(title, options),
+            "save_file" => SaveFileDialogWindows(title, filters, options),
+            _ => throw new InvalidOperationException($"Unsupported dialog kind '{payload.Kind}'.")
+        };
+#else
+        var result = payload.Kind switch
+        {
+            "open_file" => OpenFileDialogNative(filters, options),
+            "open_folder" => OpenFolderDialogNative(),
+            "save_file" => SaveFileDialogNative(filters),
+            _ => throw new InvalidOperationException($"Unsupported dialog kind '{payload.Kind}'.")
+        };
+#endif
+
+        return Response.Ok(request.Id, new
+        {
+            selected_paths = result.Paths,
+            cancelled = result.Cancelled
+        });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Response.Error(
+            request.Id,
+            "InvalidRequest",
+            ex.Message,
+            new { kind = payload.Kind });
+    }
+    catch (Exception ex)
+    {
+        return Response.Error(
+            request.Id,
+            "Internal",
+            "Unhandled exception",
+            new { error = ex.Message });
+    }
+}
+
+static Response HandleCredentialRequest(Request request)
+{
+    CredentialRequest? payload;
+    try
+    {
+        payload = JsonSerializer.Deserialize<CredentialRequest>(
+            request.Payload.GetRawText(),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+    }
+    catch (JsonException ex)
+    {
+        return Response.Error(
+            request.Id,
+            "InvalidRequest",
+            $"Malformed credential payload: {ex.Message}",
+            null);
+    }
+
+    if (payload is null || string.IsNullOrWhiteSpace(payload.Service))
+    {
+        return Response.Error(
+            request.Id,
+            "InvalidRequest",
+            "Missing payload.service",
+            new { field = "service" });
+    }
+
+    if (string.IsNullOrWhiteSpace(payload.Action))
+    {
+        return Response.Error(
+            request.Id,
+            "InvalidRequest",
+            "Missing payload.action",
+            new { field = "action" });
+    }
+
+    var action = payload.Action.ToLowerInvariant();
+    if (action is not ("get" or "store" or "erase"))
+    {
+        return Response.Error(
+            request.Id,
+            "InvalidRequest",
+            "Unsupported payload.action",
+            new { action = payload.Action });
+    }
+
+    try
+    {
+        var provider = CredentialProviderFactory.Create();
+        var result = action switch
+        {
+            "get" => provider.Get(payload.Service, payload.Account),
+            "store" => provider.Store(payload.Service, payload.Account, payload.Secret),
+            "erase" => provider.Erase(payload.Service, payload.Account),
+            _ => new CredentialPayload(null, null, CredentialStatus.Denied)
+        };
+
+        return Response.Ok(request.Id, new
+        {
+            username = result.Username,
+            secret = result.Secret,
+            status = result.Status
+        });
+    }
+    catch (Exception ex)
+    {
+        return Response.Error(
+            request.Id,
+            "Internal",
+            "Unhandled exception",
+            new { error = ex.Message });
+    }
+}
+
+static Response HandleLibraryCall(Request request)
+{
+    LibraryCallRequest? payload;
+    try
+    {
+        payload = JsonSerializer.Deserialize<LibraryCallRequest>(
+            request.Payload.GetRawText(),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+    }
+    catch (JsonException ex)
+    {
+        return Response.Error(
+            request.Id,
+            "InvalidRequest",
+            $"Malformed library payload: {ex.Message}",
+            null);
+    }
+
+    if (payload is null || string.IsNullOrWhiteSpace(payload.Name))
+    {
+        return Response.Error(
+            request.Id,
+            "InvalidRequest",
+            "Missing payload.name",
+            new { field = "name" });
+    }
+
+    var name = payload.Name.ToLowerInvariant();
+    return name switch
+    {
+        "system.info" => Response.Ok(request.Id, new
+        {
+            os = RuntimeInformation.OSDescription,
+            version = Environment.OSVersion.VersionString
+        }),
+        _ => Response.Error(
+            request.Id,
+            "InvalidRequest",
+            "Unknown library name",
+            new { name = payload.Name })
+    };
+}
+
 internal sealed record Request(string Id, string Command, JsonElement Payload);
 
 internal sealed record Response(string Id, string Status, object? Payload, ErrorDetails? Error)
@@ -641,254 +888,6 @@ internal sealed class WindowsCredentialProvider : ICredentialProvider
 internal sealed record DialogOpenResult(string[] Paths, bool Cancelled)
 {
     public static DialogOpenResult CancelledResult { get; } = new(Array.Empty<string>(), true);
-}
-
-
-using var loggerFactory = LoggerFactory.Create(builder =>
-{
-    builder
-        .SetMinimumLevel(LogLevel.Information)
-        .AddSimpleConsole(options =>
-        {
-            options.SingleLine = true;
-            options.TimestampFormat = "HH:mm:ss ";
-        });
-});
-
-var logger = loggerFactory.CreateLogger("GitSpace.Helper");
-
-var input = await Console.In.ReadToEndAsync();
-if (string.IsNullOrWhiteSpace(input))
-{
-    logger.LogWarning("No JSON request provided on stdin.");
-    return;
-}
-
-Request? request;
-try
-{
-    request = JsonSerializer.Deserialize<Request>(input);
-}
-catch (JsonException ex)
-{
-    logger.LogError(ex, "Invalid JSON payload.");
-    return;
-}
-
-if (request is null)
-{
-    logger.LogError("Request payload was empty after deserialization.");
-    return;
-}
-
-var response = request.Command.ToLowerInvariant() switch
-{
-    "ping" => Response.Ok(request.Id, new
-    {
-        version = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.1.0"
-    }),
-    "dialog.open" => HandleDialogOpen(request),
-    "credential.request" => HandleCredentialRequest(request),
-    "library.call" => HandleLibraryCall(request),
-    _ => Response.Error(
-        request.Id,
-        "InvalidRequest",
-        "Unknown command",
-        new { command = request.Command })
-};
-
-Console.WriteLine(JsonSerializer.Serialize(response));
-
-static Response HandleDialogOpen(Request request)
-{
-    DialogOpenRequest? payload;
-    try
-    {
-        payload = JsonSerializer.Deserialize<DialogOpenRequest>(
-            request.Payload.GetRawText(),
-            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-    }
-    catch (JsonException ex)
-    {
-        return Response.Error(
-            request.Id,
-            "InvalidRequest",
-            $"Malformed dialog payload: {ex.Message}",
-            null);
-    }
-
-    if (payload is null || string.IsNullOrWhiteSpace(payload.Kind))
-    {
-        return Response.Error(
-            request.Id,
-            "InvalidRequest",
-            "Missing payload.kind",
-            new { field = "kind" });
-    }
-
-    var title = payload.Title ?? string.Empty;
-    var filters = payload.Filters ?? Array.Empty<DialogFilter>();
-    var options = payload.Options ?? new DialogOptions(false, false);
-
-    try
-    {
-#if WINDOWS
-        var result = payload.Kind switch
-        {
-            "open_file" => OpenFileDialogWindows(title, filters, options),
-            "open_folder" => OpenFolderDialogWindows(title, options),
-            "save_file" => SaveFileDialogWindows(title, filters, options),
-            _ => throw new InvalidOperationException($"Unsupported dialog kind '{payload.Kind}'.")
-        };
-#else
-        var result = payload.Kind switch
-        {
-            "open_file" => OpenFileDialogNative(filters, options),
-            "open_folder" => OpenFolderDialogNative(),
-            "save_file" => SaveFileDialogNative(filters),
-            _ => throw new InvalidOperationException($"Unsupported dialog kind '{payload.Kind}'.")
-        };
-#endif
-
-        return Response.Ok(request.Id, new
-        {
-            selected_paths = result.Paths,
-            cancelled = result.Cancelled
-        });
-    }
-    catch (InvalidOperationException ex)
-    {
-        return Response.Error(
-            request.Id,
-            "InvalidRequest",
-            ex.Message,
-            new { kind = payload.Kind });
-    }
-    catch (Exception ex)
-    {
-        return Response.Error(
-            request.Id,
-            "Internal",
-            "Unhandled exception",
-            new { error = ex.Message });
-    }
-}
-
-static Response HandleCredentialRequest(Request request)
-{
-    CredentialRequest? payload;
-    try
-    {
-        payload = JsonSerializer.Deserialize<CredentialRequest>(
-            request.Payload.GetRawText(),
-            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-    }
-    catch (JsonException ex)
-    {
-        return Response.Error(
-            request.Id,
-            "InvalidRequest",
-            $"Malformed credential payload: {ex.Message}",
-            null);
-    }
-
-    if (payload is null || string.IsNullOrWhiteSpace(payload.Service))
-    {
-        return Response.Error(
-            request.Id,
-            "InvalidRequest",
-            "Missing payload.service",
-            new { field = "service" });
-    }
-
-    if (string.IsNullOrWhiteSpace(payload.Action))
-    {
-        return Response.Error(
-            request.Id,
-            "InvalidRequest",
-            "Missing payload.action",
-            new { field = "action" });
-    }
-
-    var action = payload.Action.ToLowerInvariant();
-    if (action is not ("get" or "store" or "erase"))
-    {
-        return Response.Error(
-            request.Id,
-            "InvalidRequest",
-            "Unsupported payload.action",
-            new { action = payload.Action });
-    }
-
-    try
-    {
-        var provider = CredentialProviderFactory.Create();
-        var result = action switch
-        {
-            "get" => provider.Get(payload.Service, payload.Account),
-            "store" => provider.Store(payload.Service, payload.Account, payload.Secret),
-            "erase" => provider.Erase(payload.Service, payload.Account),
-            _ => new CredentialPayload(null, null, CredentialStatus.Denied)
-        };
-
-        return Response.Ok(request.Id, new
-        {
-            username = result.Username,
-            secret = result.Secret,
-            status = result.Status
-        });
-    }
-    catch (Exception ex)
-    {
-        return Response.Error(
-            request.Id,
-            "Internal",
-            "Unhandled exception",
-            new { error = ex.Message });
-    }
-}
-
-static Response HandleLibraryCall(Request request)
-{
-    LibraryCallRequest? payload;
-    try
-    {
-        payload = JsonSerializer.Deserialize<LibraryCallRequest>(
-            request.Payload.GetRawText(),
-            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-    }
-    catch (JsonException ex)
-    {
-        return Response.Error(
-            request.Id,
-            "InvalidRequest",
-            $"Malformed library payload: {ex.Message}",
-            null);
-    }
-
-    if (payload is null || string.IsNullOrWhiteSpace(payload.Name))
-    {
-        return Response.Error(
-            request.Id,
-            "InvalidRequest",
-            "Missing payload.name",
-            new { field = "name" });
-    }
-
-    var name = payload.Name.ToLowerInvariant();
-    return name switch
-    {
-        "system.info" => Response.Ok(request.Id, new
-        {
-            os = RuntimeInformation.OSDescription,
-            version = Environment.OSVersion.VersionString
-        }),
-        _ => Response.Error(
-            request.Id,
-            "InvalidRequest",
-            "Unknown library name",
-            new { name = payload.Name })
-    };
 }
 
 static string BuildWindowsFilter(DialogFilter[] filters)
