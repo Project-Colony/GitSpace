@@ -308,6 +308,10 @@ internal static class CredentialProviderFactory
             return new WindowsCredentialProvider();
         }
 #endif
+        if (OperatingSystem.IsMacOS())
+        {
+            return new MacOsCredentialProvider();
+        }
         return new StubCredentialProvider();
     }
 }
@@ -322,6 +326,190 @@ internal sealed class StubCredentialProvider : ICredentialProvider
 
     public CredentialPayload Erase(string service, string? account)
         => new(null, null, "denied");
+}
+
+internal sealed class MacOsCredentialProvider : ICredentialProvider
+{
+    private const int ErrSecSuccess = 0;
+    private const int ErrSecItemNotFound = -25300;
+    private const int ErrSecAuthFailed = -25293;
+    private const string SecurityLibrary = "/System/Library/Frameworks/Security.framework/Security";
+    private const string CoreFoundationLibrary = "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation";
+
+    public CredentialPayload Get(string service, string? account)
+    {
+        var serviceName = Encoding.UTF8.GetBytes(service);
+        var accountName = string.IsNullOrWhiteSpace(account) ? Array.Empty<byte>() : Encoding.UTF8.GetBytes(account);
+
+        var status = SecKeychainFindGenericPassword(
+            IntPtr.Zero,
+            (uint)serviceName.Length,
+            serviceName,
+            (uint)accountName.Length,
+            accountName.Length == 0 ? IntPtr.Zero : accountName,
+            out var passwordLength,
+            out var passwordData,
+            out var itemRef);
+
+        if (status != ErrSecSuccess)
+        {
+            return new CredentialPayload(null, null, MapCredentialStatus(status));
+        }
+
+        try
+        {
+            var secret = ReadSecret(passwordData, (int)passwordLength);
+            return new CredentialPayload(account, secret, "ok");
+        }
+        finally
+        {
+            if (passwordData != IntPtr.Zero)
+            {
+                SecKeychainItemFreeContent(IntPtr.Zero, passwordData);
+            }
+
+            if (itemRef != IntPtr.Zero)
+            {
+                CFRelease(itemRef);
+            }
+        }
+    }
+
+    public CredentialPayload Store(string service, string? account, string? secret)
+    {
+        if (string.IsNullOrWhiteSpace(account) || string.IsNullOrWhiteSpace(secret))
+        {
+            return new CredentialPayload(null, null, "denied");
+        }
+
+        var serviceName = Encoding.UTF8.GetBytes(service);
+        var accountName = Encoding.UTF8.GetBytes(account);
+        var passwordBytes = Encoding.UTF8.GetBytes(secret);
+
+        var status = SecKeychainAddGenericPassword(
+            IntPtr.Zero,
+            (uint)serviceName.Length,
+            serviceName,
+            (uint)accountName.Length,
+            accountName,
+            (uint)passwordBytes.Length,
+            passwordBytes,
+            out var itemRef);
+
+        if (itemRef != IntPtr.Zero)
+        {
+            CFRelease(itemRef);
+        }
+
+        return status == ErrSecSuccess
+            ? new CredentialPayload(account, null, "ok")
+            : new CredentialPayload(null, null, MapCredentialStatus(status));
+    }
+
+    public CredentialPayload Erase(string service, string? account)
+    {
+        var serviceName = Encoding.UTF8.GetBytes(service);
+        var accountName = string.IsNullOrWhiteSpace(account) ? Array.Empty<byte>() : Encoding.UTF8.GetBytes(account);
+
+        var status = SecKeychainFindGenericPassword(
+            IntPtr.Zero,
+            (uint)serviceName.Length,
+            serviceName,
+            (uint)accountName.Length,
+            accountName.Length == 0 ? IntPtr.Zero : accountName,
+            out var passwordLength,
+            out var passwordData,
+            out var itemRef);
+
+        if (status != ErrSecSuccess)
+        {
+            return new CredentialPayload(null, null, MapCredentialStatus(status));
+        }
+
+        try
+        {
+            var deleteStatus = SecKeychainItemDelete(itemRef);
+            return deleteStatus == ErrSecSuccess
+                ? new CredentialPayload(null, null, "ok")
+                : new CredentialPayload(null, null, MapCredentialStatus(deleteStatus));
+        }
+        finally
+        {
+            if (passwordData != IntPtr.Zero)
+            {
+                SecKeychainItemFreeContent(IntPtr.Zero, passwordData);
+            }
+
+            if (itemRef != IntPtr.Zero)
+            {
+                CFRelease(itemRef);
+            }
+        }
+    }
+
+    private static string? ReadSecret(IntPtr passwordData, int length)
+    {
+        if (passwordData == IntPtr.Zero || length == 0)
+        {
+            return null;
+        }
+
+        var buffer = new byte[length];
+        Marshal.Copy(passwordData, buffer, 0, length);
+        return Encoding.UTF8.GetString(buffer);
+    }
+
+    private static string MapCredentialStatus(int status)
+    {
+        return status switch
+        {
+            ErrSecItemNotFound => "not_found",
+            ErrSecAuthFailed => "denied",
+            _ => "denied"
+        };
+    }
+
+    [DllImport(SecurityLibrary)]
+    private static extern int SecKeychainFindGenericPassword(
+        IntPtr keychain,
+        uint serviceNameLength,
+        byte[] serviceName,
+        uint accountNameLength,
+        IntPtr accountName,
+        out uint passwordLength,
+        out IntPtr passwordData,
+        out IntPtr itemRef);
+
+    [DllImport(SecurityLibrary)]
+    private static extern int SecKeychainFindGenericPassword(
+        IntPtr keychain,
+        uint serviceNameLength,
+        byte[] serviceName,
+        uint accountNameLength,
+        byte[] accountName,
+        out uint passwordLength,
+        out IntPtr passwordData,
+        out IntPtr itemRef);
+
+    [DllImport(SecurityLibrary)]
+    private static extern int SecKeychainAddGenericPassword(
+        IntPtr keychain,
+        uint serviceNameLength,
+        byte[] serviceName,
+        uint accountNameLength,
+        byte[] accountName,
+        uint passwordLength,
+        byte[] passwordData,
+        out IntPtr itemRef);
+
+    [DllImport(SecurityLibrary)]
+    private static extern int SecKeychainItemDelete(IntPtr itemRef);
+
+    [DllImport(SecurityLibrary)]
+    private static extern int SecKeychainItemFreeContent(IntPtr attrList, IntPtr data);
+
+    [DllImport(CoreFoundationLibrary)]
+    private static extern void CFRelease(IntPtr cfRef);
 }
 
 #if WINDOWS

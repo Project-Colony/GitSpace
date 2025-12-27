@@ -53,6 +53,18 @@ Sur Windows, les statuts sont dérivés des erreurs natives retournées par
 | 5 | `ERROR_ACCESS_DENIED` | `denied` |
 | autre | (par défaut) | `denied` |
 
+**Erreurs macOS**
+
+Sur macOS, les statuts sont dérivés des erreurs natives retournées par
+`SecKeychainFindGenericPassword`, `SecKeychainAddGenericPassword` et
+`SecKeychainItemDelete` :
+
+| OSStatus | Constante | Statut |
+| --- | --- | --- |
+| -25300 | `errSecItemNotFound` | `not_found` |
+| -25293 | `errSecAuthFailed` | `denied` |
+| autre | (par défaut) | `denied` |
+
 ### `library.call`
 Appelle une bibliothèque .NET spécifique (interop ciblée).
 
