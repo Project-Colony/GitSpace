@@ -746,7 +746,7 @@ internal sealed class LinuxSecretServiceProvider : ICredentialProvider
         var username = account;
         if (string.IsNullOrWhiteSpace(username))
         {
-            var itemAttributes = await item.GetAttributesAsync();
+            var itemAttributes = await item.GetAsync<IDictionary<string, string>>("Attributes");
             if (itemAttributes.TryGetValue("account", out var foundAccount))
             {
                 username = foundAccount;
@@ -878,9 +878,7 @@ internal interface ISecretItem : IDBusObject
 {
     Task<Secret> GetSecretAsync(ObjectPath session);
     Task<ObjectPath> DeleteAsync();
-
-    [DBusProperty("Attributes")]
-    Task<IDictionary<string, string>> GetAttributesAsync();
+    Task<T> GetAsync<T>(string prop);
 }
 
 internal readonly struct Secret
