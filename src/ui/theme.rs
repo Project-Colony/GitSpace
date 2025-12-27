@@ -1,4 +1,4 @@
-use egui::{Color32, Rounding, Shadow, TextStyle};
+use egui::{Color32, TextStyle};
 
 use crate::config::ThemeMode;
 
@@ -164,30 +164,16 @@ impl Theme {
         visuals.dark_mode = self.is_dark;
         visuals.override_text_color = Some(self.palette.text_primary);
         visuals.widgets.noninteractive.bg_fill = self.palette.background;
-        visuals.widgets.noninteractive.rounding = Rounding::same(8.0);
         visuals.widgets.noninteractive.fg_stroke.color = self.palette.text_secondary;
         visuals.widgets.inactive.bg_fill = self.palette.surface;
-        visuals.widgets.inactive.rounding = Rounding::same(10.0);
         visuals.widgets.inactive.fg_stroke.color = self.palette.text_primary;
         visuals.widgets.hovered.bg_fill = self.palette.surface_highlight;
-        visuals.widgets.hovered.rounding = Rounding::same(12.0);
         visuals.widgets.hovered.fg_stroke.color = self.palette.text_primary;
-        visuals.widgets.active.bg_fill = self.palette.accent;
-        visuals.widgets.active.rounding = Rounding::same(12.0);
         visuals.faint_bg_color = self.palette.surface_highlight;
         visuals.extreme_bg_color = self.palette.surface;
         visuals.code_bg_color = self.palette.surface_highlight;
         visuals.window_fill = self.palette.background;
         visuals.panel_fill = self.palette.background;
-        visuals.window_rounding = Rounding::same(14.0);
-        visuals.window_shadow = Shadow {
-            extrusion: 18.0,
-            color: Color32::from_black_alpha(120),
-        };
-        visuals.popup_shadow = Shadow {
-            extrusion: 16.0,
-            color: Color32::from_black_alpha(140),
-        };
         visuals.selection.bg_fill = self.palette.accent;
         visuals.selection.stroke.color = self.palette.accent_weak;
         visuals.hyperlink_color = self.palette.accent;
@@ -195,10 +181,6 @@ impl Theme {
         ctx.set_visuals(visuals);
 
         let mut style = (*ctx.style()).clone();
-        style.animation_time = 0.12;
-        style.spacing.item_spacing = egui::vec2(self.spacing.sm, self.spacing.sm);
-        style.spacing.button_padding = egui::vec2(self.spacing.sm, self.spacing.xs);
-        style.spacing.window_margin = egui::Margin::same(self.spacing.md);
         style.text_styles = [
             (
                 TextStyle::Heading,
