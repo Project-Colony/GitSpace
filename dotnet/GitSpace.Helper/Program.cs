@@ -57,7 +57,7 @@ var response = request.Command.ToLowerInvariant() switch
     "dialog.open" => HandleDialogOpen(request),
     "credential.request" => HandleCredentialRequest(request),
     "library.call" => HandleLibraryCall(request),
-    _ => Response.Fail(
+    _ => Response.Error(
         request.Id,
         "InvalidRequest",
         "Unknown command",
@@ -77,7 +77,7 @@ static Response HandleDialogOpen(Request request)
     }
     catch (JsonException ex)
     {
-        return Response.Fail(
+        return Response.Error(
             request.Id,
             "InvalidRequest",
             $"Malformed dialog payload: {ex.Message}",
@@ -86,7 +86,7 @@ static Response HandleDialogOpen(Request request)
 
     if (payload is null || string.IsNullOrWhiteSpace(payload.Kind))
     {
-        return Response.Fail(
+        return Response.Error(
             request.Id,
             "InvalidRequest",
             "Missing payload.kind",
@@ -125,7 +125,7 @@ static Response HandleDialogOpen(Request request)
     }
     catch (InvalidOperationException ex)
     {
-        return Response.Fail(
+        return Response.Error(
             request.Id,
             "InvalidRequest",
             ex.Message,
@@ -133,7 +133,7 @@ static Response HandleDialogOpen(Request request)
     }
     catch (Exception ex)
     {
-        return Response.Fail(
+        return Response.Error(
             request.Id,
             "Internal",
             "Unhandled exception",
@@ -152,7 +152,7 @@ static Response HandleCredentialRequest(Request request)
     }
     catch (JsonException ex)
     {
-        return Response.Fail(
+        return Response.Error(
             request.Id,
             "InvalidRequest",
             $"Malformed credential payload: {ex.Message}",
@@ -161,7 +161,7 @@ static Response HandleCredentialRequest(Request request)
 
     if (payload is null || string.IsNullOrWhiteSpace(payload.Service))
     {
-        return Response.Fail(
+        return Response.Error(
             request.Id,
             "InvalidRequest",
             "Missing payload.service",
@@ -170,7 +170,7 @@ static Response HandleCredentialRequest(Request request)
 
     if (string.IsNullOrWhiteSpace(payload.Action))
     {
-        return Response.Fail(
+        return Response.Error(
             request.Id,
             "InvalidRequest",
             "Missing payload.action",
@@ -180,7 +180,7 @@ static Response HandleCredentialRequest(Request request)
     var action = payload.Action.ToLowerInvariant();
     if (action is not ("get" or "store" or "erase"))
     {
-        return Response.Fail(
+        return Response.Error(
             request.Id,
             "InvalidRequest",
             "Unsupported payload.action",
@@ -207,7 +207,7 @@ static Response HandleCredentialRequest(Request request)
     }
     catch (Exception ex)
     {
-        return Response.Fail(
+        return Response.Error(
             request.Id,
             "Internal",
             "Unhandled exception",
@@ -226,7 +226,7 @@ static Response HandleLibraryCall(Request request)
     }
     catch (JsonException ex)
     {
-        return Response.Fail(
+        return Response.Error(
             request.Id,
             "InvalidRequest",
             $"Malformed library payload: {ex.Message}",
@@ -235,7 +235,7 @@ static Response HandleLibraryCall(Request request)
 
     if (payload is null || string.IsNullOrWhiteSpace(payload.Name))
     {
-        return Response.Fail(
+        return Response.Error(
             request.Id,
             "InvalidRequest",
             "Missing payload.name",
@@ -250,7 +250,7 @@ static Response HandleLibraryCall(Request request)
             os = RuntimeInformation.OSDescription,
             version = Environment.OSVersion.VersionString
         }),
-        _ => Response.Fail(
+        _ => Response.Error(
             request.Id,
             "InvalidRequest",
             "Unknown library name",
@@ -382,7 +382,7 @@ internal sealed record Response(string Id, string Status, object? Payload, Error
 {
     public static Response Ok(string id, object? payload) => new(id, "ok", payload, null);
 
-    public static Response Fail(string id, string category, string message, object? details)
+    public static Response Error(string id, string category, string message, object? details)
         => new(id, "error", null, new ErrorDetails(category, message, details));
 }
 
@@ -868,10 +868,11 @@ internal interface ISecretItem : IDBusObject
     Task<Secret> GetSecretAsync(ObjectPath session);
     Task<ObjectPath> DeleteAsync();
 
-    [Property("Attributes")]
+    [DBusProperty("Attributes")]
     Task<IDictionary<string, string>> GetAttributesAsync();
 }
 
+[DBusStruct]
 internal readonly struct Secret
 {
     public ObjectPath Session { get; }
