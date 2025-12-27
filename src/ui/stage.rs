@@ -116,22 +116,9 @@ impl StagePanel {
             ui.add_space(8.0);
             self.render_diff(ui);
             ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                let total_width = ui.available_width();
-                let commit_width = total_width * 0.7;
-                let stash_width = total_width - commit_width;
-                ui.vertical(|ui| {
-                    ui.set_width(commit_width);
-                    self.render_commit_editor(ui);
-                });
-
-                ui.add_space(12.0);
-
-                ui.vertical(|ui| {
-                    ui.set_width(stash_width.max(220.0));
-                    self.render_stash_controls(ui, repo);
-                });
-            });
+            self.render_commit_editor(ui);
+            ui.add_space(12.0);
+            self.render_stash_controls(ui, repo);
             self.render_restore_dialog(ui, repo);
         } else {
             ui.add_space(8.0);
