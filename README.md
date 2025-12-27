@@ -9,8 +9,14 @@ GitSpace is a Git hub application that centralizes multiple repositories in one 
 
 ## Prerequisites
 - **Rust** (latest stable toolchain) for building and running the application.
-- **.NET SDK** for any forthcoming .NET integration components.
+- **.NET SDK 8.x** for any forthcoming .NET integration components.
 - **Git** for interacting with repositories.
+
+## .NET Installation Notes
+- Follow the platform-specific instructions in [`docs/dotnet-setup.md`](docs/dotnet-setup.md).
+- Ensure the `dotnet` CLI is available on your `PATH`.
+- If you install the SDK to a custom location, set `DOTNET_ROOT` and add it to your `PATH`.
+- Optional: set `DOTNET_CLI_TELEMETRY_OPTOUT=1` to disable .NET CLI telemetry.
 
 ## Key Dependencies
 - **eframe/egui** for the panel-based desktop UI (with WGPU rendering).
