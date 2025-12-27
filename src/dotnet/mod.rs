@@ -154,3 +154,6 @@ fn next_request_id() -> String {
     let id = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("req-{id:04}")
 }
+
+#[cfg(test)]
+mod tests;
