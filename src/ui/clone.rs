@@ -13,8 +13,10 @@ use url::Url;
 
 use crate::auth::AuthManager;
 use crate::config::NetworkOptions;
+use crate::dotnet::{DialogOpenRequest, DialogOptions, DotnetClient};
 use crate::error::{AppError, logs_directory};
 use crate::git::clone::{CloneProgress, CloneRequest, clone_repository};
+use crate::ui::effects;
 use crate::ui::notifications::{Notification, NotificationAction, NotificationCenter};
 use crate::ui::theme::Theme;
 
@@ -149,7 +151,7 @@ impl ClonePanel {
 
         self.search_section(ui, auth);
         ui.add_space(12.0);
-        self.destination_section(ui);
+        self.destination_section(ui, notifications);
         ui.add_space(12.0);
         self.action_bar(ui, auth);
         self.progress_section(ui);
@@ -164,12 +166,26 @@ impl ClonePanel {
                 if response.hovered() {
                     ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
                 }
-                let fill = if is_active {
-                    self.theme.palette.surface_highlight
-                } else {
-                    self.theme.palette.surface
-                };
-                let stroke = egui::Stroke::new(1.0, self.theme.palette.accent_weak);
+                let id = ui.make_persistent_id(("provider", provider.label()));
+                let hovered = response.hovered();
+                let fill = effects::animated_color(
+                    ui.ctx(),
+                    id.with("fill"),
+                    self.theme.palette.surface,
+                    self.theme.palette.surface_highlight,
+                    self.theme.palette.accent_weak,
+                    hovered,
+                    is_active,
+                );
+                let stroke = effects::animated_stroke(
+                    ui.ctx(),
+                    id.with("stroke"),
+                    egui::Stroke::new(1.0, self.theme.palette.surface_highlight),
+                    egui::Stroke::new(1.5, self.theme.palette.accent_weak),
+                    egui::Stroke::new(2.0, self.theme.palette.accent),
+                    hovered,
+                    is_active,
+                );
                 let painter = ui.painter();
                 painter.rect(rect, 8.0, fill, stroke);
 
@@ -275,7 +291,7 @@ impl ClonePanel {
         Some(base.join(repo_name).display().to_string())
     }
 
-    fn destination_section(&mut self, ui: &mut Ui) {
+    fn destination_section(&mut self, ui: &mut Ui, notifications: &mut NotificationCenter) {
         ui.heading(RichText::new("Local path").color(self.theme.palette.text_primary));
         ui.horizontal(|ui| {
             ui.add_sized(
@@ -283,12 +299,42 @@ impl ClonePanel {
                 TextEdit::singleline(&mut self.destination).hint_text("Where should we clone to?"),
             );
             if ui.button("Choose").clicked() {
-                if let Some(folder) = rfd::FileDialog::new()
-                    .set_directory(&self.destination)
-                    .pick_folder()
-                {
-                    self.destination = folder.display().to_string();
-                    self.base_destination = folder;
+                let request = DialogOpenRequest {
+                    kind: "open_folder".to_string(),
+                    title: Some("Select clone destination".to_string()),
+                    filters: Vec::new(),
+                    options: DialogOptions {
+                        multi_select: false,
+                        show_hidden: false,
+                    },
+                };
+                let mut selected_path = None;
+                match DotnetClient::helper().dialog_open(request) {
+                    Ok(response) => {
+                        if !response.cancelled {
+                            selected_path = response.selected_paths.first().cloned();
+                        }
+                    }
+                    Err(err) => {
+                        notifications.push(Notification::error(
+                            "Native dialog failed",
+                            err.user_message(),
+                        ));
+                    }
+                }
+
+                if selected_path.is_none() {
+                    if let Some(folder) = rfd::FileDialog::new()
+                        .set_directory(&self.destination)
+                        .pick_folder()
+                    {
+                        selected_path = Some(folder.display().to_string());
+                    }
+                }
+
+                if let Some(path) = selected_path {
+                    self.destination = path.clone();
+                    self.base_destination = PathBuf::from(path);
                 }
             }
         });
