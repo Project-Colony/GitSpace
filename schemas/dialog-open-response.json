@@ -1,0 +1,8 @@
+{
+  "id": "req-0100",
+  "status": "ok",
+  "payload": {
+    "selected_paths": ["/Users/alex/Pictures/logo.png"],
+    "cancelled": false
+  }
+}
