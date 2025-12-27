@@ -868,7 +868,6 @@ internal interface ISecretItem : IDBusObject
     Task<Secret> GetSecretAsync(ObjectPath session);
     Task<ObjectPath> DeleteAsync();
 
-    [Property("Attributes")]
     Task<IDictionary<string, string>> GetAttributesAsync();
 }
 
