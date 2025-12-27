@@ -1,0 +1,18 @@
+{
+  "id": "req-0100",
+  "command": "dialog.open",
+  "payload": {
+    "kind": "open_file",
+    "title": "Choisir un fichier",
+    "filters": [
+      {
+        "label": "Images",
+        "extensions": ["png", "jpg"]
+      }
+    ],
+    "options": {
+      "multi_select": true,
+      "show_hidden": false
+    }
+  }
+}

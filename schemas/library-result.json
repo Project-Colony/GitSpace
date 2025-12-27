@@ -1,0 +1,12 @@
+{
+  "id": "req-0300",
+  "status": "ok",
+  "payload": {
+    "items": [
+      {
+        "service": "github.com",
+        "account": "alex"
+      }
+    ]
+  }
+}
