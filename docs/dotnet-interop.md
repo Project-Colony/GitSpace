@@ -87,3 +87,10 @@ let response = DotnetClient::helper().dialog_open(request)?;
 echo '{"id":"req-0001","command":"ping","payload":{}}' \
   | dotnet run --project dotnet/GitSpace.Helper/GitSpace.Helper.csproj
 ```
+
+## Checklist de validation
+
+- [ ] Version .NET (runtime compatible et accessible via `dotnet --version`)
+- [ ] Démarrage (le helper répond à `ping` via stdin/stdout)
+- [ ] Erreurs (les réponses `status=error` remontent `category`/`message` attendus)
+- [ ] Cas d’usage (ex: `dialog.open` renvoie une charge utile cohérente)
