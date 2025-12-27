@@ -3,6 +3,13 @@
 Ce document décrit la communication JSON entre GitSpace (Rust) et le helper .NET, ainsi que la
 taxonomie d'erreurs utilisée pour la télémétrie et l'UX.
 
+## Commandes supportées
+
+- `ping`
+- `dialog.open`
+- `credential.request`
+- `library.call` (`system.info`)
+
 ## Format de requête
 
 Le helper .NET accepte une requête JSON sur `stdin` et renvoie une réponse JSON sur `stdout`.
@@ -45,9 +52,9 @@ En cas d'échec côté helper, `status` vaut `error` et `error` contient des dé
   "status": "error",
   "payload": null,
   "error": {
-    "category": "dialog",
-    "message": "Native dialog failed to open",
-    "details": {"os_error": "E_ACCESSDENIED"}
+    "category": "InvalidRequest",
+    "message": "Missing payload.kind",
+    "details": {"field": "kind"}
   }
 }
 ```
@@ -62,6 +69,11 @@ Ces catégories sont utilisées côté Rust pour logger et exposer un message UX
 | `dotnet.helper.json_parse_failed` | Rust | Erreur de parsing JSON sur la réponse helper (ou payload). | Log `gitspace::telemetry` |
 | `dotnet.helper.process_failed` | Rust | Le helper s'est terminé avec un code non nul. | Message UX + `AppError::Unknown` |
 | `dotnet.helper.response_error` | Helper | Réponse `status = error` avec `error.category`/`error.message`. | Message UX |
+
+### Catégories d'erreurs helper
+
+- `InvalidRequest` : paramètres manquants ou invalides.
+- `Internal` : exception non gérée côté helper.
 
 ## Exemple côté Rust
 
