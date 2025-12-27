@@ -1,9 +1,9 @@
-use eframe::egui::{self, Align, Id, Layout, RichText, Sense, Ui, Vec2};
+use eframe::egui::{self, Align, Id, Layout, RichText, Sense, Ui};
 
 use crate::auth::AuthManager;
 use crate::config::AppConfig;
 use crate::ui::{
-    auth::AuthPanel, branches::BranchPanel, clone::ClonePanel, context::RepoContext, menu,
+    auth::AuthPanel, branches::BranchPanel, clone::ClonePanel, context::RepoContext,
     notifications::NotificationCenter, recent::RecentList, repo_overview::RepoOverviewPanel,
     settings::SettingsPanel, stage::StagePanel, theme::Theme,
 };
@@ -126,15 +126,11 @@ impl<'a> ShellLayout<'a> {
                     ("Remote Repos", MainTab::Clone),
                 ] {
                     ui.add_space(4.0);
-                    let response = menu::menu_item_sized(
-                        ui,
-                        self.theme,
-                        ("sidebar-nav", label),
-                        label,
-                        active_tab == tab,
-                        Vec2::new(ui.available_width(), ui.spacing().interact_size.y.max(28.0)),
-                        Sense::click(),
-                    );
+                    let response = ui.add(egui::SelectableLabel::new(active_tab == tab, label));
+
+                    if response.hovered() {
+                        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+                    }
 
                     if response.clicked() {
                         selection = Some(NavigationSelection {
@@ -152,15 +148,13 @@ impl<'a> ShellLayout<'a> {
                     ("New Branch", MainTab::Branches),
                     ("Sync", MainTab::Stage),
                 ] {
-                    let response = menu::menu_item_sized(
-                        ui,
-                        self.theme,
-                        ("sidebar-action", action),
-                        RichText::new(action).strong(),
+                    let response = ui.add(egui::SelectableLabel::new(
                         active_tab == tab,
-                        Vec2::new(ui.available_width(), ui.spacing().interact_size.y.max(28.0)),
-                        Sense::click(),
-                    );
+                        RichText::new(action).strong(),
+                    ));
+                    if response.hovered() {
+                        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+                    }
 
                     if response.clicked() {
                         selection = Some(NavigationSelection {
@@ -276,14 +270,9 @@ impl<'a> ShellLayout<'a> {
                     })
                     .strong();
 
-                let response = menu::menu_item_sized(
-                    ui,
-                    self.theme,
-                    ("tab-bar", tab),
-                    label,
-                    is_active,
-                    Vec2::new(120.0, 32.0),
-                    Sense::click_and_drag(),
+                let response = ui.add_sized(
+                    [120.0, 32.0],
+                    egui::Label::new(label).sense(Sense::click_and_drag()),
                 );
 
                 if is_active {
@@ -299,21 +288,11 @@ impl<'a> ShellLayout<'a> {
                 }
 
                 response.context_menu(|ui| {
-                    menu::with_menu_popup_motion(ui, ("tab-menu", tab), |ui| {
-                        if menu::menu_item(
-                            ui,
-                            self.theme,
-                            ("tab-menu-switch", tab),
-                            format!("Switch to {}", tab.label()),
-                            is_active,
-                        )
-                        .clicked()
-                        {
-                            *active = tab;
-                            interaction.selected = Some((tab, NavigationTrigger::ContextMenu));
-                            ui.close_menu();
-                        }
-                    });
+                    if ui.button(format!("Switch to {}", tab.label())).clicked() {
+                        *active = tab;
+                        interaction.selected = Some((tab, NavigationTrigger::ContextMenu));
+                        ui.close_menu();
+                    }
                 });
 
                 if response.drag_started() {

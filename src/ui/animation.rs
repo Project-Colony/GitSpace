@@ -18,8 +18,6 @@
 
 use std::time::Duration;
 
-use eframe::egui::{self, Id};
-
 use crate::config::Preferences;
 
 /// High-level intent buckets for animation decisions.
@@ -154,22 +152,6 @@ impl MotionSettings {
             timing
         }
     }
-}
-
-const MOTION_SETTINGS_KEY: &str = "motion_settings";
-
-pub fn store_motion_settings(ctx: &egui::Context, preferences: &Preferences) {
-    let motion = MotionSettings::from_preferences(preferences);
-    ctx.data_mut(|data| {
-        data.insert_persisted(Id::new(MOTION_SETTINGS_KEY), motion);
-    });
-}
-
-pub fn motion_settings(ctx: &egui::Context) -> MotionSettings {
-    ctx.data(|data| {
-        data.get_persisted(Id::new(MOTION_SETTINGS_KEY))
-            .unwrap_or_else(|| MotionSettings::new(false))
-    })
 }
 
 /// Opacity transition preset.
