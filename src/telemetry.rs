@@ -506,6 +506,23 @@ impl TelemetryWorker {
     }
 }
 
+pub fn log_dotnet_helper_launch_failure(err: &std::io::Error) {
+    error!(
+        target: "gitspace::telemetry",
+        error = %err,
+        "dotnet helper launch failed"
+    );
+}
+
+pub fn log_dotnet_json_parse_error(err: &serde_json::Error, context: &str) {
+    error!(
+        target: "gitspace::telemetry",
+        error = %err,
+        context,
+        "dotnet helper json parse error"
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
