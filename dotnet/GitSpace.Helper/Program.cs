@@ -1,5 +1,4 @@
 using Microsoft.Extensions.Logging;
-using System.Text.Json;
 
 using var loggerFactory = LoggerFactory.Create(builder =>
 {
@@ -14,36 +13,21 @@ using var loggerFactory = LoggerFactory.Create(builder =>
 
 var logger = loggerFactory.CreateLogger("GitSpace.Helper");
 
-var input = await Console.In.ReadToEndAsync();
-if (string.IsNullOrWhiteSpace(input))
+if (args.Length == 0)
 {
-    logger.LogWarning("No JSON request provided on stdin.");
+    logger.LogInformation("No arguments provided. Use --help for usage.");
     return;
 }
 
-Request? request;
-try
+if (args.Length == 1 && args[0] is "--help" or "-h")
 {
-    request = JsonSerializer.Deserialize<Request>(input);
-}
-catch (JsonException ex)
-{
-    logger.LogError(ex, "Invalid JSON payload.");
+    Console.WriteLine("GitSpace.Helper CLI");
+    Console.WriteLine("Usage:");
+    Console.WriteLine("  GitSpace.Helper [message]");
+    Console.WriteLine("  GitSpace.Helper --help");
     return;
 }
 
-if (request is null)
-{
-    logger.LogError("Request payload was empty after deserialization.");
-    return;
-}
-
-var response = request.Command.Equals("ping", StringComparison.OrdinalIgnoreCase)
-    ? new Response("ok", "pong")
-    : new Response("error", "unknown command");
-
-Console.WriteLine(JsonSerializer.Serialize(response));
-
-internal sealed record Request(string Command);
-
-internal sealed record Response(string Status, string Message);
+var message = string.Join(' ', args);
+logger.LogInformation("Received message: {Message}", message);
+Console.WriteLine($"Echo: {message}");
