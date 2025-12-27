@@ -2,7 +2,7 @@ use eframe::egui::{ComboBox, RichText, Slider, TextEdit, Ui, collapsing_header::
 use rfd::FileDialog;
 
 use crate::config::{Keybinding, Preferences, ReleaseChannel, ThemeMode};
-use crate::dotnet::{DialogFilter, DialogOpenRequest, DialogOptions, DotnetClient};
+use crate::dotnet::{DialogOpenRequest, DialogOptions, DotnetClient};
 use crate::ui::notifications::{Notification, NotificationCenter};
 use crate::ui::theme::Theme;
 
@@ -128,8 +128,10 @@ impl SettingsPanel {
 
                 ui.add_space(6.0);
                 let mut control_height = panel.preferences.control_height();
-                let response =
-                    ui.add(Slider::new(&mut control_height, 20.0..=48.0).text("Control height"));
+                let response = ui.add(
+                    Slider::new(&mut control_height, 20.0..=48.0)
+                        .text("Control height"),
+                );
                 if response.changed() {
                     panel.preferences.set_control_height(control_height);
                     panel.pending_control_height = Some(control_height);
@@ -182,7 +184,9 @@ impl SettingsPanel {
                                         Some("Native dialog cancelled.".to_string());
                                 } else {
                                     let selected = &response.selected_paths[0];
-                                    panel.preferences.set_default_clone_path(selected.clone());
+                                    panel
+                                        .preferences
+                                        .set_default_clone_path(selected.clone());
                                     panel.native_dialog_status =
                                         Some(format!("Selected {}", selected));
                                 }
@@ -284,10 +288,7 @@ impl SettingsPanel {
                     );
                     let mut timeout_str = network.network_timeout_secs.to_string();
                     if ui
-                        .add_sized(
-                            [90.0, control_height],
-                            TextEdit::singleline(&mut timeout_str),
-                        )
+                        .add_sized([90.0, control_height], TextEdit::singleline(&mut timeout_str))
                         .changed()
                         && let Ok(parsed) = timeout_str.parse()
                     {
@@ -418,104 +419,35 @@ impl SettingsPanel {
             "Move your GitSpace preferences between machines as JSON.",
             |ui, panel| {
                 ui.horizontal(|ui| {
-                    if ui.button("Import settings").clicked() {
-                        let filters = vec![DialogFilter {
-                            label: "JSON".to_string(),
-                            extensions: vec!["json".to_string()],
-                        }];
-                        let request = DialogOpenRequest {
-                            kind: "open_file".to_string(),
-                            title: Some("Import GitSpace settings".to_string()),
-                            filters,
-                            options: DialogOptions {
-                                multi_select: false,
-                                show_hidden: false,
-                            },
-                        };
-                        let mut path = None;
-                        match DotnetClient::helper().dialog_open(request) {
-                            Ok(response) => {
-                                if !response.cancelled {
-                                    path = response
-                                        .selected_paths
-                                        .first()
-                                        .map(std::path::PathBuf::from);
-                                }
+                    if ui.button("Import settings").clicked()
+                        && let Some(path) =
+                            FileDialog::new().add_filter("JSON", &["json"]).pick_file()
+                    {
+                        match Preferences::from_path(&path) {
+                            Ok(prefs) => {
+                                panel.preferences = prefs.clone();
+                                panel.pending_preferences = Some(prefs);
+                                panel.import_status =
+                                    Some(format!("Imported preferences from {}", path.display()));
                             }
                             Err(err) => {
-                                notifications.push(Notification::error(
-                                    "Native dialog failed",
-                                    err.user_message(),
-                                ));
-                            }
-                        }
-                        if path.is_none() {
-                            path = FileDialog::new().add_filter("JSON", &["json"]).pick_file();
-                        }
-
-                        if let Some(path) = path {
-                            match Preferences::from_path(&path) {
-                                Ok(prefs) => {
-                                    panel.preferences = prefs.clone();
-                                    panel.pending_preferences = Some(prefs);
-                                    panel.import_status = Some(format!(
-                                        "Imported preferences from {}",
-                                        path.display()
-                                    ));
-                                }
-                                Err(err) => {
-                                    panel.import_status = Some(err.to_string());
-                                }
+                                panel.import_status = Some(err.to_string());
                             }
                         }
                     }
 
-                    if ui.button("Export settings").clicked() {
-                        let filters = vec![DialogFilter {
-                            label: "JSON".to_string(),
-                            extensions: vec!["json".to_string()],
-                        }];
-                        let request = DialogOpenRequest {
-                            kind: "save_file".to_string(),
-                            title: Some("Export GitSpace settings".to_string()),
-                            filters,
-                            options: DialogOptions {
-                                multi_select: false,
-                                show_hidden: false,
-                            },
-                        };
-                        let mut path = None;
-                        match DotnetClient::helper().dialog_open(request) {
-                            Ok(response) => {
-                                if !response.cancelled {
-                                    path = response
-                                        .selected_paths
-                                        .first()
-                                        .map(std::path::PathBuf::from);
-                                }
+                    if ui.button("Export settings").clicked()
+                        && let Some(path) = FileDialog::new()
+                            .add_filter("JSON", &["json"])
+                            .set_file_name("gitspace-preferences.json")
+                            .save_file()
+                    {
+                        match panel.preferences.save_to_path(&path) {
+                            Ok(_) => {
+                                panel.export_status =
+                                    Some(format!("Saved preferences to {}", path.display()));
                             }
-                            Err(err) => {
-                                notifications.push(Notification::error(
-                                    "Native dialog failed",
-                                    err.user_message(),
-                                ));
-                            }
-                        }
-                        if path.is_none() {
-                            path = FileDialog::new()
-                                .add_filter("JSON", &["json"])
-                                .set_file_name("gitspace-preferences.json")
-                                .save_file();
-                        }
-
-                        if let Some(path) = path {
-                            match panel.preferences.save_to_path(&path) {
-                                Ok(_) => {
-                                    panel.export_status =
-                                        Some(format!("Saved preferences to {}", path.display()));
-                                }
-                                Err(err) => panel.export_status = Some(err.to_string()),
-                            }
+                            Err(err) => panel.export_status = Some(err.to_string()),
                         }
                     }
                 });
