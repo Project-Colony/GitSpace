@@ -149,7 +149,14 @@ impl BranchPanel {
                 ui.vertical(|ui| {
                     ui.set_min_height(available_height);
                     ui.set_width(ui.available_width() * 0.5);
-                    self.render_tree(ui, repo, BranchKind::Local, "Local branches");
+                    ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+                        self.render_selection_panel(ui);
+                        ui.add_space(10.0);
+                        ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                            ui.set_min_height(ui.available_height());
+                            self.render_tree(ui, repo, BranchKind::Local, "Local branches");
+                        });
+                    });
                 });
 
                 ui.separator();
@@ -161,8 +168,6 @@ impl BranchPanel {
                 });
             });
 
-            ui.add_space(10.0);
-            self.render_selection_panel(ui);
             ui.add_space(10.0);
             self.render_compare_panel(ui);
         } else {
