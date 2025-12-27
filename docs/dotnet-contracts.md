@@ -34,12 +34,24 @@ Demande un credential au provider système.
 **Payload (entrée)**
 - `service`: nom du service (ex: `github.com`)
 - `account`: identifiant utilisateur (facultatif)
+- `secret`: secret (token/mot de passe) requis pour `store`
 - `action`: `get` | `store` | `erase`
 
 **Réponse (sortie)**
 - `username`: identifiant utilisateur
 - `secret`: secret (mot de passe, token)
 - `status`: `ok` | `not_found` | `denied`
+
+**Erreurs Windows**
+
+Sur Windows, les statuts sont dérivés des erreurs natives retournées par
+`CredRead`, `CredWrite` et `CredDelete` :
+
+| Code Win32 | Constante | Statut |
+| --- | --- | --- |
+| 1168 | `ERROR_NOT_FOUND` | `not_found` |
+| 5 | `ERROR_ACCESS_DENIED` | `denied` |
+| autre | (par défaut) | `denied` |
 
 ### `library.call`
 Appelle une bibliothèque .NET spécifique (interop ciblée).

@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 #if WINDOWS
@@ -91,7 +92,8 @@ internal sealed record DialogOptions(
 internal sealed record CredentialRequest(
     string Service,
     string? Account,
-    string Action);
+    string Action,
+    string? Secret);
 
 internal sealed record CredentialPayload(string? Username, string? Secret, string Status);
 
@@ -224,7 +226,7 @@ static Response HandleCredentialRequest(Request request)
         var result = action switch
         {
             "get" => provider.Get(payload.Service, payload.Account),
-            "store" => provider.Store(payload.Service, payload.Account),
+            "store" => provider.Store(payload.Service, payload.Account, payload.Secret),
             "erase" => provider.Erase(payload.Service, payload.Account),
             _ => new CredentialPayload(null, null, "denied")
         };
@@ -292,14 +294,22 @@ static Response HandleLibraryCall(Request request)
 internal interface ICredentialProvider
 {
     CredentialPayload Get(string service, string? account);
-    CredentialPayload Store(string service, string? account);
+    CredentialPayload Store(string service, string? account, string? secret);
     CredentialPayload Erase(string service, string? account);
 }
 
 internal static class CredentialProviderFactory
 {
     public static ICredentialProvider Create()
-        => new StubCredentialProvider();
+    {
+#if WINDOWS
+        if (OperatingSystem.IsWindows())
+        {
+            return new WindowsCredentialProvider();
+        }
+#endif
+        return new StubCredentialProvider();
+    }
 }
 
 internal sealed class StubCredentialProvider : ICredentialProvider
@@ -307,12 +317,138 @@ internal sealed class StubCredentialProvider : ICredentialProvider
     public CredentialPayload Get(string service, string? account)
         => new(null, null, "not_found");
 
-    public CredentialPayload Store(string service, string? account)
+    public CredentialPayload Store(string service, string? account, string? secret)
         => new(null, null, "denied");
 
     public CredentialPayload Erase(string service, string? account)
         => new(null, null, "denied");
 }
+
+#if WINDOWS
+internal sealed class WindowsCredentialProvider : ICredentialProvider
+{
+    private const uint CRED_TYPE_GENERIC = 1;
+    private const uint CRED_PERSIST_LOCAL_MACHINE = 2;
+    private const int ERROR_NOT_FOUND = 1168;
+    private const int ERROR_ACCESS_DENIED = 5;
+
+    public CredentialPayload Get(string service, string? account)
+    {
+        if (!CredRead(service, CRED_TYPE_GENERIC, 0, out var credentialPtr))
+        {
+            return new CredentialPayload(null, null, MapCredentialStatus(Marshal.GetLastWin32Error()));
+        }
+
+        try
+        {
+            var credential = Marshal.PtrToStructure<CREDENTIAL>(credentialPtr);
+            var username = string.IsNullOrWhiteSpace(credential.UserName) ? account : credential.UserName;
+            var secret = ReadCredentialBlob(credential);
+            return new CredentialPayload(username, secret, "ok");
+        }
+        finally
+        {
+            CredFree(credentialPtr);
+        }
+    }
+
+    public CredentialPayload Store(string service, string? account, string? secret)
+    {
+        if (string.IsNullOrWhiteSpace(account) || string.IsNullOrWhiteSpace(secret))
+        {
+            return new CredentialPayload(null, null, "denied");
+        }
+
+        var secretBytes = Encoding.UTF8.GetBytes(secret);
+        var secretPtr = Marshal.AllocHGlobal(secretBytes.Length);
+        try
+        {
+            Marshal.Copy(secretBytes, 0, secretPtr, secretBytes.Length);
+            var credential = new CREDENTIAL
+            {
+                Type = CRED_TYPE_GENERIC,
+                TargetName = service,
+                UserName = account,
+                CredentialBlobSize = (uint)secretBytes.Length,
+                CredentialBlob = secretPtr,
+                Persist = CRED_PERSIST_LOCAL_MACHINE
+            };
+
+            if (CredWrite(ref credential, 0))
+            {
+                return new CredentialPayload(account, null, "ok");
+            }
+
+            return new CredentialPayload(null, null, MapCredentialStatus(Marshal.GetLastWin32Error()));
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(secretPtr);
+        }
+    }
+
+    public CredentialPayload Erase(string service, string? account)
+    {
+        if (CredDelete(service, CRED_TYPE_GENERIC, 0))
+        {
+            return new CredentialPayload(null, null, "ok");
+        }
+
+        return new CredentialPayload(null, null, MapCredentialStatus(Marshal.GetLastWin32Error()));
+    }
+
+    private static string? ReadCredentialBlob(CREDENTIAL credential)
+    {
+        if (credential.CredentialBlob == IntPtr.Zero || credential.CredentialBlobSize == 0)
+        {
+            return null;
+        }
+
+        var blob = new byte[credential.CredentialBlobSize];
+        Marshal.Copy(credential.CredentialBlob, blob, 0, (int)credential.CredentialBlobSize);
+        return Encoding.UTF8.GetString(blob).TrimEnd('\0');
+    }
+
+    private static string MapCredentialStatus(int error)
+    {
+        return error switch
+        {
+            ERROR_NOT_FOUND => "not_found",
+            ERROR_ACCESS_DENIED => "denied",
+            _ => "denied"
+        };
+    }
+
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool CredRead(string target, uint type, uint flags, out IntPtr credentialPtr);
+
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool CredWrite(ref CREDENTIAL credential, uint flags);
+
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool CredDelete(string target, uint type, uint flags);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern void CredFree(IntPtr buffer);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct CREDENTIAL
+    {
+        public uint Flags;
+        public uint Type;
+        public string TargetName;
+        public string Comment;
+        public System.Runtime.InteropServices.ComTypes.FILETIME LastWritten;
+        public uint CredentialBlobSize;
+        public IntPtr CredentialBlob;
+        public uint Persist;
+        public uint AttributeCount;
+        public IntPtr Attributes;
+        public string TargetAlias;
+        public string UserName;
+    }
+}
+#endif
 
 internal sealed record DialogOpenResult(string[] Paths, bool Cancelled)
 {
