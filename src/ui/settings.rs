@@ -96,6 +96,7 @@ impl SettingsPanel {
         self.network_section(ui);
         self.privacy_section(ui);
         self.update_section(ui);
+        self.motion_section(ui);
         ui.add_space(4.0);
         self.actions(ui);
         ui.add_space(10.0);
@@ -389,6 +390,20 @@ impl SettingsPanel {
                         ui.label(RichText::new(status).color(panel.theme.palette.text_secondary));
                     }
                 });
+            },
+        );
+    }
+
+    fn motion_section(&mut self, ui: &mut Ui) {
+        self.collapsible_section(
+            ui,
+            "settings-motion",
+            "Motion",
+            "Control animation timing and reduced-motion preferences.",
+            |ui, panel| {
+                let mut reduced_motion = panel.preferences.reduced_motion();
+                ui.checkbox(&mut reduced_motion, "Reduce motion");
+                panel.preferences.set_reduced_motion(reduced_motion);
             },
         );
     }
