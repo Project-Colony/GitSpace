@@ -4,7 +4,10 @@ use eframe::egui::{
     Ui, Vec2, WidgetText,
 };
 
+use std::time::Duration;
+
 use crate::ui::animation::{AnimationIntent, motion_settings};
+use crate::ui::perf::PerfScope;
 use crate::ui::theme::Theme;
 
 fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
@@ -40,10 +43,11 @@ pub fn with_menu_popup_motion<R>(
     id_source: impl std::hash::Hash,
     add_contents: impl FnOnce(&mut Ui) -> R,
 ) -> R {
+    let _scope = PerfScope::new("menu::popup_motion");
     let id = ui.make_persistent_id(id_source);
     let progress = menu_animation_progress(ui, id, AnimationIntent::OpenClose, true);
     if progress < 1.0 {
-        ui.ctx().request_repaint();
+        ui.ctx().request_repaint_after(Duration::from_millis(16));
     }
 
     let motion = motion_settings(ui.ctx());
@@ -89,6 +93,7 @@ pub fn menu_item_sized(
     size: Vec2,
     sense: Sense,
 ) -> Response {
+    let _scope = PerfScope::new("menu::item");
     let id = ui.make_persistent_id(id_source);
     let (rect, response) = ui.allocate_exact_size(size, sense);
     let response = response.on_hover_cursor(CursorIcon::PointingHand);

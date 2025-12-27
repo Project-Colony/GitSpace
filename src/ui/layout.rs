@@ -4,8 +4,8 @@ use crate::auth::AuthManager;
 use crate::config::AppConfig;
 use crate::ui::{
     auth::AuthPanel, branches::BranchPanel, clone::ClonePanel, context::RepoContext, menu,
-    notifications::NotificationCenter, recent::RecentList, repo_overview::RepoOverviewPanel,
-    settings::SettingsPanel, stage::StagePanel, theme::Theme,
+    notifications::NotificationCenter, perf::PerfScope, recent::RecentList,
+    repo_overview::RepoOverviewPanel, settings::SettingsPanel, stage::StagePanel, theme::Theme,
 };
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -253,17 +253,24 @@ impl<'a> ShellLayout<'a> {
         tab_order: &mut Vec<MainTab>,
         active: &mut MainTab,
     ) -> TabInteraction {
+        let _scope = PerfScope::new("layout::tab_bar");
         let mut interaction = TabInteraction::default();
         let dragging_id = Id::new("main_tab_dragging");
+        let swap_time_id = Id::new("main_tab_swap_time");
         let mut dragging: Option<usize> = ui
             .ctx()
             .data_mut(|data| data.get_persisted(dragging_id))
             .unwrap_or(None);
+        let mut last_swap_time: f64 = ui
+            .ctx()
+            .data_mut(|data| data.get_persisted(swap_time_id))
+            .unwrap_or(0.0);
+        let swap_throttle_seconds = 0.08;
 
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
 
-            let pointer_down = ui.input(|i| i.pointer.primary_down());
+            let (pointer_down, now) = ui.input(|i| (i.pointer.primary_down(), i.time));
             let mut hover_swap: Option<(usize, usize)> = None;
 
             for (index, tab) in tab_order.iter().copied().enumerate() {
@@ -328,11 +335,15 @@ impl<'a> ShellLayout<'a> {
             }
 
             if let Some((from, to)) = hover_swap {
+                if now - last_swap_time < swap_throttle_seconds {
+                    return;
+                }
                 tab_order.swap(from, to);
                 dragging = Some(to);
                 interaction.reordered = Some((from, to));
                 interaction.selected = Some((tab_order[to], NavigationTrigger::DragAndDrop));
                 *active = tab_order[to];
+                last_swap_time = now;
             }
 
             if !pointer_down {
@@ -342,6 +353,8 @@ impl<'a> ShellLayout<'a> {
 
         ui.ctx()
             .data_mut(|data| data.insert_persisted(dragging_id, dragging));
+        ui.ctx()
+            .data_mut(|data| data.insert_persisted(swap_time_id, last_swap_time));
 
         ui.add_space(4.0);
         ui.separator();

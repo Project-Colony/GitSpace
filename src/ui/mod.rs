@@ -9,6 +9,7 @@ pub mod history;
 pub mod layout;
 pub mod menu;
 pub mod notifications;
+pub mod perf;
 pub mod recent;
 pub mod repo_overview;
 pub mod settings;

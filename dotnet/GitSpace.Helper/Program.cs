@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -85,6 +86,8 @@ internal sealed record DialogOpenResult(string[] Paths, bool Cancelled)
 
 internal static class Program
 {
+    private static ILogger? Logger;
+
     public static async Task Main()
     {
         using var loggerFactory = LoggerFactory.Create(builder =>
@@ -99,6 +102,7 @@ internal static class Program
         });
 
         var logger = loggerFactory.CreateLogger("GitSpace.Helper");
+        Logger = logger;
 
         var input = await Console.In.ReadToEndAsync();
         if (string.IsNullOrWhiteSpace(input))
@@ -340,7 +344,7 @@ static Response HandleLibraryCall(Request request)
     var name = payload.Name.ToLowerInvariant();
     return name switch
     {
-        "ui.animation_profile" => Response.Ok(request.Id, BuildAnimationProfile()),
+        "ui.animation_profile" => BuildProfiledAnimationResponse(request.Id),
         "system.info" => Response.Ok(request.Id, new
         {
             os = RuntimeInformation.OSDescription,
@@ -352,6 +356,28 @@ static Response HandleLibraryCall(Request request)
             "Unknown library name",
             new { name = payload.Name })
     };
+}
+
+static Response BuildProfiledAnimationResponse(string requestId)
+{
+    if (!IsUiProfilingEnabled())
+    {
+        return Response.Ok(requestId, BuildAnimationProfile());
+    }
+
+    var stopwatch = Stopwatch.StartNew();
+    var profile = BuildAnimationProfile();
+    stopwatch.Stop();
+    Logger?.LogInformation(
+        "Built animation profile in {ElapsedMs}ms",
+        stopwatch.ElapsedMilliseconds);
+    return Response.Ok(requestId, profile);
+}
+
+static bool IsUiProfilingEnabled()
+{
+    var setting = Environment.GetEnvironmentVariable("GITSPACE_PROFILE_UI");
+    return string.Equals(setting, "1", StringComparison.OrdinalIgnoreCase);
 }
 
 static AnimationProfile BuildAnimationProfile()
