@@ -90,7 +90,7 @@ echo '{"id":"req-0001","command":"ping","payload":{}}' \
 
 ## Checklist de validation
 
-- [ ] Version .NET (runtime compatible et accessible via `dotnet --version`) — bloqué : `dotnet` introuvable dans l'environnement.
-- [ ] Démarrage (le helper répond à `ping` via stdin/stdout) — bloqué : `dotnet` introuvable, test `dotnet run` impossible.
-- [ ] Erreurs (les réponses `status=error` remontent `category`/`message` attendus) — bloqué : `dotnet` introuvable, test `dotnet run` impossible.
+- [ ] Version .NET (runtime compatible et accessible via `dotnet --version`) — `dotnet` introuvable dans l'environnement.
+- [ ] Démarrage (le helper répond à `ping` via stdin/stdout) — `dotnet` introuvable, test `dotnet run` impossible.
+- [ ] Erreurs (les réponses `status=error` remontent `category`/`message` attendus) — vérification impossible : `dotnet` introuvable, test `dotnet run` impossible.
 - [ ] Cas d’usage (ex: `dialog.open` renvoie une charge utile cohérente)
