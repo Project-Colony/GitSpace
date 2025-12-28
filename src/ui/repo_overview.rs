@@ -2,10 +2,11 @@ use std::process::Command;
 
 use eframe::egui::{self, Align, Layout, Margin, RichText, Ui};
 
-use crate::config::MIN_BRANCH_BOX_HEIGHT;
+use crate::auth::AuthManager;
+use crate::config::{MIN_BRANCH_BOX_HEIGHT, NetworkOptions};
 use crate::git::{
-    remote::{RemoteInfo, list_remotes},
-    status::{RepoStatus, read_repo_status},
+    remote::{RemoteInfo, fetch_remote, list_remotes, pull_branch, push_branch},
+    status::read_repo_status,
 };
 use crate::ui::{animation::motion_settings, context::RepoContext, perf::PerfScope, theme::Theme};
 
@@ -21,10 +22,11 @@ pub struct RepoOverviewPanel {
     pending_branch_box_height: Option<f32>,
     resize_delta_accumulator: f32,
     last_resize_update: Option<f64>,
+    network: NetworkOptions,
 }
 
 impl RepoOverviewPanel {
-    pub fn new(theme: Theme, branch_box_height: f32) -> Self {
+    pub fn new(theme: Theme, branch_box_height: f32, network: NetworkOptions) -> Self {
         Self {
             theme,
             status: None,
@@ -36,6 +38,7 @@ impl RepoOverviewPanel {
             pending_branch_box_height: None,
             resize_delta_accumulator: 0.0,
             last_resize_update: None,
+            network,
         }
     }
 
@@ -47,11 +50,15 @@ impl RepoOverviewPanel {
         self.branch_box_height = height.max(MIN_BRANCH_BOX_HEIGHT);
     }
 
+    pub fn set_network_preferences(&mut self, network: NetworkOptions) {
+        self.network = network;
+    }
+
     pub fn take_branch_box_height_change(&mut self) -> Option<f32> {
         self.pending_branch_box_height.take()
     }
 
-    pub fn ui(&mut self, ui: &mut Ui, repo: Option<&RepoContext>) {
+    pub fn ui(&mut self, ui: &mut Ui, repo: Option<&RepoContext>, auth: &AuthManager) {
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.heading(RichText::new("Repository overview").color(self.theme.palette.text_primary));
@@ -74,7 +81,7 @@ impl RepoOverviewPanel {
             ui.add_space(8.0);
             self.remotes_section(ui);
             ui.add_space(8.0);
-            self.actions(ui, repo);
+            self.actions(ui, repo, auth);
         } else {
             ui.label(
                 RichText::new("Select or clone a repository to see its Git status, remotes, and quick actions.")
@@ -292,23 +299,25 @@ impl RepoOverviewPanel {
         }
     }
 
-    fn actions(&mut self, ui: &mut Ui, repo: &RepoContext) {
+    fn actions(&mut self, ui: &mut Ui, repo: &RepoContext, auth: &AuthManager) {
         ui.heading(RichText::new("Quick actions").color(self.theme.palette.text_primary));
         ui.add_space(4.0);
 
         ui.horizontal_wrapped(|ui| {
             let control_height = ui.spacing().interact_size.y;
             for (label, action) in [
-                ("Fetch", ActionKind::Git(&["fetch"])),
-                ("Pull", ActionKind::Git(&["pull"])),
-                ("Push", ActionKind::Git(&["push"])),
+                ("Fetch", ActionKind::Fetch),
+                ("Pull", ActionKind::Pull),
+                ("Push", ActionKind::Push),
                 ("Open terminal", ActionKind::Terminal),
                 ("Open file explorer", ActionKind::FileExplorer),
             ] {
                 let response = ui.add_sized([150.0, control_height], egui::Button::new(label));
                 if response.clicked() {
                     let result = match action {
-                        ActionKind::Git(args) => self.run_git(repo, args),
+                        ActionKind::Fetch => self.fetch(repo, auth),
+                        ActionKind::Pull => self.pull(repo, auth),
+                        ActionKind::Push => self.push(repo, auth),
                         ActionKind::Terminal => self.open_terminal(repo),
                         ActionKind::FileExplorer => self.open_file_explorer(repo),
                     };
@@ -322,18 +331,79 @@ impl RepoOverviewPanel {
         });
     }
 
-    fn run_git(&self, repo: &RepoContext, args: &[&str]) -> Result<String, String> {
-        let output = Command::new("git")
-            .args(args)
-            .current_dir(&repo.path)
-            .output()
+    fn fetch(&self, repo: &RepoContext, auth: &AuthManager) -> Result<String, String> {
+        let selection = self.resolve_remote_selection()?;
+        let token = self.resolve_remote_token(auth, &selection.remote_name);
+        fetch_remote(&repo.path, &selection.remote_name, &self.network, token)
             .map_err(|err| err.to_string())?;
+        Ok(format!("Fetched {}", selection.remote_name))
+    }
 
-        if output.status.success() {
-            Ok(format!("git {} completed", args.join(" ")))
+    fn pull(&self, repo: &RepoContext, auth: &AuthManager) -> Result<String, String> {
+        let selection = self.resolve_remote_selection()?;
+        let branch = selection
+            .branch
+            .ok_or_else(|| "No branch checked out for pull.".to_string())?;
+        let token = self.resolve_remote_token(auth, &selection.remote_name);
+        pull_branch(
+            &repo.path,
+            &selection.remote_name,
+            &branch,
+            &self.network,
+            token,
+        )
+        .map_err(|err| err.to_string())?;
+        Ok(format!("Pulled {} from {}", branch, selection.remote_name))
+    }
+
+    fn push(&self, repo: &RepoContext, auth: &AuthManager) -> Result<String, String> {
+        let selection = self.resolve_remote_selection()?;
+        let branch = selection
+            .branch
+            .ok_or_else(|| "No branch checked out for push.".to_string())?;
+        let token = self.resolve_remote_token(auth, &selection.remote_name);
+        push_branch(
+            &repo.path,
+            &selection.remote_name,
+            &branch,
+            &self.network,
+            token,
+        )
+        .map_err(|err| err.to_string())?;
+        Ok(format!("Pushed {} to {}", branch, selection.remote_name))
+    }
+
+    fn resolve_remote_selection(&self) -> Result<RemoteSelection, String> {
+        let status = self.status.clone().unwrap_or_default();
+        let upstream = status
+            .upstream
+            .as_deref()
+            .and_then(|name| split_upstream(name));
+        let (remote_name, upstream_branch) = if let Some((remote, branch)) = upstream {
+            (remote.to_string(), Some(branch.to_string()))
         } else {
-            Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+            let remote = self
+                .remotes
+                .first()
+                .map(|remote| remote.name.clone())
+                .ok_or_else(|| "No remotes configured for this repository.".to_string())?;
+            (remote, None)
+        };
+
+        let branch = upstream_branch.or(status.branch);
+        Ok(RemoteSelection { remote_name, branch })
+    }
+
+    fn resolve_remote_token(&self, auth: &AuthManager, remote_name: &str) -> Option<String> {
+        let remote = self
+            .remotes
+            .iter()
+            .find(|remote| remote.name == remote_name)?;
+        if remote.url == "(no url)" {
+            return None;
         }
+        auth.resolve_for_url(&remote.url)
+            .or_else(|| auth.resolve_for_host(&remote.url))
     }
 
     fn open_terminal(&self, repo: &RepoContext) -> Result<String, String> {
@@ -424,8 +494,23 @@ impl RepoOverviewPanel {
     }
 }
 
-enum ActionKind<'a> {
-    Git(&'a [&'a str]),
+enum ActionKind {
+    Fetch,
+    Pull,
+    Push,
     Terminal,
     FileExplorer,
+}
+
+#[derive(Debug, Clone)]
+struct RemoteSelection {
+    remote_name: String,
+    branch: Option<String>,
+}
+
+fn split_upstream(upstream: &str) -> Option<(&str, &str)> {
+    let mut parts = upstream.splitn(2, '/');
+    let remote = parts.next()?;
+    let branch = parts.next()?;
+    Some((remote, branch))
 }
