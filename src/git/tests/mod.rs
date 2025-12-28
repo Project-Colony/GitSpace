@@ -16,7 +16,9 @@ use crate::git::branch::{
 use crate::git::discovery::{find_repo_root, is_git_repo, list_submodules, list_worktrees};
 use crate::git::diff::{commit_diff, diff_file, staged_diff, working_tree_diff};
 use crate::git::log::{CommitFilter, read_commit_log};
-use crate::git::remote::{fetch_remote, list_remotes, pull_branch, prune_remotes, push_branch};
+use crate::git::remote::{
+    PullOutcome, fetch_remote, list_remotes, pull_branch, prune_remotes, push_branch,
+};
 use crate::git::stash::{apply_stash, create_stash, drop_stash, list_stashes};
 use crate::git::status::{read_repo_status, read_working_tree_status};
 
@@ -300,7 +302,8 @@ fn fetch_push_pull_and_prune_work_with_local_remote() {
         .find_reference("refs/remotes/origin/obsolete")
         .is_err());
 
-    pull_branch(fetch_dir.path(), "origin", "main", &network, None).expect("pull");
+    let outcome = pull_branch(fetch_dir.path(), "origin", "main", &network, None).expect("pull");
+    assert_eq!(outcome, PullOutcome::FastForward);
     let head = fetch_repo.head().expect("head");
     assert_eq!(head.target(), Some(commit));
 }
