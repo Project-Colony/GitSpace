@@ -339,19 +339,23 @@ impl SettingsPanel {
                 ui.add_space(4.0);
                 ui.add_enabled_ui(auto_fetch_enabled, |ui| {
                     let icon_id = ui.make_persistent_id("settings-auto-fetch-interval-icon");
+                    let preset_intervals = [1_u64, 5, 15];
+                    let current_interval = panel.preferences.auto_fetch_interval_minutes();
+                    let selected_text = if preset_intervals.contains(&current_interval) {
+                        auto_fetch_interval_label(current_interval)
+                    } else {
+                        "Custom".to_string()
+                    };
                     ComboBox::from_label(
                         RichText::new("Auto-fetch interval")
                             .color(panel.theme.palette.text_secondary),
                     )
-                    .selected_text(auto_fetch_interval_label(
-                        panel.preferences.auto_fetch_interval_minutes(),
-                    ))
+                    .selected_text(selected_text)
                     .icon(menu::combo_icon(panel.theme.clone(), icon_id))
                     .show_ui(ui, |ui| {
                         menu::with_menu_popup_motion(ui, "settings-auto-fetch-interval-menu", |ui| {
-                            let mut selected_interval =
-                                panel.preferences.auto_fetch_interval_minutes();
-                            for interval in [1_u64, 5, 15] {
+                            let mut selected_interval = current_interval;
+                            for interval in preset_intervals {
                                 let label = auto_fetch_interval_label(interval);
                                 if menu::menu_item(
                                     ui,
@@ -365,11 +369,54 @@ impl SettingsPanel {
                                     selected_interval = interval;
                                 }
                             }
+                            if menu::menu_item(
+                                ui,
+                                &panel.theme,
+                                ("settings-auto-fetch-interval-item", "custom"),
+                                "Custom",
+                                !preset_intervals.contains(&selected_interval),
+                            )
+                            .clicked()
+                            {
+                                selected_interval = current_interval;
+                            }
                             panel
                                 .preferences
                                 .set_auto_fetch_interval_minutes(selected_interval);
                         });
                     });
+
+                    ui.add_space(4.0);
+                    let mut interval_minutes = current_interval.to_string();
+                    let mut interval_error = None;
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new("Interval (min)")
+                                .color(panel.theme.palette.text_secondary),
+                        );
+                        let response = ui.add_sized(
+                            [90.0, control_height],
+                            TextEdit::singleline(&mut interval_minutes),
+                        );
+                        if response.changed() {
+                            match interval_minutes.trim().parse::<u64>() {
+                                Ok(value) if value > 0 => {
+                                    panel.preferences.set_auto_fetch_interval_minutes(value);
+                                }
+                                Ok(_) => {
+                                    interval_error =
+                                        Some("Interval must be at least 1 minute.".to_string());
+                                }
+                                Err(_) => {
+                                    interval_error =
+                                        Some("Enter a whole number of minutes.".to_string());
+                                }
+                            }
+                        }
+                    });
+                    if let Some(error) = interval_error {
+                        ui.colored_label(panel.theme.palette.accent, error);
+                    }
                 });
             },
         );
