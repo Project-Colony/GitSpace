@@ -391,7 +391,7 @@ impl<'a> ShellLayout<'a> {
             }
             MainTab::Open => recent_list.ui(ui, config),
             MainTab::RepoOverview => {
-                repo_overview.ui(ui, repo, auth_manager);
+                repo_overview.ui(ui, repo);
                 None
             }
             MainTab::Stage => {
