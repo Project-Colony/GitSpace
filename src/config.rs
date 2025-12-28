@@ -378,6 +378,10 @@ impl Preferences {
         self.update_feed_override.as_deref()
     }
 
+    pub fn set_update_feed_override(&mut self, override_url: Option<String>) {
+        self.update_feed_override = override_url.filter(|value| !value.trim().is_empty());
+    }
+
     pub fn telemetry_enabled(&self) -> bool {
         self.telemetry_enabled
     }

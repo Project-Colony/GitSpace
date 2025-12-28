@@ -451,6 +451,32 @@ impl SettingsPanel {
                 });
 
                 ui.add_space(4.0);
+                let control_height = ui.spacing().interact_size.y;
+                let mut update_feed_override = panel
+                    .preferences
+                    .update_feed_override()
+                    .unwrap_or_default()
+                    .to_string();
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("Update feed override")
+                            .color(panel.theme.palette.text_secondary),
+                    );
+                    ui.add_sized(
+                        [340.0, control_height],
+                        TextEdit::singleline(&mut update_feed_override)
+                            .hint_text("https://example.com/feed.json"),
+                    );
+                });
+                panel
+                    .preferences
+                    .set_update_feed_override(Some(update_feed_override));
+                ui.label(
+                    RichText::new("Pour pré-release / feed interne.")
+                        .color(panel.theme.palette.text_secondary),
+                );
+
+                ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     if ui.button("Check for updates now").clicked() {
                         panel.update_request = true;
