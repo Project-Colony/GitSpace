@@ -16,6 +16,12 @@ pub struct RemoteInfo {
     pub url: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PullOutcome {
+    UpToDate,
+    FastForward,
+}
+
 pub fn list_remotes<P: AsRef<Path>>(path: P) -> Result<Vec<RemoteInfo>, git2::Error> {
     let repo = Repository::open(path)?;
     let mut remotes = Vec::new();
@@ -83,7 +89,7 @@ pub fn pull_branch<P: AsRef<Path>>(
     branch: &str,
     network: &NetworkOptions,
     token: Option<String>,
-) -> Result<(), AppError> {
+) -> Result<PullOutcome, AppError> {
     fetch_remote(&path, remote_name, network, token)?;
     let repo = Repository::open(path)?;
 
@@ -93,13 +99,13 @@ pub fn pull_branch<P: AsRef<Path>>(
     let (analysis, _) = repo.merge_analysis(&[&annotated])?;
 
     if analysis.is_up_to_date() {
-        return Ok(());
+        return Ok(PullOutcome::UpToDate);
     }
 
     if analysis.is_fast_forward() {
         let local_ref_name = format!("refs/heads/{branch}");
         fast_forward(&repo, &local_ref_name, &annotated)?;
-        return Ok(());
+        return Ok(PullOutcome::FastForward);
     }
 
     Err(AppError::Git(

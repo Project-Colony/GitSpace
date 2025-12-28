@@ -5,7 +5,7 @@ use eframe::egui::{self, Align, Layout, Margin, RichText, Ui};
 use crate::auth::AuthManager;
 use crate::config::{MIN_BRANCH_BOX_HEIGHT, NetworkOptions};
 use crate::git::{
-    remote::{RemoteInfo, fetch_remote, list_remotes, pull_branch, push_branch},
+    remote::{PullOutcome, RemoteInfo, fetch_remote, list_remotes, pull_branch, push_branch},
     status::{RepoStatus, read_repo_status},
 };
 use crate::ui::{animation::motion_settings, context::RepoContext, perf::PerfScope, theme::Theme};
@@ -345,7 +345,7 @@ impl RepoOverviewPanel {
             .branch
             .ok_or_else(|| "No branch checked out for pull.".to_string())?;
         let token = self.resolve_remote_token(auth, &selection.remote_name);
-        pull_branch(
+        let outcome = pull_branch(
             &repo.path,
             &selection.remote_name,
             &branch,
@@ -353,7 +353,11 @@ impl RepoOverviewPanel {
             token,
         )
         .map_err(|err| err.to_string())?;
-        Ok(format!("Pulled {} from {}", branch, selection.remote_name))
+        let message = match outcome {
+            PullOutcome::UpToDate => "Already up to date.".to_string(),
+            PullOutcome::FastForward => format!("Pulled {} from {}", branch, selection.remote_name),
+        };
+        Ok(message)
     }
 
     fn push(&self, repo: &RepoContext, auth: &AuthManager) -> Result<String, String> {
