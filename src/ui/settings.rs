@@ -306,22 +306,31 @@ impl SettingsPanel {
                 });
 
                 ui.add_space(4.0);
+                let mut timeout_error = None;
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new("Timeout (sec)").color(panel.theme.palette.text_secondary),
                     );
                     let mut timeout_str = network.network_timeout_secs.to_string();
-                    if ui
-                        .add_sized(
-                            [90.0, control_height],
-                            TextEdit::singleline(&mut timeout_str),
-                        )
-                        .changed()
-                        && let Ok(parsed) = timeout_str.parse()
-                    {
-                        network.network_timeout_secs = parsed;
+                    let response = ui.add_sized(
+                        [90.0, control_height],
+                        TextEdit::singleline(&mut timeout_str),
+                    );
+                    if response.changed() {
+                        match timeout_str.trim().parse::<u64>() {
+                            Ok(parsed) => {
+                                network.network_timeout_secs = parsed;
+                            }
+                            Err(_) => {
+                                timeout_error =
+                                    Some("Veuillez entrer un nombre valide".to_string());
+                            }
+                        }
                     }
                 });
+                if let Some(error) = timeout_error {
+                    ui.colored_label(panel.theme.palette.accent, error);
+                }
 
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
