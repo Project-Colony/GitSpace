@@ -152,6 +152,10 @@ pub struct Preferences {
     motion_intensity: MotionIntensity,
     #[serde(default)]
     performance_mode: bool,
+    #[serde(default = "default_auto_fetch_enabled")]
+    auto_fetch_enabled: bool,
+    #[serde(default = "default_auto_fetch_interval_minutes")]
+    auto_fetch_interval_minutes: u64,
 }
 
 impl Default for Preferences {
@@ -172,6 +176,8 @@ impl Default for Preferences {
             reduced_motion: false,
             motion_intensity: default_motion_intensity(),
             performance_mode: false,
+            auto_fetch_enabled: default_auto_fetch_enabled(),
+            auto_fetch_interval_minutes: default_auto_fetch_interval_minutes(),
         }
     }
 }
@@ -311,6 +317,14 @@ fn default_log_retention_files() -> usize {
     7
 }
 
+fn default_auto_fetch_enabled() -> bool {
+    false
+}
+
+fn default_auto_fetch_interval_minutes() -> u64 {
+    5
+}
+
 impl Preferences {
     pub fn theme_mode(&self) -> ThemeMode {
         self.theme
@@ -426,6 +440,22 @@ impl Preferences {
 
     pub fn set_performance_mode(&mut self, performance_mode: bool) {
         self.performance_mode = performance_mode;
+    }
+
+    pub fn auto_fetch_enabled(&self) -> bool {
+        self.auto_fetch_enabled
+    }
+
+    pub fn set_auto_fetch_enabled(&mut self, auto_fetch_enabled: bool) {
+        self.auto_fetch_enabled = auto_fetch_enabled;
+    }
+
+    pub fn auto_fetch_interval_minutes(&self) -> u64 {
+        self.auto_fetch_interval_minutes
+    }
+
+    pub fn set_auto_fetch_interval_minutes(&mut self, minutes: u64) {
+        self.auto_fetch_interval_minutes = minutes.max(1);
     }
 
     pub fn save_to_path<P: AsRef<Path>>(&self, path: P) -> std::io::Result<()> {
