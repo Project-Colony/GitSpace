@@ -57,6 +57,7 @@ impl GitSpaceApp {
     pub fn new() -> Self {
         let config = AppConfig::load();
         let preferences = config.preferences().clone();
+        let logging = config.logging().clone();
         let default_clone_path = preferences.default_clone_path().to_string();
         let theme = Theme::from_mode(preferences.theme_mode());
         let settings_theme = theme.clone();
@@ -99,7 +100,7 @@ impl GitSpaceApp {
             theme,
             initialized: false,
             active_tab: MainTab::Clone,
-            settings_panel: SettingsPanel::new(settings_theme, preferences),
+            settings_panel: SettingsPanel::new(settings_theme, preferences, logging),
             dev_gallery_panel: DevGalleryPanel::new(dev_gallery_theme),
             notifications: NotificationCenter::default(),
             update_promise: None,
@@ -215,6 +216,11 @@ impl eframe::App for GitSpaceApp {
 
         if let Some(updated_preferences) = self.settings_panel.take_changes() {
             self.apply_preferences(updated_preferences, ctx);
+        }
+
+        if let Some(updated_logging) = self.settings_panel.take_logging_changes() {
+            self.config.set_logging(updated_logging);
+            let _ = self.config.save();
         }
 
         if let Some(pinned_branches) = self.branches_panel.take_pinned_changes() {

@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 const MAX_RECENT: usize = 15;
 const CONFIG_FILE_NAME: &str = "config.json";
 const APP_CONFIG_DIR: &str = "gitspace";
+pub const MIN_LOG_RETENTION_FILES: usize = 1;
+pub const MAX_LOG_RETENTION_FILES: usize = 30;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppConfig {
@@ -235,6 +237,10 @@ impl AppConfig {
 
     pub fn logging(&self) -> &LoggingOptions {
         &self.logging
+    }
+
+    pub fn set_logging(&mut self, logging: LoggingOptions) {
+        self.logging = logging;
     }
 
     pub fn telemetry_prompt_shown(&self) -> bool {
@@ -484,5 +490,10 @@ impl Preferences {
 impl LoggingOptions {
     pub fn retention_files(&self) -> usize {
         self.retention_files
+    }
+
+    pub fn set_retention_files(&mut self, retention_files: usize) {
+        self.retention_files =
+            retention_files.clamp(MIN_LOG_RETENTION_FILES, MAX_LOG_RETENTION_FILES);
     }
 }

@@ -1,7 +1,10 @@
 use eframe::egui::{ComboBox, RichText, Slider, TextEdit, Ui, collapsing_header::CollapsingState};
 use rfd::FileDialog;
 
-use crate::config::{Keybinding, MotionIntensity, Preferences, ReleaseChannel, ThemeMode};
+use crate::config::{
+    Keybinding, LoggingOptions, MotionIntensity, Preferences, ReleaseChannel, ThemeMode,
+    MAX_LOG_RETENTION_FILES, MIN_LOG_RETENTION_FILES,
+};
 use crate::dotnet::{DialogOpenRequest, DialogOptions, DotnetClient};
 use crate::ui::menu;
 use crate::ui::notifications::{Notification, NotificationCenter};
@@ -10,7 +13,9 @@ use crate::ui::theme::Theme;
 pub struct SettingsPanel {
     theme: Theme,
     preferences: Preferences,
+    logging: LoggingOptions,
     pending_preferences: Option<Preferences>,
+    pending_logging: Option<LoggingOptions>,
     pending_control_height: Option<f32>,
     import_status: Option<String>,
     export_status: Option<String>,
@@ -22,11 +27,13 @@ pub struct SettingsPanel {
 }
 
 impl SettingsPanel {
-    pub fn new(theme: Theme, preferences: Preferences) -> Self {
+    pub fn new(theme: Theme, preferences: Preferences, logging: LoggingOptions) -> Self {
         Self {
             theme,
             preferences,
+            logging,
             pending_preferences: None,
+            pending_logging: None,
             pending_control_height: None,
             import_status: None,
             export_status: None,
@@ -48,6 +55,10 @@ impl SettingsPanel {
 
     pub fn take_changes(&mut self) -> Option<Preferences> {
         self.pending_preferences.take()
+    }
+
+    pub fn take_logging_changes(&mut self) -> Option<LoggingOptions> {
+        self.pending_logging.take()
     }
 
     pub fn take_control_height_change(&mut self) -> Option<f32> {
@@ -95,6 +106,7 @@ impl SettingsPanel {
         self.clone_section(ui, notifications);
         self.keybinding_section(ui);
         self.network_section(ui);
+        self.logging_section(ui);
         self.privacy_section(ui);
         self.update_section(ui);
         self.motion_section(ui);
@@ -412,6 +424,30 @@ impl SettingsPanel {
         );
     }
 
+    fn logging_section(&mut self, ui: &mut Ui) {
+        self.collapsible_section(
+            ui,
+            "settings-logging",
+            "Logging",
+            "Configure how many log files GitSpace keeps on disk.",
+            |ui, panel| {
+                let mut retention_files = panel.logging.retention_files() as u32;
+                let response = ui.add(
+                    Slider::new(
+                        &mut retention_files,
+                        MIN_LOG_RETENTION_FILES as u32..=MAX_LOG_RETENTION_FILES as u32,
+                    )
+                    .text("Retained log files"),
+                );
+                if response.changed() {
+                    panel
+                        .logging
+                        .set_retention_files(retention_files as usize);
+                }
+            },
+        );
+    }
+
     fn update_section(&mut self, ui: &mut Ui) {
         self.collapsible_section(
             ui,
@@ -551,11 +587,13 @@ impl SettingsPanel {
         ui.horizontal(|ui| {
             if ui.button("Save preferences").clicked() {
                 self.pending_preferences = Some(self.preferences.clone());
+                self.pending_logging = Some(self.logging);
                 self.import_status = Some("Ready to apply changes".to_string());
             }
 
             if ui.button("Reset to defaults").clicked() {
                 self.preferences = Preferences::default();
+                self.logging = LoggingOptions::default();
             }
         });
 
