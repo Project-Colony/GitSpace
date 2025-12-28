@@ -36,7 +36,11 @@ fn build_layout_components() -> (
         ),
         RecentList::new(theme.clone()),
         AppConfig::default(),
-        RepoOverviewPanel::new(theme.clone(), preferences.branch_box_height()),
+        RepoOverviewPanel::new(
+            theme.clone(),
+            preferences.branch_box_height(),
+            preferences.network().clone(),
+        ),
         StagePanel::new(theme.clone()),
         HistoryPanel::new(theme.clone()),
         BranchPanel::new(theme.clone(), preferences.pinned_branches().to_vec()),
