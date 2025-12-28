@@ -95,11 +95,15 @@ impl RepoOverviewPanel {
             return;
         }
 
+        self.action_status = None;
+        self.reload_repo_state(repo);
+    }
+
+    fn reload_repo_state(&mut self, repo: &RepoContext) {
         self.last_repo = Some(repo.path.clone());
         self.status = None;
         self.remotes.clear();
         self.error = None;
-        self.action_status = None;
 
         match read_repo_status(&repo.path) {
             Ok(status) => self.status = Some(status),
@@ -321,6 +325,12 @@ impl RepoOverviewPanel {
                         ActionKind::Terminal => self.open_terminal(repo),
                         ActionKind::FileExplorer => self.open_file_explorer(repo),
                     };
+
+                    if result.is_ok()
+                        && matches!(action, ActionKind::Fetch | ActionKind::Pull | ActionKind::Push)
+                    {
+                        self.reload_repo_state(repo);
+                    }
 
                     self.action_status = Some(match result {
                         Ok(msg) => msg,
