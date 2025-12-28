@@ -1,4 +1,7 @@
-use eframe::egui::{ComboBox, RichText, Slider, TextEdit, Ui, collapsing_header::CollapsingState};
+use eframe::egui::{
+    ComboBox, RichText, Slider, TextEdit, Ui, collapsing_header::CollapsingState,
+    output::OpenUrl,
+};
 use rfd::FileDialog;
 
 use crate::config::{
@@ -465,6 +468,33 @@ impl SettingsPanel {
                     )
                     .color(panel.theme.palette.text_secondary),
                 );
+
+                ui.add_space(6.0);
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button("Voir la doc").clicked() {
+                        let doc_path = std::env::current_dir()
+                            .ok()
+                            .map(|dir| dir.join("docs/telemetry.md"));
+                        if let Some(path) = doc_path.filter(|path| path.exists()) {
+                            let url = format!("file://{}", path.display());
+                            ui.ctx().output_mut(|output| {
+                                output.open_url = Some(OpenUrl {
+                                    url,
+                                    new_tab: true,
+                                });
+                            });
+                        } else {
+                            panel.telemetry_status =
+                                Some("Impossible d'ouvrir la documentation.".to_string());
+                        }
+                    }
+
+                    ui.label(
+                        RichText::new("Détails sur la télémétrie.")
+                            .color(panel.theme.palette.text_secondary)
+                            .small(),
+                    );
+                });
 
                 ui.add_space(6.0);
                 if ui.button("Purge collected diagnostics").clicked() {
