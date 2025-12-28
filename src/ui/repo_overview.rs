@@ -25,6 +25,14 @@ pub struct RepoOverviewPanel {
     network: NetworkOptions,
 }
 
+#[derive(Debug, Clone)]
+pub struct AutoFetchContext {
+    pub repo_path: String,
+    pub remote_name: String,
+    pub token: Option<String>,
+    pub network: NetworkOptions,
+}
+
 impl RepoOverviewPanel {
     pub fn new(theme: Theme, branch_box_height: f32, network: NetworkOptions) -> Self {
         Self {
@@ -56,6 +64,10 @@ impl RepoOverviewPanel {
 
     pub fn take_branch_box_height_change(&mut self) -> Option<f32> {
         self.pending_branch_box_height.take()
+    }
+
+    pub fn set_action_status<S: Into<String>>(&mut self, status: Option<S>) {
+        self.action_status = status.map(Into::into);
     }
 
     pub fn ui(&mut self, ui: &mut Ui, repo: Option<&RepoContext>, auth: &AuthManager) {
@@ -99,7 +111,7 @@ impl RepoOverviewPanel {
         self.reload_repo_state(repo);
     }
 
-    fn reload_repo_state(&mut self, repo: &RepoContext) {
+    pub fn reload_repo_state(&mut self, repo: &RepoContext) {
         self.last_repo = Some(repo.path.clone());
         self.status = None;
         self.remotes.clear();
@@ -339,6 +351,24 @@ impl RepoOverviewPanel {
                 }
             }
         });
+    }
+
+    pub fn auto_fetch_context(
+        &mut self,
+        repo: &RepoContext,
+        auth: &AuthManager,
+    ) -> Result<AutoFetchContext, String> {
+        if self.last_repo.as_deref() != Some(&repo.path) {
+            self.reload_repo_state(repo);
+        }
+        let selection = self.resolve_remote_selection()?;
+        let token = self.resolve_remote_token(auth, &selection.remote_name);
+        Ok(AutoFetchContext {
+            repo_path: repo.path.clone(),
+            remote_name: selection.remote_name,
+            token,
+            network: self.network.clone(),
+        })
     }
 
     fn fetch(&self, repo: &RepoContext, auth: &AuthManager) -> Result<String, String> {

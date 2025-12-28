@@ -316,6 +316,49 @@ impl SettingsPanel {
                     ui.checkbox(&mut network.use_https, "Prefer HTTPS");
                     ui.checkbox(&mut network.allow_ssh, "Allow SSH");
                 });
+
+                ui.add_space(8.0);
+                let mut auto_fetch_enabled = panel.preferences.auto_fetch_enabled();
+                ui.checkbox(&mut auto_fetch_enabled, "Auto-fetch remotes");
+                panel
+                    .preferences
+                    .set_auto_fetch_enabled(auto_fetch_enabled);
+
+                ui.add_space(4.0);
+                ui.add_enabled_ui(auto_fetch_enabled, |ui| {
+                    let icon_id = ui.make_persistent_id("settings-auto-fetch-interval-icon");
+                    ComboBox::from_label(
+                        RichText::new("Auto-fetch interval")
+                            .color(panel.theme.palette.text_secondary),
+                    )
+                    .selected_text(auto_fetch_interval_label(
+                        panel.preferences.auto_fetch_interval_minutes(),
+                    ))
+                    .icon(menu::combo_icon(panel.theme.clone(), icon_id))
+                    .show_ui(ui, |ui| {
+                        menu::with_menu_popup_motion(ui, "settings-auto-fetch-interval-menu", |ui| {
+                            let mut selected_interval =
+                                panel.preferences.auto_fetch_interval_minutes();
+                            for interval in [1_u64, 5, 15] {
+                                let label = auto_fetch_interval_label(interval);
+                                if menu::menu_item(
+                                    ui,
+                                    &panel.theme,
+                                    ("settings-auto-fetch-interval-item", label.as_str()),
+                                    label.as_str(),
+                                    selected_interval == interval,
+                                )
+                                .clicked()
+                                {
+                                    selected_interval = interval;
+                                }
+                            }
+                            panel
+                                .preferences
+                                .set_auto_fetch_interval_minutes(selected_interval);
+                        });
+                    });
+                });
             },
         );
     }
@@ -590,4 +633,8 @@ fn motion_intensity_label(intensity: MotionIntensity) -> &'static str {
         MotionIntensity::Medium => "Medium",
         MotionIntensity::High => "High",
     }
+}
+
+fn auto_fetch_interval_label(minutes: u64) -> String {
+    format!("{minutes} min")
 }

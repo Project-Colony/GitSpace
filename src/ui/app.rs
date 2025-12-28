@@ -5,6 +5,7 @@ use sha2::{Digest, Sha256};
 
 use crate::auth::AuthManager;
 use crate::config::{AppConfig, Preferences};
+use crate::git::remote::fetch_remote;
 use crate::telemetry::TelemetryEmitter;
 use crate::ui::{
     animation::store_motion_settings,
@@ -47,6 +48,9 @@ pub struct GitSpaceApp {
     telemetry: TelemetryEmitter,
     telemetry_prompt_enqueued: bool,
     tab_order: Vec<MainTab>,
+    auto_fetch_promise: Option<Promise<AutoFetchOutcome>>,
+    auto_fetch_last_trigger: Option<f64>,
+    auto_fetch_repo: Option<String>,
 }
 
 impl GitSpaceApp {
@@ -109,6 +113,9 @@ impl GitSpaceApp {
                 }
                 tabs
             },
+            auto_fetch_promise: None,
+            auto_fetch_last_trigger: None,
+            auto_fetch_repo: None,
         }
     }
 
@@ -278,6 +285,7 @@ impl eframe::App for GitSpaceApp {
             }
         }
 
+        self.handle_auto_fetch(ctx);
         self.telemetry.tick();
     }
 }
@@ -480,6 +488,98 @@ impl GitSpaceApp {
         }
     }
 
+    fn handle_auto_fetch(&mut self, ctx: &egui::Context) {
+        let now = ctx.input(|input| input.time);
+
+        if let Some(promise) = &self.auto_fetch_promise {
+            if let Some(result) = promise.ready() {
+                self.handle_auto_fetch_result(result.clone());
+                self.auto_fetch_promise = None;
+            }
+        }
+
+        if self.auto_fetch_promise.is_some() {
+            return;
+        }
+
+        let preferences = self.config.preferences();
+        if !preferences.auto_fetch_enabled() {
+            return;
+        }
+
+        let Some(repo) = self.current_repo.as_ref() else {
+            return;
+        };
+
+        let interval_secs = preferences.auto_fetch_interval_minutes() as f64 * 60.0;
+        if self.auto_fetch_repo.as_deref() != Some(&repo.path) {
+            self.auto_fetch_repo = Some(repo.path.clone());
+            self.auto_fetch_last_trigger = Some(now - interval_secs);
+        }
+
+        let last_trigger = self.auto_fetch_last_trigger.unwrap_or(now - interval_secs);
+        if now - last_trigger < interval_secs {
+            return;
+        }
+
+        let context = match self.repo_overview.auto_fetch_context(repo, &self.auth_manager) {
+            Ok(context) => context,
+            Err(err) => {
+                self.repo_overview
+                    .set_action_status(Some(format!("Auto-fetch failed: {err}")));
+                self.notifications
+                    .push(Notification::error("Auto-fetch failed", err));
+                self.auto_fetch_last_trigger = Some(now);
+                return;
+            }
+        };
+
+        let repo_path = context.repo_path.clone();
+        let remote_name = context.remote_name.clone();
+        let token = context.token.clone();
+        let network = context.network.clone();
+
+        self.repo_overview
+            .set_action_status(Some(format!("Auto-fetching {remote_name}...")));
+
+        self.auto_fetch_last_trigger = Some(now);
+        self.auto_fetch_promise = Some(Promise::spawn_thread("auto-fetch", move || {
+            let result = fetch_remote(&repo_path, &remote_name, &network, token)
+                .map(|_| ())
+                .map_err(|err| err.to_string());
+            AutoFetchOutcome {
+                repo_path,
+                remote_name,
+                result,
+            }
+        }));
+    }
+
+    fn handle_auto_fetch_result(&mut self, outcome: AutoFetchOutcome) {
+        match outcome.result {
+            Ok(()) => {
+                if let Some(current_repo) = self.current_repo.as_ref()
+                    && current_repo.path == outcome.repo_path
+                {
+                    self.repo_overview.reload_repo_state(current_repo);
+                }
+                self.repo_overview.set_action_status(Some(format!(
+                    "Auto-fetched {}",
+                    outcome.remote_name
+                )));
+            }
+            Err(err) => {
+                self.repo_overview.set_action_status(Some(format!(
+                    "Auto-fetch failed: {err}"
+                )));
+                self.notifications.push(Notification::error(
+                    "Auto-fetch failed",
+                    format!("{} ({})", err, outcome.remote_name),
+                ));
+            }
+        }
+    }
+
     fn telemetry_enabled(&self) -> bool {
         self.config.preferences().telemetry_enabled()
     }
@@ -525,4 +625,11 @@ impl GitSpaceApp {
         self.settings_panel.set_preferences(preferences.clone());
         self.apply_preferences(preferences, ctx);
     }
+}
+
+#[derive(Clone)]
+struct AutoFetchOutcome {
+    repo_path: String,
+    remote_name: String,
+    result: Result<(), String>,
 }
