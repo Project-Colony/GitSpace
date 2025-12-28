@@ -53,10 +53,6 @@ impl SettingsPanel {
         self.preferences = preferences;
     }
 
-    pub fn set_logging(&mut self, logging: LoggingOptions) {
-        self.logging = logging;
-    }
-
     pub fn take_changes(&mut self) -> Option<Preferences> {
         self.pending_preferences.take()
     }
