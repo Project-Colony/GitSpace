@@ -124,7 +124,7 @@ impl SettingsPanel {
             ui,
             "settings-appearance",
             "Appearance",
-            "Choose a Catppuccin flavor for the GitSpace UI.",
+            "Choose a theme for the GitSpace UI.",
             |ui, panel| {
                 let icon_id = ui.make_persistent_id("settings-theme-icon");
                 ComboBox::from_label(
@@ -763,10 +763,10 @@ impl SettingsPanel {
 
 fn mode_label(mode: ThemeMode) -> &'static str {
     match mode {
-        ThemeMode::Latte => "Latte",
-        ThemeMode::Frappe => "Frappe",
-        ThemeMode::Macchiato => "Macchiato",
-        ThemeMode::Mocha => "Mocha",
+        ThemeMode::Latte => "Catppuccin",
+        ThemeMode::Frappe => "Gruvbox",
+        ThemeMode::Macchiato => "Everblush",
+        ThemeMode::Mocha => "Kanagawa",
     }
 }
 
