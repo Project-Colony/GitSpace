@@ -172,12 +172,12 @@ impl SettingsPanel {
                             .hint_text("/home/me/code"),
                     );
 
-                    if ui.button("Choose folder").clicked()
-                        && let Some(path) = FileDialog::new().pick_folder()
-                    {
-                        panel
-                            .preferences
-                            .set_default_clone_path(path.display().to_string());
+                    if ui.button("Choose folder").clicked() {
+                        if let Some(path) = FileDialog::new().pick_folder() {
+                            panel
+                                .preferences
+                                .set_default_clone_path(path.display().to_string());
+                        }
                     }
 
                     if ui.button("Choose folder (native helper)").clicked() {
@@ -627,35 +627,37 @@ impl SettingsPanel {
             "Move your GitSpace preferences between machines as JSON.",
             |ui, panel| {
                 ui.horizontal(|ui| {
-                    if ui.button("Import settings").clicked()
-                        && let Some(path) =
+                    if ui.button("Import settings").clicked() {
+                        if let Some(path) =
                             FileDialog::new().add_filter("JSON", &["json"]).pick_file()
-                    {
-                        match Preferences::from_path(&path) {
-                            Ok(prefs) => {
-                                panel.preferences = prefs.clone();
-                                panel.pending_preferences = Some(prefs);
-                                panel.import_status =
-                                    Some(format!("Imported preferences from {}", path.display()));
-                            }
-                            Err(err) => {
-                                panel.import_status = Some(err.to_string());
+                        {
+                            match Preferences::from_path(&path) {
+                                Ok(prefs) => {
+                                    panel.preferences = prefs.clone();
+                                    panel.pending_preferences = Some(prefs);
+                                    panel.import_status =
+                                        Some(format!("Imported preferences from {}", path.display()));
+                                }
+                                Err(err) => {
+                                    panel.import_status = Some(err.to_string());
+                                }
                             }
                         }
                     }
 
-                    if ui.button("Export settings").clicked()
-                        && let Some(path) = FileDialog::new()
+                    if ui.button("Export settings").clicked() {
+                        if let Some(path) = FileDialog::new()
                             .add_filter("JSON", &["json"])
                             .set_file_name("gitspace-preferences.json")
                             .save_file()
-                    {
-                        match panel.preferences.save_to_path(&path) {
-                            Ok(_) => {
-                                panel.export_status =
-                                    Some(format!("Saved preferences to {}", path.display()));
+                        {
+                            match panel.preferences.save_to_path(&path) {
+                                Ok(_) => {
+                                    panel.export_status =
+                                        Some(format!("Saved preferences to {}", path.display()));
+                                }
+                                Err(err) => panel.export_status = Some(err.to_string()),
                             }
-                            Err(err) => panel.export_status = Some(err.to_string()),
                         }
                     }
                 });

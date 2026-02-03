@@ -700,25 +700,49 @@ fn search_gitlab(
     token: Option<&str>,
     network: &NetworkOptions,
 ) -> Result<Vec<RemoteRepo>, AppError> {
-    let url = "https://gitlab.com/api/v4/projects";
-    enforce_https_policy(url, network)?;
+    let base_url = "https://gitlab.com/api/v4/projects";
+    enforce_https_policy(base_url, network)?;
     let client = client_with_headers(
         token,
         Some("PRIVATE-TOKEN"),
         Some(("Accept", "application/json")),
         network,
     )?;
-    let response: Vec<GitlabProject> = client
-        .get(url)
-        .query(&[("search", query), ("per_page", "6"), ("simple", "true")])
-        .send()
-        .map_err(AppError::from)?
-        .error_for_status()
-        .map_err(AppError::from)?
-        .json()
-        .map_err(AppError::from)?;
 
-    Ok(response
+    let mut all_projects = Vec::new();
+    let per_page = 100;
+
+    for page in 1..=10 {
+        let response = client
+            .get(base_url)
+            .query(&[
+                ("search", query),
+                ("per_page", &per_page.to_string()),
+                ("page", &page.to_string()),
+                ("simple", "true"),
+            ])
+            .send()
+            .map_err(AppError::from)?;
+
+        if !response.status().is_success() {
+            if page == 1 {
+                return Err(AppError::from(
+                    response.error_for_status().unwrap_err(),
+                ));
+            }
+            break;
+        }
+
+        let projects: Vec<GitlabProject> = response.json().map_err(AppError::from)?;
+        let count = projects.len();
+        all_projects.extend(projects);
+
+        if count < per_page {
+            break;
+        }
+    }
+
+    Ok(all_projects
         .into_iter()
         .map(|project| RemoteRepo {
             name: project.name_with_namespace,

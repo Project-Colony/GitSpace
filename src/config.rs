@@ -182,10 +182,10 @@ impl Default for Preferences {
 impl AppConfig {
     pub fn load() -> Self {
         let path = config_path();
-        if let Ok(contents) = fs::read_to_string(&path)
-            && let Ok(config) = serde_json::from_str::<Self>(&contents)
-        {
-            return config;
+        if let Ok(contents) = fs::read_to_string(&path) {
+            if let Ok(config) = serde_json::from_str::<Self>(&contents) {
+                return config;
+            }
         }
         Self::default()
     }

@@ -467,10 +467,10 @@ impl GitSpaceApp {
     fn handle_auto_fetch_result(&mut self, outcome: AutoFetchOutcome) {
         match outcome.result {
             Ok(()) => {
-                if let Some(current_repo) = self.current_repo.as_ref()
-                    && current_repo.path == outcome.repo_path
-                {
-                    self.repo_overview.reload_repo_state(current_repo);
+                if let Some(current_repo) = self.current_repo.as_ref() {
+                    if current_repo.path == outcome.repo_path {
+                        self.repo_overview.reload_repo_state(current_repo);
+                    }
                 }
                 self.repo_overview.set_action_status(Some(format!(
                     "Auto-fetched {}",
