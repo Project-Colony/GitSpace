@@ -401,36 +401,43 @@ impl StagePanel {
                     return;
                 }
 
-                for stash in self.stashes.clone() {
+                // Collect stash info to avoid cloning the entire Vec
+                let stash_info: Vec<(usize, String)> = self
+                    .stashes
+                    .iter()
+                    .map(|s| (s.index, s.message.clone()))
+                    .collect();
+
+                for (index, message) in stash_info {
                     ui.horizontal(|ui| {
                         ui.label(
-                            RichText::new(format!("#{} — {}", stash.index, stash.message))
+                            RichText::new(format!("#{} — {}", index, message))
                                 .color(self.theme.palette.text_primary),
                         );
                         if ui.button("Apply").clicked() {
-                            match apply_stash(&repo.path, stash.index) {
+                            match apply_stash(&repo.path, index) {
                                 Ok(_) => {
-                                    self.status = Some(format!("Applied stash #{}", stash.index));
+                                    self.status = Some(format!("Applied stash #{}", index));
                                     self.needs_refresh = true;
                                 }
                                 Err(err) => {
                                     self.error = Some(format!(
                                         "Failed to apply stash #{}: {err}",
-                                        stash.index
+                                        index
                                     ))
                                 }
                             }
                         }
                         if ui.button("Drop").clicked() {
-                            match drop_stash(&repo.path, stash.index) {
+                            match drop_stash(&repo.path, index) {
                                 Ok(_) => {
-                                    self.status = Some(format!("Dropped stash #{}", stash.index));
+                                    self.status = Some(format!("Dropped stash #{}", index));
                                     self.needs_refresh = true;
                                 }
                                 Err(err) => {
                                     self.error = Some(format!(
                                         "Failed to drop stash #{}: {err}",
-                                        stash.index
+                                        index
                                     ))
                                 }
                             }

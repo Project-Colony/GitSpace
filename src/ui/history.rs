@@ -257,11 +257,8 @@ impl HistoryPanel {
                                         );
                                         ui.add(
                                             egui::Label::new(
-                                                RichText::new(format!(
-                                                    "{}",
-                                                    commit.id.chars().take(8).collect::<String>()
-                                                ))
-                                                .color(palette.text_secondary),
+                                                RichText::new(&commit.short_id)
+                                                    .color(palette.text_secondary),
                                             )
                                             .wrap(true),
                                         );

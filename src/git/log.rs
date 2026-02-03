@@ -12,6 +12,8 @@ pub struct CommitFilter {
 #[derive(Debug, Clone)]
 pub struct CommitInfo {
     pub id: String,
+    /// Pre-computed short ID (first 8 chars) to avoid repeated string slicing in UI
+    pub short_id: String,
     pub summary: String,
     pub message: String,
     pub author: String,
@@ -60,7 +62,7 @@ pub fn read_commit_log(
         revwalk.push_head()?;
     }
 
-    let mut commits = Vec::new();
+    let mut commits = Vec::with_capacity(limit.min(256));
 
     for oid_result in revwalk.take(limit) {
         let oid = oid_result?;
@@ -123,8 +125,11 @@ pub fn read_commit_log(
             (None, None, None)
         };
 
+        let id = oid.to_string();
+        let short_id = id.chars().take(8).collect();
         commits.push(CommitInfo {
-            id: oid.to_string(),
+            id,
+            short_id,
             summary: commit.summary().unwrap_or_default().to_string(),
             message: commit.message().unwrap_or_default().to_string(),
             author: commit.author().name().unwrap_or("Unknown").to_string(),
@@ -172,7 +177,7 @@ pub fn commits_between_refs(
         revwalk.hide(from_oid)?;
     }
 
-    let mut commits = Vec::new();
+    let mut commits = Vec::with_capacity(limit.min(64));
     for oid_result in revwalk.take(limit) {
         let oid = oid_result?;
         let commit = repo.find_commit(oid)?;
@@ -216,8 +221,11 @@ fn resolve_ref_oid(
 }
 
 fn commit_info_from_commit(commit: &git2::Commit<'_>) -> CommitInfo {
+    let id = commit.id().to_string();
+    let short_id = id.chars().take(8).collect();
     CommitInfo {
-        id: commit.id().to_string(),
+        id,
+        short_id,
         summary: commit.summary().unwrap_or_default().to_string(),
         message: commit.message().unwrap_or_default().to_string(),
         author: commit.author().name().unwrap_or("Unknown").to_string(),
