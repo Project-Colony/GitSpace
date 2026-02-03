@@ -1,3 +1,5 @@
+pub mod oauth;
+
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -18,6 +20,8 @@ use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 use url::Url;
 use zeroize::{Zeroize, ZeroizeOnDrop};
+
+pub use oauth::{OAuthFlow, OAuthProvider, OAuthResult, OAuthToken};
 
 const SERVICE_NAME: &str = "gitspace";
 const TOKEN_FILE_NAME: &str = "tokens.enc";
@@ -139,8 +143,60 @@ impl AuthManager {
         self.validate_token(host, token)?;
         self.storage.set_token(host, token)
     }
+
     pub fn set_encrypted_fallback(&mut self, allowed: bool) {
         self.storage.set_allow_encrypted_fallback(allowed);
+    }
+
+    /// Stores an OAuth token for a host.
+    pub fn store_oauth_token(&self, token: &OAuthToken) -> Result<(), String> {
+        // Store the access token using the existing mechanism
+        self.storage.set_token(&token.host, &token.access_token)?;
+
+        // Store the full OAuth token (with refresh token) as JSON in a separate entry
+        let oauth_key = format!("oauth:{}", token.host);
+        let oauth_json = serde_json::to_string(token)
+            .map_err(|e| format!("Failed to serialize OAuth token: {}", e))?;
+        self.storage.set_token(&oauth_key, &oauth_json)?;
+
+        info!(
+            target: "gitspace::auth",
+            host = %token.host,
+            provider = %token.provider,
+            has_refresh = token.refresh_token.is_some(),
+            "OAuth token stored"
+        );
+
+        Ok(())
+    }
+
+    /// Retrieves the OAuth token for a host, if one exists.
+    pub fn get_oauth_token(&self, host: &str) -> Option<OAuthToken> {
+        let oauth_key = format!("oauth:{}", host);
+        let oauth_json = self.storage.get_token(&oauth_key).ok()??;
+        serde_json::from_str(&oauth_json).ok()
+    }
+
+    /// Checks if a host has OAuth authentication configured.
+    pub fn has_oauth(&self, host: &str) -> bool {
+        self.get_oauth_token(host).is_some()
+    }
+
+    /// Starts an OAuth flow for the given provider.
+    ///
+    /// This will open the browser for authentication and block until complete.
+    pub fn start_oauth(&self, provider: OAuthProvider) -> OAuthResult {
+        match OAuthFlow::new(provider) {
+            Ok(flow) => flow.start(),
+            Err(e) => OAuthResult::Error(e),
+        }
+    }
+
+    /// Clears OAuth token for a host.
+    pub fn clear_oauth_token(&self, host: &str) -> Result<(), String> {
+        let oauth_key = format!("oauth:{}", host);
+        let _ = self.storage.clear_token(&oauth_key);
+        self.storage.clear_token(host)
     }
 }
 
