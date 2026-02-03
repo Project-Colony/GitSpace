@@ -3,6 +3,9 @@
 //! This module centralizes proxy configuration, transport validation,
 //! and credential callbacks to avoid code duplication across clone.rs and remote.rs.
 
+// Some utilities are designed for future use or as public API surface
+#![allow(dead_code)]
+
 use std::time::Instant;
 
 use git2::{Cred, FetchOptions, ProxyOptions, PushOptions, RemoteCallbacks};

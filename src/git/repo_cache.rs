@@ -3,6 +3,9 @@
 //! This module provides a thread-safe cache for git2::Repository instances
 //! to reduce I/O overhead when performing multiple operations on the same repository.
 
+// Public API designed for future use
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -62,7 +65,7 @@ impl RepoCache {
     ///
     /// If the repository is already cached and not expired, returns a reference to it.
     /// Otherwise, opens the repository and caches it.
-    pub fn open<P: AsRef<Path>>(&self, path: P) -> Result<RepoHandle, git2::Error> {
+    pub fn open<P: AsRef<Path>>(&self, path: P) -> Result<RepoHandle<'_>, git2::Error> {
         let path = path.as_ref().to_path_buf();
         let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
 

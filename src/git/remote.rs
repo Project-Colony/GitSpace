@@ -1,27 +1,36 @@
+//! Remote operations: fetch, pull, push, and prune.
+
+// Public API functions designed for future use
+#![allow(dead_code)]
+
 use std::path::Path;
-use std::time::Instant;
 
 use git2::build::CheckoutBuilder;
-use git2::{
-    AnnotatedCommit, Cred, ErrorCode, FetchOptions, FetchPrune, ProxyOptions, PushOptions,
-    RemoteCallbacks, Repository,
-};
+use git2::{AnnotatedCommit, ErrorCode, FetchOptions, FetchPrune, PushOptions, Repository};
 
 use crate::config::NetworkOptions;
 use crate::error::AppError;
+use crate::git::transport::{
+    configure_proxy_options, create_push_callbacks, create_remote_callbacks, validate_transport_url,
+};
 
+/// Information about a configured remote.
 #[derive(Debug, Clone)]
 pub struct RemoteInfo {
     pub name: String,
     pub url: String,
 }
 
+/// Outcome of a pull operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PullOutcome {
+    /// The local branch was already up to date.
     UpToDate,
+    /// A fast-forward merge was performed.
     FastForward,
 }
 
+/// Lists all configured remotes for a repository.
 pub fn list_remotes<P: AsRef<Path>>(path: P) -> Result<Vec<RemoteInfo>, git2::Error> {
     let repo = Repository::open(path)?;
     let mut remotes = Vec::new();
@@ -41,7 +50,13 @@ pub fn list_remotes<P: AsRef<Path>>(path: P) -> Result<Vec<RemoteInfo>, git2::Er
     Ok(remotes)
 }
 
-#[allow(dead_code)]
+/// Fetches updates from a remote.
+///
+/// # Arguments
+/// * `path` - Path to the repository
+/// * `remote_name` - Name of the remote (e.g., "origin")
+/// * `network` - Network configuration options
+/// * `token` - Optional authentication token
 pub fn fetch_remote<P: AsRef<Path>>(
     path: P,
     remote_name: &str,
@@ -50,30 +65,14 @@ pub fn fetch_remote<P: AsRef<Path>>(
 ) -> Result<(), AppError> {
     let repo = Repository::open(path)?;
     let mut remote = repo.find_remote(remote_name)?;
+
+    // Validate URL against network policy
     if let Some(url) = remote.url() {
         validate_transport_url(url, network)?;
     }
 
-    let mut callbacks = RemoteCallbacks::new();
-    let start = Instant::now();
-    let timeout_secs = network.network_timeout_secs;
-
-    callbacks.credentials(move |_url, username_from_url, _allowed| {
-        if let Some(token) = token.clone() {
-            let username = username_from_url.unwrap_or("git");
-            Cred::userpass_plaintext(username, &token)
-        } else {
-            Cred::default()
-        }
-    });
-
-    callbacks.transfer_progress(move |_stats| {
-        if timeout_secs > 0 && start.elapsed().as_secs() >= timeout_secs {
-            return false;
-        }
-        true
-    });
-
+    // Create fetch options with callbacks
+    let callbacks = create_remote_callbacks(token, network.network_timeout_secs);
     let mut fetch = FetchOptions::new();
     fetch.remote_callbacks(callbacks);
     fetch.proxy_options(configure_proxy_options(network));
@@ -82,7 +81,21 @@ pub fn fetch_remote<P: AsRef<Path>>(
     Ok(())
 }
 
-#[allow(dead_code)]
+/// Pulls updates from a remote and fast-forwards the local branch.
+///
+/// # Arguments
+/// * `path` - Path to the repository
+/// * `remote_name` - Name of the remote (e.g., "origin")
+/// * `branch` - Name of the branch to pull
+/// * `network` - Network configuration options
+/// * `token` - Optional authentication token
+///
+/// # Returns
+/// * `PullOutcome::UpToDate` if already current
+/// * `PullOutcome::FastForward` if fast-forward was performed
+///
+/// # Errors
+/// Returns an error if a non-fast-forward merge is required.
 pub fn pull_branch<P: AsRef<Path>>(
     path: P,
     remote_name: &str,
@@ -90,9 +103,10 @@ pub fn pull_branch<P: AsRef<Path>>(
     network: &NetworkOptions,
     token: Option<String>,
 ) -> Result<PullOutcome, AppError> {
+    // First fetch the remote
     fetch_remote(&path, remote_name, network, token)?;
-    let repo = Repository::open(path)?;
 
+    let repo = Repository::open(path)?;
     let remote_ref_name = format!("refs/remotes/{remote_name}/{branch}");
     let remote_ref = repo.find_reference(&remote_ref_name)?;
     let annotated = repo.reference_to_annotated_commit(&remote_ref)?;
@@ -113,7 +127,14 @@ pub fn pull_branch<P: AsRef<Path>>(
     ))
 }
 
-#[allow(dead_code)]
+/// Pushes a branch to a remote.
+///
+/// # Arguments
+/// * `path` - Path to the repository
+/// * `remote_name` - Name of the remote (e.g., "origin")
+/// * `branch` - Name of the branch to push
+/// * `network` - Network configuration options
+/// * `token` - Optional authentication token
 pub fn push_branch<P: AsRef<Path>>(
     path: P,
     remote_name: &str,
@@ -123,22 +144,14 @@ pub fn push_branch<P: AsRef<Path>>(
 ) -> Result<(), AppError> {
     let repo = Repository::open(path)?;
     let mut remote = repo.find_remote(remote_name)?;
+
+    // Validate URL against network policy
     if let Some(url) = remote.pushurl().or_else(|| remote.url()) {
         validate_transport_url(url, network)?;
     }
 
-    let mut callbacks = RemoteCallbacks::new();
-    callbacks.credentials(move |_url, username_from_url, _allowed| {
-        if let Some(token) = token.clone() {
-            let username = username_from_url.unwrap_or("git");
-            Cred::userpass_plaintext(username, &token)
-        } else {
-            Cred::default()
-        }
-    });
-
-    callbacks.push_transfer_progress(|_current, _total, _bytes| {});
-
+    // Create push options with callbacks
+    let callbacks = create_push_callbacks(token);
     let mut push_options = PushOptions::new();
     push_options.remote_callbacks(callbacks);
     push_options.proxy_options(configure_proxy_options(network));
@@ -148,7 +161,13 @@ pub fn push_branch<P: AsRef<Path>>(
     Ok(())
 }
 
-#[allow(dead_code)]
+/// Prunes stale remote-tracking references.
+///
+/// # Arguments
+/// * `path` - Path to the repository
+/// * `remote_name` - Name of the remote (e.g., "origin")
+/// * `network` - Network configuration options
+/// * `token` - Optional authentication token
 pub fn prune_remotes<P: AsRef<Path>>(
     path: P,
     remote_name: &str,
@@ -157,30 +176,14 @@ pub fn prune_remotes<P: AsRef<Path>>(
 ) -> Result<(), AppError> {
     let repo = Repository::open(path)?;
     let mut remote = repo.find_remote(remote_name)?;
+
+    // Validate URL against network policy
     if let Some(url) = remote.url() {
         validate_transport_url(url, network)?;
     }
 
-    let mut callbacks = RemoteCallbacks::new();
-    let start = Instant::now();
-    let timeout_secs = network.network_timeout_secs;
-
-    callbacks.credentials(move |_url, username_from_url, _allowed| {
-        if let Some(token) = token.clone() {
-            let username = username_from_url.unwrap_or("git");
-            Cred::userpass_plaintext(username, &token)
-        } else {
-            Cred::default()
-        }
-    });
-
-    callbacks.transfer_progress(move |_stats| {
-        if timeout_secs > 0 && start.elapsed().as_secs() >= timeout_secs {
-            return false;
-        }
-        true
-    });
-
+    // Create fetch options with callbacks and prune enabled
+    let callbacks = create_remote_callbacks(token, network.network_timeout_secs);
     let mut fetch = FetchOptions::new();
     fetch.remote_callbacks(callbacks);
     fetch.proxy_options(configure_proxy_options(network));
@@ -190,46 +193,7 @@ pub fn prune_remotes<P: AsRef<Path>>(
     Ok(())
 }
 
-#[allow(dead_code)]
-fn configure_proxy_options(network: &NetworkOptions) -> ProxyOptions<'_> {
-    let mut proxy_options = ProxyOptions::new();
-
-    if !network.https_proxy.is_empty() {
-        proxy_options.url(&network.https_proxy);
-    } else if !network.http_proxy.is_empty() {
-        proxy_options.url(&network.http_proxy);
-    }
-
-    proxy_options
-}
-
-#[allow(dead_code)]
-fn validate_transport_url(url: &str, network: &NetworkOptions) -> Result<(), AppError> {
-    let url = url.to_lowercase();
-
-    let is_ssh = url.starts_with("ssh://") || url.contains('@');
-    if is_ssh && !network.allow_ssh {
-        return Err(AppError::Validation(
-            "SSH access is disabled in your network preferences.".to_string(),
-        ));
-    }
-
-    if url.starts_with("https://") && !network.use_https {
-        return Err(AppError::Validation(
-            "HTTPS connections are disabled in your network preferences.".to_string(),
-        ));
-    }
-
-    if url.starts_with("http://") && network.use_https {
-        return Err(AppError::Validation(
-            "Plain HTTP is blocked. Enable HTTP in settings or use HTTPS.".to_string(),
-        ));
-    }
-
-    Ok(())
-}
-
-#[allow(dead_code)]
+/// Performs a fast-forward merge to update a local ref.
 fn fast_forward(
     repo: &Repository,
     local_ref_name: &str,

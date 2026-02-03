@@ -3,6 +3,9 @@
 //! This module provides a unified error type for the application with
 //! automatic conversion from common error types and user-friendly messages.
 
+// Public API variants and methods designed for future use
+#![allow(dead_code)]
+
 use std::path::PathBuf;
 
 use thiserror::Error;

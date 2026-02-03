@@ -129,6 +129,17 @@ impl TelemetryEmitter {
             warn!(target: "gitspace::telemetry", "telemetry worker unavailable during purge");
         }
     }
+
+    /// Gracefully shuts down the telemetry system, flushing any remaining events.
+    pub fn shutdown(&mut self) {
+        self.worker.shutdown();
+    }
+}
+
+impl Drop for TelemetryEmitter {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
 }
 
 #[derive(Clone)]
@@ -261,27 +272,43 @@ enum WorkerCommand {
     Tick,
     Purge,
     SetEnabled(bool),
+    /// Flushes remaining events and shuts down the worker.
+    Shutdown,
 }
 
-#[derive(Clone)]
 struct TelemetryWorkerHandle {
     sender: mpsc::Sender<WorkerCommand>,
+    handle: Option<thread::JoinHandle<()>>,
 }
 
 impl TelemetryWorkerHandle {
     fn spawn(options: TelemetryOptions) -> Self {
         let (sender, receiver) = mpsc::channel();
-        thread::Builder::new()
+        let handle = thread::Builder::new()
             .name("telemetry-worker".to_string())
             .spawn(move || {
                 TelemetryWorker::new(options).run(receiver);
             })
             .expect("telemetry worker thread");
-        Self { sender }
+        Self {
+            sender,
+            handle: Some(handle),
+        }
     }
 
     fn send(&self, command: WorkerCommand) -> Result<(), mpsc::SendError<WorkerCommand>> {
         self.sender.send(command)
+    }
+
+    /// Sends a shutdown command and waits for the worker to finish.
+    fn shutdown(&mut self) {
+        // Send shutdown command (ignore errors - channel may already be closed)
+        let _ = self.sender.send(WorkerCommand::Shutdown);
+
+        // Wait for the worker thread to finish
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
     }
 }
 
@@ -325,7 +352,33 @@ impl TelemetryWorker {
                 WorkerCommand::Tick => self.tick(),
                 WorkerCommand::Purge => self.purge(),
                 WorkerCommand::SetEnabled(enabled) => self.set_enabled(enabled),
+                WorkerCommand::Shutdown => {
+                    self.shutdown();
+                    break;
+                }
             }
+        }
+    }
+
+    /// Gracefully shuts down the worker, flushing any remaining events.
+    fn shutdown(&mut self) {
+        if self.enabled && !self.queue.is_empty() {
+            debug!(
+                target: "gitspace::telemetry",
+                queued = self.queue.len(),
+                "flushing telemetry queue on shutdown"
+            );
+            self.flush();
+        }
+
+        // Persist any remaining events that couldn't be sent
+        if !self.queue.is_empty() {
+            self.persist_offline();
+            debug!(
+                target: "gitspace::telemetry",
+                remaining = self.queue.len(),
+                "persisted remaining telemetry events on shutdown"
+            );
         }
     }
 
