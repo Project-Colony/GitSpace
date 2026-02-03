@@ -17,7 +17,10 @@ use crate::error::AppError;
 pub fn validate_transport_url(url: &str, network: &NetworkOptions) -> Result<(), AppError> {
     let url_lower = url.to_lowercase();
 
-    let is_ssh = url_lower.starts_with("ssh://") || url_lower.contains('@');
+    // Detect SSH URLs properly:
+    // 1. ssh:// protocol prefix
+    // 2. SCP-style: user@host:path (no :// but has @ followed by :)
+    let is_ssh = url_lower.starts_with("ssh://") || is_scp_style_url(&url_lower);
     if is_ssh && !network.allow_ssh {
         return Err(AppError::Validation(
             "SSH access is disabled in your network preferences.".to_string(),
@@ -37,6 +40,28 @@ pub fn validate_transport_url(url: &str, network: &NetworkOptions) -> Result<(),
     }
 
     Ok(())
+}
+
+/// Detects SCP-style SSH URLs like `git@github.com:user/repo.git`.
+/// These have format: `[user@]host:path` with no protocol prefix.
+fn is_scp_style_url(url: &str) -> bool {
+    // Not a protocol URL (no ://)
+    if url.contains("://") {
+        return false;
+    }
+
+    // Must have @ followed by host:path pattern
+    if let Some(at_pos) = url.find('@') {
+        // Check there's a : after the @ (for the host:path separator)
+        let after_at = &url[at_pos + 1..];
+        // The colon must be present and not at the very beginning (valid host required)
+        if let Some(colon_pos) = after_at.find(':') {
+            // Ensure there's actually a host between @ and :
+            return colon_pos > 0;
+        }
+    }
+
+    false
 }
 
 /// Ensures a URL conforms to HTTPS policy for API requests.
@@ -188,5 +213,33 @@ mod tests {
     fn enforce_https_allows_https() {
         let network = default_network();
         assert!(enforce_https_policy("https://api.github.com", &network).is_ok());
+    }
+
+    #[test]
+    fn scp_style_detection_works() {
+        // Valid SCP-style URLs
+        assert!(is_scp_style_url("git@github.com:user/repo.git"));
+        assert!(is_scp_style_url("user@host.example.com:path/to/repo"));
+
+        // Not SCP-style (has protocol prefix)
+        assert!(!is_scp_style_url("https://user@github.com/repo.git"));
+        assert!(!is_scp_style_url("ssh://git@github.com/repo.git"));
+
+        // Not SCP-style (no colon after @)
+        assert!(!is_scp_style_url("user@host"));
+
+        // Not SCP-style (no @ at all)
+        assert!(!is_scp_style_url("github.com:user/repo.git"));
+    }
+
+    #[test]
+    fn validate_https_with_embedded_credentials_not_detected_as_ssh() {
+        let mut network = default_network();
+        network.allow_ssh = false;
+
+        // HTTPS URL with embedded username should NOT be detected as SSH
+        // and should be allowed when SSH is disabled
+        assert!(validate_transport_url("https://user@github.com/repo.git", &network).is_ok());
+        assert!(validate_transport_url("https://token@github.com/repo.git", &network).is_ok());
     }
 }

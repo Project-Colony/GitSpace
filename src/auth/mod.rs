@@ -2,6 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
+use std::sync::OnceLock;
+use std::time::Duration;
 
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::{Engine as _, engine::general_purpose};
@@ -24,6 +26,27 @@ const TOKEN_SALT_FILE: &str = "token-salt.bin";
 const TOKEN_LOCAL_KEY_FILE: &str = "token-local-key.bin";
 const TOKEN_KEYRING_ENTRY: &str = "token-key";
 const MASTER_PASSWORD_ENV: &str = "GITSPACE_TOKEN_MASTER_PASSWORD";
+
+/// Minimum token length for validation.
+const MIN_TOKEN_LENGTH: usize = 8;
+/// Maximum token length for validation.
+const MAX_TOKEN_LENGTH: usize = 512;
+/// HTTP client timeout for token validation.
+const VALIDATION_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Reusable HTTP client for token validation.
+static HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
+
+/// Gets or creates the shared HTTP client for token validation.
+fn get_http_client() -> &'static Client {
+    HTTP_CLIENT.get_or_init(|| {
+        Client::builder()
+            .user_agent("gitspace")
+            .timeout(VALIDATION_TIMEOUT)
+            .build()
+            .unwrap_or_else(|_| Client::new())
+    })
+}
 
 /// Wrapper for encryption key that automatically zeroes memory on drop.
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
@@ -74,19 +97,39 @@ impl AuthManager {
     }
 
     pub fn validate_token(&self, host: &str, token: &str) -> Result<(), String> {
-        if token.trim().is_empty() {
+        let trimmed = token.trim();
+
+        // Basic format validation
+        if trimmed.is_empty() {
             return Err("Token cannot be empty".to_string());
         }
+
+        if trimmed.len() < MIN_TOKEN_LENGTH {
+            return Err(format!(
+                "Token is too short (minimum {} characters)",
+                MIN_TOKEN_LENGTH
+            ));
+        }
+
+        if trimmed.len() > MAX_TOKEN_LENGTH {
+            return Err(format!(
+                "Token is too long (maximum {} characters)",
+                MAX_TOKEN_LENGTH
+            ));
+        }
+
+        // Check for invalid characters (tokens should be printable ASCII)
+        if !trimmed.chars().all(|c| c.is_ascii_graphic()) {
+            return Err("Token contains invalid characters".to_string());
+        }
+
         let normalized_host = normalize_host(host);
-        let client = Client::builder()
-            .user_agent("gitspace")
-            .build()
-            .map_err(|err| err.to_string())?;
+        let client = get_http_client();
 
         if normalized_host.contains("github") {
-            validate_github(&client, &normalized_host, token)
+            validate_github(client, &normalized_host, token)
         } else if normalized_host.contains("gitlab") {
-            validate_gitlab(&client, &normalized_host, token)
+            validate_gitlab(client, &normalized_host, token)
         } else {
             Ok(())
         }
@@ -412,7 +455,9 @@ fn load_or_create_local_key() -> [u8; 32] {
     // If master password is set, derive additional key material for defense in depth
     if let Ok(master_password) = std::env::var(MASTER_PASSWORD_ENV) {
         let salt = load_or_create_secret(TOKEN_SALT_FILE, 16);
-        let params = Params::new(32, 3, 1, None).unwrap_or_else(|_| Params::DEFAULT);
+        // OWASP recommended: 64 MB memory, 3 iterations, 1 thread
+        // m_cost is in KiB, so 65536 = 64 MB
+        let params = Params::new(65536, 3, 1, None).unwrap_or_else(|_| Params::DEFAULT);
         let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
 
         let mut derived = [0u8; 32];

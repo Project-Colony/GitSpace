@@ -1,7 +1,11 @@
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use git2::Repository;
+
+/// Default timeout for git operations (5 minutes).
+const GIT_OPERATION_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MergeStrategy {
@@ -27,12 +31,7 @@ pub fn merge_branch<P: AsRef<Path>>(
         MergeStrategy::Rebase => ("rebase", vec![target]),
     };
 
-    let output = Command::new("git")
-        .arg(command)
-        .args(args)
-        .current_dir(repo_path_ref)
-        .output()
-        .map_err(|err| err.to_string())?;
+    let output = run_git_command_with_timeout(repo_path_ref, command, &args, GIT_OPERATION_TIMEOUT)?;
 
     let conflicts = detect_conflicts(repo_path_ref).map_err(|err| err.to_string())?;
 
@@ -95,5 +94,76 @@ trait EmptyStringExt {
 impl EmptyStringExt for String {
     fn if_empty_then(self, alt: impl FnOnce() -> String) -> String {
         if self.is_empty() { alt() } else { self }
+    }
+}
+
+/// Runs a git command with a timeout.
+///
+/// Returns the command output or an error if the command fails or times out.
+fn run_git_command_with_timeout(
+    repo_path: &Path,
+    command: &str,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<std::process::Output, String> {
+    let mut child = Command::new("git")
+        .arg(command)
+        .args(args)
+        .current_dir(repo_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| format!("Failed to start git {command}: {err}"))?;
+
+    // Wait for the process with timeout
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                // Process exited, collect output
+                let stdout = child
+                    .stdout
+                    .take()
+                    .map(|mut s| {
+                        let mut buf = Vec::new();
+                        std::io::Read::read_to_end(&mut s, &mut buf).ok();
+                        buf
+                    })
+                    .unwrap_or_default();
+
+                let stderr = child
+                    .stderr
+                    .take()
+                    .map(|mut s| {
+                        let mut buf = Vec::new();
+                        std::io::Read::read_to_end(&mut s, &mut buf).ok();
+                        buf
+                    })
+                    .unwrap_or_default();
+
+                return Ok(std::process::Output {
+                    status,
+                    stdout,
+                    stderr,
+                });
+            }
+            Ok(None) => {
+                // Still running, check timeout
+                if start.elapsed() >= timeout {
+                    // Kill the process
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "Git {command} timed out after {} seconds",
+                        timeout.as_secs()
+                    ));
+                }
+                // Sleep briefly before checking again
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(err) => {
+                return Err(format!("Failed to wait for git {command}: {err}"));
+            }
+        }
     }
 }

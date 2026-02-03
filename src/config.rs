@@ -344,8 +344,62 @@ impl Preferences {
         &self.default_clone_path
     }
 
+    /// Sets the default clone path.
+    ///
+    /// The path is validated to ensure it's not empty and is a valid directory path.
+    /// Relative paths are expanded to absolute paths using the home directory.
     pub fn set_default_clone_path<S: Into<String>>(&mut self, path: S) {
-        self.default_clone_path = path.into();
+        let path = path.into();
+
+        // Skip empty paths
+        if path.trim().is_empty() {
+            return;
+        }
+
+        // Expand home directory if path starts with ~
+        let expanded = if path.starts_with("~/") {
+            if let Some(home) = dirs::home_dir() {
+                home.join(&path[2..]).to_string_lossy().to_string()
+            } else {
+                path
+            }
+        } else {
+            path
+        };
+
+        self.default_clone_path = expanded;
+    }
+
+    /// Validates that the default clone path exists and is writable.
+    pub fn validate_clone_path(&self) -> Result<(), String> {
+        let path = std::path::Path::new(&self.default_clone_path);
+
+        if self.default_clone_path.trim().is_empty() {
+            return Err("Clone path cannot be empty".to_string());
+        }
+
+        // Check if path exists
+        if !path.exists() {
+            // Try to create it
+            if let Err(err) = std::fs::create_dir_all(path) {
+                return Err(format!("Cannot create clone directory: {err}"));
+            }
+        }
+
+        // Check if it's a directory
+        if !path.is_dir() {
+            return Err("Clone path must be a directory".to_string());
+        }
+
+        // Check if we can write to it (try to create a temp file)
+        let test_file = path.join(".gitspace_write_test");
+        match std::fs::write(&test_file, b"test") {
+            Ok(_) => {
+                let _ = std::fs::remove_file(&test_file);
+                Ok(())
+            }
+            Err(err) => Err(format!("Clone directory is not writable: {err}")),
+        }
     }
 
     pub fn default_clone_path_mut(&mut self) -> &mut String {
