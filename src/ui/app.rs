@@ -2,13 +2,10 @@ use std::sync::Arc;
 
 use eframe::egui::{self, Key, Modifiers};
 use poll_promise::Promise;
-use serde_json::{Map, Value};
-use sha2::{Digest, Sha256};
 
 use crate::auth::AuthManager;
 use crate::config::{AppConfig, Preferences};
 use crate::git::remote::fetch_remote;
-use crate::telemetry::TelemetryEmitter;
 use crate::ui::{
     animation::store_motion_settings,
     auth::AuthPanel,
@@ -17,7 +14,7 @@ use crate::ui::{
     context::RepoContext,
     fonts,
     history::HistoryPanel,
-    layout::{MainTab, NavigationTrigger, ShellLayout},
+    layout::{MainTab, ShellLayout},
     notifications::{Notification, NotificationAction, NotificationCenter},
     recent::RecentList,
     repo_overview::RepoOverviewPanel,
@@ -47,8 +44,6 @@ pub struct GitSpaceApp {
     notifications: NotificationCenter,
     update_promise: Option<Promise<update::UpdateResult>>,
     update_checked: bool,
-    telemetry: TelemetryEmitter,
-    telemetry_prompt_enqueued: bool,
     tab_order: Vec<MainTab>,
     auto_fetch_promise: Option<Promise<AutoFetchOutcome>>,
     auto_fetch_last_trigger: Option<f64>,
@@ -68,16 +63,6 @@ impl GitSpaceApp {
             .recent_repos()
             .first()
             .map(|entry| RepoContext::from_path(&entry.path));
-        let mut telemetry = TelemetryEmitter::new();
-        telemetry.set_enabled(preferences.telemetry_enabled());
-        if preferences.telemetry_enabled() {
-            let mut properties = Map::new();
-            properties.insert(
-                "release_channel".to_string(),
-                Value::String(format!("{:?}", preferences.release_channel())),
-            );
-            telemetry.record_event("app_launch", properties);
-        }
         Self {
             clone_panel: ClonePanel::new(
                 Arc::clone(&theme),
@@ -105,8 +90,6 @@ impl GitSpaceApp {
             notifications: NotificationCenter::default(),
             update_promise: None,
             update_checked: false,
-            telemetry,
-            telemetry_prompt_enqueued: false,
             tab_order: {
                 let mut tabs = MainTab::ALL.to_vec();
                 if !cfg!(debug_assertions) {
@@ -135,22 +118,12 @@ impl GitSpaceApp {
         if self.config.touch_recent(path_ref) {
             let _ = self.config.save();
         }
-
-        if self.telemetry_enabled() {
-            let mut properties = Map::new();
-            let mut hasher = Sha256::new();
-            hasher.update(path_ref.to_string_lossy().as_bytes());
-            let hash = format!("{:x}", hasher.finalize());
-            properties.insert("repo_hash".to_string(), Value::String(hash));
-            self.telemetry.record_event("repo_opened", properties);
-        }
     }
 }
 
 impl eframe::App for GitSpaceApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.initialize_if_needed(ctx);
-        self.prompt_for_telemetry_if_needed();
         self.handle_keyboard_navigation(ctx);
 
         let layout = ShellLayout::new(Arc::clone(&self.theme));
@@ -158,26 +131,18 @@ impl eframe::App for GitSpaceApp {
         if let Some(selection) = layout.sidebar(ctx, self.active_tab) {
             if self.active_tab != selection.tab {
                 self.active_tab = selection.tab;
-                self.record_tab_switch(selection.tab, selection.trigger);
             }
         }
         if !matches!(self.active_tab, MainTab::History | MainTab::Branches) {
             if let Some(selection) = layout.right_panel(ctx, self.current_repo.as_ref()) {
                 if self.active_tab != selection.tab {
                     self.active_tab = selection.tab;
-                    self.record_tab_switch(selection.tab, selection.trigger);
                 }
             }
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            let tab_interaction = layout.tab_bar(ui, &mut self.tab_order, &mut self.active_tab);
-            if let Some((tab, trigger)) = tab_interaction.selected {
-                self.record_tab_switch(tab, trigger);
-            }
-            if let Some((from, to)) = tab_interaction.reordered {
-                self.record_tab_reorder(from, to);
-            }
+            let _tab_interaction = layout.tab_bar(ui, &mut self.tab_order, &mut self.active_tab);
             let available_height = ui.available_height();
             egui::ScrollArea::vertical()
                 .id_source("main_tab_content")
@@ -206,7 +171,6 @@ impl eframe::App for GitSpaceApp {
 
                     if let Some(branch) = self.branches_panel.take_history_request() {
                         self.active_tab = MainTab::History;
-                        self.record_tab_switch(MainTab::History, NavigationTrigger::ContextMenu);
                         self.history_panel
                             .set_branch_filter(branch, self.current_repo.as_ref());
                     }
@@ -235,16 +199,6 @@ impl eframe::App for GitSpaceApp {
 
         if let Some(branch_height) = self.repo_overview.take_branch_box_height_change() {
             self.apply_branch_box_height(branch_height);
-        }
-
-        if self.settings_panel.take_telemetry_purge_request() {
-            self.telemetry.purge();
-            self.settings_panel
-                .set_telemetry_status("Pending diagnostics cleared");
-            self.notifications.push(Notification::success(
-                "Telemetry cleared",
-                "Queued and offline telemetry events were removed.",
-            ));
         }
 
         if let Some(cloned_path) = self.clone_panel.take_last_cloned_repo() {
@@ -281,17 +235,10 @@ impl eframe::App for GitSpaceApp {
                         });
                     });
                 }
-                NotificationAction::EnableTelemetry => {
-                    self.enable_telemetry(ctx);
-                }
-                NotificationAction::DeclineTelemetry => {
-                    self.decline_telemetry(ctx);
-                }
             }
         }
 
         self.handle_auto_fetch(ctx);
-        self.telemetry.tick();
     }
 }
 
@@ -327,40 +274,8 @@ impl GitSpaceApp {
         if let Some(tab) = selected {
             if self.active_tab != tab {
                 self.active_tab = tab;
-                self.record_tab_switch(tab, NavigationTrigger::Keyboard);
             }
         }
-    }
-
-    fn record_tab_switch(&mut self, tab: MainTab, trigger: NavigationTrigger) {
-        if !self.telemetry_enabled() {
-            return;
-        }
-
-        let mut properties = Map::new();
-        properties.insert("tab".to_string(), Value::String(tab.label().to_string()));
-        properties.insert(
-            "trigger".to_string(),
-            Value::String(trigger.as_str().to_string()),
-        );
-        self.telemetry.record_event("ui_tab_switch", properties);
-    }
-
-    fn record_tab_reorder(&mut self, from: usize, to: usize) {
-        if !self.telemetry_enabled() {
-            return;
-        }
-
-        let mut properties = Map::new();
-        if let Some(tab) = self.tab_order.get(to) {
-            properties.insert("tab".to_string(), Value::String(tab.label().to_string()));
-        }
-        properties.insert(
-            "from_index".to_string(),
-            Value::Number((from as u64).into()),
-        );
-        properties.insert("to_index".to_string(), Value::Number((to as u64).into()));
-        self.telemetry.record_event("ui_tab_reordered", properties);
     }
 
     fn apply_preferences(&mut self, preferences: Preferences, ctx: &egui::Context) {
@@ -390,17 +305,6 @@ impl GitSpaceApp {
         self.settings_panel.set_preferences(preferences.clone());
         self.clone_panel
             .set_network_preferences(preferences.network().clone());
-
-        self.telemetry.set_enabled(preferences.telemetry_enabled());
-        if self.telemetry_enabled() {
-            let mut properties = Map::new();
-            properties.insert(
-                "auto_update".to_string(),
-                Value::Bool(self.config.preferences().auto_check_updates()),
-            );
-            self.telemetry
-                .record_event("preferences_updated", properties);
-        }
 
         let _ = self.config.save();
 
@@ -583,52 +487,6 @@ impl GitSpaceApp {
                 ));
             }
         }
-    }
-
-    fn telemetry_enabled(&self) -> bool {
-        self.config.preferences().telemetry_enabled()
-    }
-
-    fn prompt_for_telemetry_if_needed(&mut self) {
-        if self.config.telemetry_prompt_shown() || self.telemetry_prompt_enqueued {
-            return;
-        }
-
-        let mut notification = Notification::success(
-            "Help improve GitSpace",
-            "Share anonymized diagnostics to guide future improvements.",
-        );
-        notification.detail = Some(
-            "Telemetry is optional, batched, and stored locally when offline. You can clear it anytime.".to_string(),
-        );
-        notification = notification
-            .with_action(NotificationAction::EnableTelemetry)
-            .with_action(NotificationAction::DeclineTelemetry);
-        self.notifications.push(notification);
-        self.telemetry_prompt_enqueued = true;
-    }
-
-    fn enable_telemetry(&mut self, ctx: &egui::Context) {
-        if self.telemetry_enabled() {
-            return;
-        }
-
-        let mut preferences = self.config.preferences().clone();
-        preferences.set_telemetry_enabled(true);
-        self.config.mark_telemetry_prompt_shown();
-        self.settings_panel.set_preferences(preferences.clone());
-        self.apply_preferences(preferences, ctx);
-
-        self.telemetry.record_event("telemetry_opt_in", Map::new());
-        let _ = self.config.save();
-    }
-
-    fn decline_telemetry(&mut self, ctx: &egui::Context) {
-        let mut preferences = self.config.preferences().clone();
-        preferences.set_telemetry_enabled(false);
-        self.config.mark_telemetry_prompt_shown();
-        self.settings_panel.set_preferences(preferences.clone());
-        self.apply_preferences(preferences, ctx);
     }
 }
 

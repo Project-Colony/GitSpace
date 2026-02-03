@@ -31,8 +31,6 @@ pub enum NotificationAction {
     RetryClone,
     CopyLogPath(PathBuf),
     OpenRelease(String),
-    EnableTelemetry,
-    DeclineTelemetry,
 }
 
 /// A toast notification with optional actions.
@@ -254,12 +252,6 @@ impl NotificationCenter {
                                             }
                                             NotificationAction::OpenRelease(_) => {
                                                 ui.button("Open release").clicked()
-                                            }
-                                            NotificationAction::EnableTelemetry => {
-                                                ui.button("Enable analytics").clicked()
-                                            }
-                                            NotificationAction::DeclineTelemetry => {
-                                                ui.button("No thanks").clicked()
                                             }
                                         };
                                         if clicked {

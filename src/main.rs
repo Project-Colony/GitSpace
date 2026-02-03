@@ -6,7 +6,6 @@ mod dotnet;
 mod error;
 mod git;
 mod logging;
-mod telemetry;
 mod ui;
 mod update;
 

@@ -17,8 +17,6 @@ pub struct AppConfig {
     preferences: Preferences,
     #[serde(default)]
     logging: LoggingOptions,
-    #[serde(default)]
-    telemetry_prompt_shown: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -139,8 +137,6 @@ pub struct Preferences {
     #[serde(default)]
     update_feed_override: Option<String>,
     #[serde(default)]
-    telemetry_enabled: bool,
-    #[serde(default)]
     allow_encrypted_tokens: bool,
     #[serde(default = "default_control_height")]
     control_height: f32,
@@ -170,7 +166,6 @@ impl Default for Preferences {
             auto_check_updates: default_auto_check_updates(),
             release_channel: ReleaseChannel::default(),
             update_feed_override: None,
-            telemetry_enabled: false,
             allow_encrypted_tokens: false,
             control_height: default_control_height(),
             branch_box_height: default_branch_box_height(),
@@ -241,14 +236,6 @@ impl AppConfig {
 
     pub fn set_logging(&mut self, logging: LoggingOptions) {
         self.logging = logging;
-    }
-
-    pub fn telemetry_prompt_shown(&self) -> bool {
-        self.telemetry_prompt_shown
-    }
-
-    pub fn mark_telemetry_prompt_shown(&mut self) {
-        self.telemetry_prompt_shown = true;
     }
 }
 
@@ -440,14 +427,6 @@ impl Preferences {
 
     pub fn set_update_feed_override(&mut self, override_url: Option<String>) {
         self.update_feed_override = override_url.filter(|value| !value.trim().is_empty());
-    }
-
-    pub fn telemetry_enabled(&self) -> bool {
-        self.telemetry_enabled
-    }
-
-    pub fn set_telemetry_enabled(&mut self, enabled: bool) {
-        self.telemetry_enabled = enabled;
     }
 
     pub fn allow_encrypted_tokens(&self) -> bool {
