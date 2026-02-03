@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use eframe::egui::{
     ComboBox, RichText, Slider, TextEdit, Ui, collapsing_header::CollapsingState,
     output::OpenUrl,
@@ -11,10 +13,10 @@ use crate::config::{
 use crate::dotnet::{DialogOpenRequest, DialogOptions, DotnetClient};
 use crate::ui::menu;
 use crate::ui::notifications::{Notification, NotificationCenter};
-use crate::ui::theme::Theme;
+use crate::ui::theme::SharedTheme;
 
 pub struct SettingsPanel {
-    theme: Theme,
+    theme: SharedTheme,
     preferences: Preferences,
     logging: LoggingOptions,
     pending_preferences: Option<Preferences>,
@@ -30,7 +32,7 @@ pub struct SettingsPanel {
 }
 
 impl SettingsPanel {
-    pub fn new(theme: Theme, preferences: Preferences, logging: LoggingOptions) -> Self {
+    pub fn new(theme: SharedTheme, preferences: Preferences, logging: LoggingOptions) -> Self {
         Self {
             theme,
             preferences,
@@ -48,7 +50,7 @@ impl SettingsPanel {
         }
     }
 
-    pub fn set_theme(&mut self, theme: Theme) {
+    pub fn set_theme(&mut self, theme: SharedTheme) {
         self.theme = theme;
     }
 
@@ -131,7 +133,7 @@ impl SettingsPanel {
                     RichText::new("Theme").color(panel.theme.palette.text_secondary),
                 )
                 .selected_text(mode_label(panel.preferences.theme_mode()))
-                .icon(menu::combo_icon(panel.theme.clone(), icon_id))
+                .icon(menu::combo_icon(Arc::clone(&panel.theme), icon_id))
                 .show_ui(ui, |ui| {
                     menu::with_menu_popup_motion(ui, "settings-theme-menu", |ui| {
                         let mut selected_mode = panel.preferences.theme_mode();
@@ -363,7 +365,7 @@ impl SettingsPanel {
                             .color(panel.theme.palette.text_secondary),
                     )
                     .selected_text(selected_text)
-                    .icon(menu::combo_icon(panel.theme.clone(), icon_id))
+                    .icon(menu::combo_icon(Arc::clone(&panel.theme), icon_id))
                     .show_ui(ui, |ui| {
                         menu::with_menu_popup_motion(ui, "settings-auto-fetch-interval-menu", |ui| {
                             let mut selected_interval = current_interval;
@@ -551,7 +553,7 @@ impl SettingsPanel {
                     RichText::new("Release channel").color(panel.theme.palette.text_secondary),
                 )
                 .selected_text(channel_label(panel.preferences.release_channel()))
-                .icon(menu::combo_icon(panel.theme.clone(), icon_id))
+                .icon(menu::combo_icon(Arc::clone(&panel.theme), icon_id))
                 .show_ui(ui, |ui| {
                     menu::with_menu_popup_motion(ui, "settings-release-menu", |ui| {
                         let mut selected_channel = panel.preferences.release_channel();
@@ -625,7 +627,7 @@ impl SettingsPanel {
                     RichText::new("Motion intensity").color(panel.theme.palette.text_secondary),
                 )
                 .selected_text(motion_intensity_label(panel.preferences.motion_intensity()))
-                .icon(menu::combo_icon(panel.theme.clone(), icon_id))
+                .icon(menu::combo_icon(Arc::clone(&panel.theme), icon_id))
                 .show_ui(ui, |ui| {
                     menu::with_menu_popup_motion(ui, "settings-motion-intensity-menu", |ui| {
                         let mut selected_intensity = panel.preferences.motion_intensity();

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use chrono::{Datelike, NaiveDate, TimeZone, Utc};
 use eframe::egui::{self, Align, Layout, Pos2, RichText, Sense, Ui};
 
@@ -5,7 +7,7 @@ use crate::git::{
     diff::{FileDiff, commit_diff},
     log::{CommitFilter, CommitInfo, list_local_branches, read_commit_log},
 };
-use crate::ui::{context::RepoContext, menu, theme::Theme};
+use crate::ui::{context::RepoContext, menu, theme::SharedTheme};
 
 const MAX_COMMITS: usize = 200;
 const ROW_HEIGHT: f32 = 88.0;
@@ -20,7 +22,7 @@ pub struct HistoryFilters {
 }
 
 pub struct HistoryPanel {
-    theme: Theme,
+    theme: SharedTheme,
     filters: HistoryFilters,
     branches: Vec<String>,
     commits: Vec<CommitInfo>,
@@ -33,7 +35,7 @@ pub struct HistoryPanel {
 }
 
 impl HistoryPanel {
-    pub fn new(theme: Theme) -> Self {
+    pub fn new(theme: SharedTheme) -> Self {
         Self {
             theme,
             filters: HistoryFilters::default(),
@@ -48,7 +50,7 @@ impl HistoryPanel {
         }
     }
 
-    pub fn set_theme(&mut self, theme: Theme) {
+    pub fn set_theme(&mut self, theme: SharedTheme) {
         self.theme = theme;
     }
 
@@ -140,7 +142,7 @@ impl HistoryPanel {
                             } else {
                                 &self.filters.branch
                             })
-                            .icon(menu::combo_icon(self.theme.clone(), icon_id))
+                            .icon(menu::combo_icon(Arc::clone(&self.theme), icon_id))
                             .show_ui(ui, |ui| {
                                 menu::with_menu_popup_motion(ui, "branch-filter-menu", |ui| {
                                     if menu::menu_item(

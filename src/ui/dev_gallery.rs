@@ -1,12 +1,14 @@
+use std::sync::Arc;
+
 use eframe::egui::{self, RichText, Ui, Vec2};
 
 use crate::ui::menu;
-use crate::ui::theme::Theme;
+use crate::ui::theme::SharedTheme;
 
 const COMBO_OPTIONS: [&str; 3] = ["Option A", "Option B", "Option C"];
 
 pub struct DevGalleryPanel {
-    theme: Theme,
+    theme: SharedTheme,
     toggled: bool,
     notifications_enabled: bool,
     slider_value: f32,
@@ -15,7 +17,7 @@ pub struct DevGalleryPanel {
 }
 
 impl DevGalleryPanel {
-    pub fn new(theme: Theme) -> Self {
+    pub fn new(theme: SharedTheme) -> Self {
         Self {
             theme,
             toggled: false,
@@ -127,7 +129,7 @@ impl DevGalleryPanel {
                     let combo_id = ui.make_persistent_id("dev-gallery-combo");
                     egui::ComboBox::from_id_source(combo_id)
                         .selected_text(COMBO_OPTIONS[self.combo_choice])
-                        .icon(menu::combo_icon(self.theme.clone(), combo_id.with("icon")))
+                        .icon(menu::combo_icon(Arc::clone(&self.theme), combo_id.with("icon")))
                         .show_ui(ui, |ui| {
                             for (index, label) in COMBO_OPTIONS.iter().enumerate() {
                                 ui.selectable_value(&mut self.combo_choice, index, *label);

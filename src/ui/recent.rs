@@ -3,23 +3,22 @@ use rfd::FileDialog;
 use std::{collections::HashSet, path::Path};
 
 use crate::config::AppConfig;
-use crate::ui::theme::Theme;
+use crate::ui::theme::SharedTheme;
 
-#[derive(Debug, Clone)]
 pub struct RecentList {
-    theme: Theme,
+    theme: SharedTheme,
     search: String,
 }
 
 impl RecentList {
-    pub fn new(theme: Theme) -> Self {
+    pub fn new(theme: SharedTheme) -> Self {
         Self {
             theme,
             search: String::new(),
         }
     }
 
-    pub fn set_theme(&mut self, theme: Theme) {
+    pub fn set_theme(&mut self, theme: SharedTheme) {
         self.theme = theme;
     }
 

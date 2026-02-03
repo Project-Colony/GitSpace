@@ -5,7 +5,7 @@ use crate::config::AppConfig;
 use crate::ui::{
     auth::AuthPanel, branches::BranchPanel, clone::ClonePanel, context::RepoContext, dev_gallery,
     menu, notifications::NotificationCenter, perf::PerfScope, recent::RecentList,
-    repo_overview::RepoOverviewPanel, settings::SettingsPanel, stage::StagePanel, theme::Theme,
+    repo_overview::RepoOverviewPanel, settings::SettingsPanel, stage::StagePanel, theme::SharedTheme,
 };
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -80,12 +80,12 @@ impl MainTab {
     }
 }
 
-pub struct ShellLayout<'a> {
-    theme: &'a Theme,
+pub struct ShellLayout {
+    theme: SharedTheme,
 }
 
-impl<'a> ShellLayout<'a> {
-    pub fn new(theme: &'a Theme) -> Self {
+impl ShellLayout {
+    pub fn new(theme: SharedTheme) -> Self {
         Self { theme }
     }
 
@@ -131,7 +131,7 @@ impl<'a> ShellLayout<'a> {
                     ui.add_space(4.0);
                     let response = menu::menu_item_sized(
                         ui,
-                        self.theme,
+                        &self.theme,
                         ("sidebar-nav", label),
                         label,
                         active_tab == tab,
@@ -157,7 +157,7 @@ impl<'a> ShellLayout<'a> {
                 ] {
                     let response = menu::menu_item_sized(
                         ui,
-                        self.theme,
+                        &self.theme,
                         ("sidebar-action", action),
                         RichText::new(action).strong(),
                         active_tab == tab,
@@ -288,7 +288,7 @@ impl<'a> ShellLayout<'a> {
 
                 let response = menu::menu_item_sized(
                     ui,
-                    self.theme,
+                    &self.theme,
                     ("tab-bar", tab),
                     label,
                     is_active,
@@ -312,7 +312,7 @@ impl<'a> ShellLayout<'a> {
                     menu::with_menu_popup_motion(ui, ("tab-menu", tab), |ui| {
                         if menu::menu_item(
                             ui,
-                            self.theme,
+                            &self.theme,
                             ("tab-menu-switch", tab),
                             format!("Switch to {}", tab.label()),
                             is_active,

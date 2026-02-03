@@ -10,7 +10,7 @@ use crate::git::branch::{
 use crate::git::compare::{BranchComparison, DiffSummary, compare_branch_with_head};
 use crate::git::log::{CommitInfo, commits_between_refs, latest_commit_for_branch};
 use crate::git::merge::{MergeOutcome, MergeStrategy, detect_conflicts, merge_branch};
-use crate::ui::{context::RepoContext, menu, theme::Theme};
+use crate::ui::{context::RepoContext, menu, theme::SharedTheme};
 
 const STALE_DAYS: i64 = 30;
 const REMOTE_PAGE_SIZE: usize = 25;
@@ -37,7 +37,7 @@ impl BranchNode {
 }
 
 pub struct BranchPanel {
-    theme: Theme,
+    theme: SharedTheme,
     branches: Vec<BranchEntry>,
     branch_commits: BTreeMap<String, CommitInfo>,
     new_branch: String,
@@ -61,7 +61,7 @@ pub struct BranchPanel {
 }
 
 impl BranchPanel {
-    pub fn new(theme: Theme, pinned_branches: Vec<String>) -> Self {
+    pub fn new(theme: SharedTheme, pinned_branches: Vec<String>) -> Self {
         Self {
             theme,
             branches: Vec::new(),
@@ -87,7 +87,7 @@ impl BranchPanel {
         }
     }
 
-    pub fn set_theme(&mut self, theme: Theme) {
+    pub fn set_theme(&mut self, theme: SharedTheme) {
         self.theme = theme;
     }
 

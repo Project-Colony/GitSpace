@@ -19,6 +19,7 @@ dependencies = [
  "hostname",
  "keyring",
  "open",
+ "parking_lot",
  "pem",
  "poll-promise",
  "rand 0.8.5",
@@ -30,11 +31,13 @@ dependencies = [
  "sha2",
  "spki",
  "tempfile",
+ "thiserror 1.0.69",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
  "url",
  "x509-cert",
+ "zeroize",
 ]
 
 [[package]]

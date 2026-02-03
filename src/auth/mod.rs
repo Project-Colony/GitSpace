@@ -1,29 +1,33 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::{Engine as _, engine::general_purpose};
 use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
-use hostname::get as get_hostname;
 use keyring::Entry;
 use rand::RngCore;
 use rand::rngs::OsRng;
 use reqwest::blocking::Client;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, USER_AGENT};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 use url::Url;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 const SERVICE_NAME: &str = "gitspace";
 const TOKEN_FILE_NAME: &str = "tokens.enc";
 const HOST_FILE_NAME: &str = "token-hosts.json";
 const TOKEN_SALT_FILE: &str = "token-salt.bin";
-const TOKEN_PEPPER_FILE: &str = "token-pepper.bin";
+const TOKEN_LOCAL_KEY_FILE: &str = "token-local-key.bin";
 const TOKEN_KEYRING_ENTRY: &str = "token-key";
 const MASTER_PASSWORD_ENV: &str = "GITSPACE_TOKEN_MASTER_PASSWORD";
+
+/// Wrapper for encryption key that automatically zeroes memory on drop.
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
+struct SecureKey([u8; 32]);
 
 #[derive(Debug, Clone)]
 pub struct AuthManager {
@@ -97,12 +101,24 @@ impl AuthManager {
     }
 }
 
-#[derive(Debug, Clone)]
+/// Secure token storage with automatic key zeroization.
+#[derive(Clone)]
 pub struct TokenStorage {
-    key: [u8; 32],
+    key: SecureKey,
     path: PathBuf,
     host_path: PathBuf,
     allow_encrypted_fallback: bool,
+}
+
+impl std::fmt::Debug for TokenStorage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TokenStorage")
+            .field("path", &self.path)
+            .field("host_path", &self.host_path)
+            .field("allow_encrypted_fallback", &self.allow_encrypted_fallback)
+            .field("key", &"[REDACTED]")
+            .finish()
+    }
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -127,7 +143,7 @@ impl TokenStorage {
             .map_err(|err| {
                 warn!(target: "gitspace::auth", error = %err, "failed to access keyring encryption key");
             })
-            .unwrap_or_else(|_| derive_local_key());
+            .unwrap_or_else(|_| load_or_create_local_key());
         let path = dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join(SERVICE_NAME)
@@ -137,7 +153,7 @@ impl TokenStorage {
             .join(SERVICE_NAME)
             .join(HOST_FILE_NAME);
         Self {
-            key,
+            key: SecureKey(key),
             path,
             host_path,
             allow_encrypted_fallback,
@@ -266,7 +282,7 @@ impl TokenStorage {
             fs::create_dir_all(parent)
                 .map_err(|err| format!("Failed to prepare credential directory: {err}"))?;
         }
-        let blob = encrypt_tokens(map, &self.key)?;
+        let blob = encrypt_tokens(map, &self.key.0)?;
         let serialized = serde_json::to_string_pretty(&blob)
             .map_err(|err| format!("Failed to serialize credentials: {err}"))?;
         fs::write(&self.path, serialized)
@@ -281,7 +297,7 @@ impl TokenStorage {
             .map_err(|err| format!("Failed to read credential file: {err}"))?;
         let blob: EncryptedTokenFile = serde_json::from_str(&data)
             .map_err(|err| format!("Failed to parse credential file: {err}"))?;
-        decrypt_tokens(&blob, &self.key)
+        decrypt_tokens(&blob, &self.key.0)
     }
 
     fn record_host(&self, host: &str) -> Result<(), String> {
@@ -366,34 +382,82 @@ fn decrypt_tokens(blob: &EncryptedTokenFile, key: &[u8; 32]) -> Result<TokenMap,
         .map_err(|err| format!("Failed to parse decrypted credentials: {err}"))
 }
 
-fn derive_local_key() -> [u8; 32] {
-    let user = std::env::var("USER")
-        .or_else(|_| std::env::var("USERNAME"))
-        .unwrap_or_else(|_| "gitspace".to_string());
-    let host = get_hostname()
-        .ok()
-        .and_then(|h| h.into_string().ok())
-        .unwrap_or_else(|| "localhost".to_string());
-    let master_password = std::env::var(MASTER_PASSWORD_ENV)
-        .unwrap_or_else(|_| format!("{}:{}:{}", user, host, std::env::consts::OS));
+/// Loads or creates a secure local encryption key.
+///
+/// SECURITY: This function generates a cryptographically secure random key
+/// and stores it in a file with restricted permissions (0600).
+/// If a master password is provided via environment variable, it's used to
+/// derive an additional key that's XORed with the stored key for defense in depth.
+fn load_or_create_local_key() -> [u8; 32] {
+    let key_path = dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(SERVICE_NAME)
+        .join(TOKEN_LOCAL_KEY_FILE);
 
-    let salt = load_or_create_secret(TOKEN_SALT_FILE, 16);
-    let pepper = load_or_create_secret(TOKEN_PEPPER_FILE, 32);
+    // Try to load existing key
+    let mut stored_key = if let Ok(bytes) = fs::read(&key_path) {
+        if bytes.len() == 32 {
+            let mut key = [0u8; 32];
+            key.copy_from_slice(&bytes);
+            key
+        } else {
+            warn!(target: "gitspace::auth", "invalid local key file size, regenerating");
+            generate_and_store_key(&key_path)
+        }
+    } else {
+        info!(target: "gitspace::auth", "generating new local encryption key");
+        generate_and_store_key(&key_path)
+    };
 
-    let mut keyed = Sha256::new();
-    keyed.update(master_password.as_bytes());
-    keyed.update(&pepper);
-    let password_material = keyed.finalize();
+    // If master password is set, derive additional key material for defense in depth
+    if let Ok(master_password) = std::env::var(MASTER_PASSWORD_ENV) {
+        let salt = load_or_create_secret(TOKEN_SALT_FILE, 16);
+        let params = Params::new(32, 3, 1, None).unwrap_or_else(|_| Params::DEFAULT);
+        let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
 
-    let params = Params::new(32, 3, 1, None).unwrap_or_else(|_| Params::DEFAULT);
-    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
-
-    let mut key = [0u8; 32];
-    if let Err(err) = argon2.hash_password_into(&password_material, &salt, &mut key) {
-        error!(target: "gitspace::auth", error = %err, "failed to derive local token key");
-        let fallback = Sha256::digest(&password_material);
-        key.copy_from_slice(&fallback[..32]);
+        let mut derived = [0u8; 32];
+        if argon2
+            .hash_password_into(master_password.as_bytes(), &salt, &mut derived)
+            .is_ok()
+        {
+            // XOR the derived key with the stored key for defense in depth
+            for (a, b) in stored_key.iter_mut().zip(derived.iter()) {
+                *a ^= b;
+            }
+        }
+        // Zero the derived key
+        derived.zeroize();
     }
+
+    stored_key
+}
+
+/// Generates a cryptographically secure random key and stores it with restricted permissions.
+fn generate_and_store_key(path: &PathBuf) -> [u8; 32] {
+    let mut key = [0u8; 32];
+    OsRng.fill_bytes(&mut key);
+
+    if let Some(parent) = path.parent() {
+        if let Err(err) = fs::create_dir_all(parent) {
+            error!(target: "gitspace::auth", error = %err, "failed to create key directory");
+            return key;
+        }
+    }
+
+    // Write key file
+    if let Err(err) = fs::write(path, &key) {
+        error!(target: "gitspace::auth", error = %err, "failed to write local key file");
+        return key;
+    }
+
+    // Set restrictive permissions (owner read/write only)
+    #[cfg(unix)]
+    {
+        if let Err(err) = fs::set_permissions(path, fs::Permissions::from_mode(0o600)) {
+            warn!(target: "gitspace::auth", error = %err, "failed to set key file permissions");
+        }
+    }
+
     key
 }
 
@@ -444,6 +508,12 @@ fn load_or_create_secret(name: &str, len: usize) -> Vec<u8> {
     }
     if let Err(err) = fs::write(&path, &secret) {
         warn!(target: "gitspace::auth", error = %err, path = %path.display(), "unable to persist derived-key secret");
+    } else {
+        // Set restrictive permissions (owner read/write only)
+        #[cfg(unix)]
+        {
+            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+        }
     }
     secret
 }

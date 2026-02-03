@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use eframe::egui::{self, Key, Modifiers};
 use poll_promise::Promise;
 use serde_json::{Map, Value};
@@ -22,12 +24,12 @@ use crate::ui::{
     settings::SettingsPanel,
     stage::StagePanel,
     dev_gallery::DevGalleryPanel,
-    theme::Theme,
+    theme::{SharedTheme, Theme},
 };
 use crate::update;
 
 pub struct GitSpaceApp {
-    theme: Theme,
+    theme: SharedTheme,
     initialized: bool,
     active_tab: MainTab,
     clone_panel: ClonePanel,
@@ -59,9 +61,7 @@ impl GitSpaceApp {
         let preferences = config.preferences().clone();
         let logging = config.logging().clone();
         let default_clone_path = preferences.default_clone_path().to_string();
-        let theme = Theme::from_mode(preferences.theme_mode());
-        let settings_theme = theme.clone();
-        let dev_gallery_theme = theme.clone();
+        let theme = Theme::shared_from_mode(preferences.theme_mode());
         let auth_manager =
             AuthManager::with_encrypted_fallback(preferences.allow_encrypted_tokens());
         let current_repo = config
@@ -80,28 +80,28 @@ impl GitSpaceApp {
         }
         Self {
             clone_panel: ClonePanel::new(
-                theme.clone(),
+                Arc::clone(&theme),
                 default_clone_path,
                 preferences.network().clone(),
             ),
-            recent_list: RecentList::new(theme.clone()),
+            recent_list: RecentList::new(Arc::clone(&theme)),
             repo_overview: RepoOverviewPanel::new(
-                theme.clone(),
+                Arc::clone(&theme),
                 preferences.branch_box_height(),
                 preferences.network().clone(),
             ),
-            history_panel: HistoryPanel::new(theme.clone()),
-            branches_panel: BranchPanel::new(theme.clone(), preferences.pinned_branches().to_vec()),
-            stage_panel: StagePanel::new(theme.clone()),
+            history_panel: HistoryPanel::new(Arc::clone(&theme)),
+            branches_panel: BranchPanel::new(Arc::clone(&theme), preferences.pinned_branches().to_vec()),
+            stage_panel: StagePanel::new(Arc::clone(&theme)),
             config,
             current_repo,
-            auth_panel: AuthPanel::new(theme.clone(), auth_manager.clone()),
+            auth_panel: AuthPanel::new(Arc::clone(&theme), auth_manager.clone()),
             auth_manager,
+            settings_panel: SettingsPanel::new(Arc::clone(&theme), preferences, logging),
+            dev_gallery_panel: DevGalleryPanel::new(Arc::clone(&theme)),
             theme,
             initialized: false,
             active_tab: MainTab::Clone,
-            settings_panel: SettingsPanel::new(settings_theme, preferences, logging),
-            dev_gallery_panel: DevGalleryPanel::new(dev_gallery_theme),
             notifications: NotificationCenter::default(),
             update_promise: None,
             update_checked: false,
@@ -153,8 +153,7 @@ impl eframe::App for GitSpaceApp {
         self.prompt_for_telemetry_if_needed();
         self.handle_keyboard_navigation(ctx);
 
-        let theme = self.theme.clone();
-        let layout = ShellLayout::new(&theme);
+        let layout = ShellLayout::new(Arc::clone(&self.theme));
         layout.header(ctx);
         if let Some(selection) = layout.sidebar(ctx, self.active_tab) {
             if self.active_tab != selection.tab {
@@ -366,25 +365,25 @@ impl GitSpaceApp {
 
     fn apply_preferences(&mut self, preferences: Preferences, ctx: &egui::Context) {
         self.config.set_preferences(preferences.clone());
-        self.theme = Theme::from_mode(preferences.theme_mode());
+        self.theme = Theme::shared_from_mode(preferences.theme_mode());
         self.apply_style_preferences(ctx, &preferences);
 
-        self.clone_panel.set_theme(self.theme.clone());
+        self.clone_panel.set_theme(Arc::clone(&self.theme));
         self.clone_panel
             .set_default_destination(preferences.default_clone_path().to_string());
-        self.recent_list.set_theme(self.theme.clone());
-        self.repo_overview.set_theme(self.theme.clone());
+        self.recent_list.set_theme(Arc::clone(&self.theme));
+        self.repo_overview.set_theme(Arc::clone(&self.theme));
         self.repo_overview
             .set_branch_box_height(preferences.branch_box_height());
         self.repo_overview
             .set_network_preferences(preferences.network().clone());
-        self.history_panel.set_theme(self.theme.clone());
-        self.branches_panel.set_theme(self.theme.clone());
+        self.history_panel.set_theme(Arc::clone(&self.theme));
+        self.branches_panel.set_theme(Arc::clone(&self.theme));
         self.branches_panel
             .set_pinned_branches(preferences.pinned_branches().to_vec());
-        self.stage_panel.set_theme(self.theme.clone());
-        self.auth_panel.set_theme(self.theme.clone());
-        self.settings_panel.set_theme(self.theme.clone());
+        self.stage_panel.set_theme(Arc::clone(&self.theme));
+        self.auth_panel.set_theme(Arc::clone(&self.theme));
+        self.settings_panel.set_theme(Arc::clone(&self.theme));
         self.auth_manager
             .set_encrypted_fallback(preferences.allow_encrypted_tokens());
         self.auth_panel.set_auth_manager(self.auth_manager.clone());

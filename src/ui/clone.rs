@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
 
 use eframe::egui::{self, Align, ComboBox, Layout, RichText, Sense, TextEdit, Ui};
@@ -17,7 +18,7 @@ use crate::error::{AppError, logs_directory};
 use crate::git::clone::{CloneProgress, CloneRequest, clone_repository};
 use crate::ui::menu;
 use crate::ui::notifications::{Notification, NotificationAction, NotificationCenter};
-use crate::ui::theme::Theme;
+use crate::ui::theme::SharedTheme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Provider {
@@ -63,7 +64,7 @@ enum CloneEvent {
 }
 
 pub struct ClonePanel {
-    theme: Theme,
+    theme: SharedTheme,
     provider: Provider,
     repo_query: String,
     repo_url: String,
@@ -85,7 +86,7 @@ pub struct ClonePanel {
 }
 
 impl ClonePanel {
-    pub fn new(theme: Theme, destination: String, network: NetworkOptions) -> Self {
+    pub fn new(theme: SharedTheme, destination: String, network: NetworkOptions) -> Self {
         Self {
             theme,
             provider: Provider::GitHub,
@@ -109,7 +110,7 @@ impl ClonePanel {
         }
     }
 
-    pub fn set_theme(&mut self, theme: Theme) {
+    pub fn set_theme(&mut self, theme: SharedTheme) {
         self.theme = theme;
     }
 
@@ -235,7 +236,7 @@ impl ClonePanel {
                         .map(|repo| repo.name.clone())
                         .unwrap_or_else(|| "Select a repository".to_string()),
                 )
-                .icon(menu::combo_icon(self.theme.clone(), icon_id))
+                .icon(menu::combo_icon(Arc::clone(&self.theme), icon_id))
                 .show_ui(ui, |ui| {
                     menu::with_menu_popup_motion(ui, "clone-results-menu", |ui| {
                         for idx in 0..self.search_results.len() {

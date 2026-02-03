@@ -2,10 +2,10 @@ use eframe::egui::{self, RichText, TextEdit, Ui};
 use poll_promise::Promise;
 
 use crate::auth::AuthManager;
-use crate::ui::theme::Theme;
+use crate::ui::theme::{SharedTheme, Theme};
 
 pub struct AuthPanel {
-    theme: Theme,
+    theme: SharedTheme,
     auth: AuthManager,
     github_host: String,
     github_token: String,
@@ -18,7 +18,7 @@ pub struct AuthPanel {
 }
 
 impl AuthPanel {
-    pub fn new(theme: Theme, auth: AuthManager) -> Self {
+    pub fn new(theme: SharedTheme, auth: AuthManager) -> Self {
         Self {
             theme,
             auth,
@@ -33,7 +33,7 @@ impl AuthPanel {
         }
     }
 
-    pub fn set_theme(&mut self, theme: Theme) {
+    pub fn set_theme(&mut self, theme: SharedTheme) {
         self.theme = theme;
     }
 
@@ -228,13 +228,13 @@ fn poll_validation(
 }
 
 struct AuthLayout<'a> {
-    theme: &'a Theme,
+    theme: &'a SharedTheme,
     spacing: crate::ui::theme::Spacing,
     metrics: AuthLayoutMetrics,
 }
 
 impl<'a> AuthLayout<'a> {
-    fn new(theme: &'a Theme) -> Self {
+    fn new(theme: &'a SharedTheme) -> Self {
         let metrics = AuthLayoutMetrics::default();
         Self {
             theme,
