@@ -136,56 +136,59 @@ impl eframe::App for GitSpaceApp {
             self.preferences_panel.toggle();
         }
 
-        // Show preferences panel as a modal window
-        self.preferences_panel.show(ctx, &mut self.notifications);
-        if let Some(selection) = layout.sidebar(ctx, self.active_tab) {
-            if self.active_tab != selection.tab {
-                self.active_tab = selection.tab;
-            }
-        }
-        if !matches!(self.active_tab, MainTab::History | MainTab::Branches) {
-            if let Some(selection) = layout.right_panel(ctx, self.current_repo.as_ref()) {
+        // Show preferences panel fullscreen - if open, skip other panels
+        let preferences_open = self.preferences_panel.show(ctx, &mut self.notifications);
+
+        if !preferences_open {
+            if let Some(selection) = layout.sidebar(ctx, self.active_tab) {
                 if self.active_tab != selection.tab {
                     self.active_tab = selection.tab;
                 }
             }
+            if !matches!(self.active_tab, MainTab::History | MainTab::Branches) {
+                if let Some(selection) = layout.right_panel(ctx, self.current_repo.as_ref()) {
+                    if self.active_tab != selection.tab {
+                        self.active_tab = selection.tab;
+                    }
+                }
+            }
+
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let _tab_interaction = layout.tab_bar(ui, &mut self.tab_order, &mut self.active_tab);
+                let available_height = ui.available_height();
+                egui::ScrollArea::vertical()
+                    .id_source("main_tab_content")
+                    .max_height(available_height)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        if let Some(selected) = layout.tab_content(
+                            ui,
+                            self.active_tab,
+                            &mut self.clone_panel,
+                            &mut self.recent_list,
+                            &self.config,
+                            &mut self.repo_overview,
+                            &mut self.stage_panel,
+                            &mut self.history_panel,
+                            &mut self.branches_panel,
+                            &mut self.auth_panel,
+                            &mut self.settings_panel,
+                            &mut self.notifications,
+                            self.current_repo.as_ref(),
+                            &self.auth_manager,
+                            Some(&mut self.dev_gallery_panel),
+                        ) {
+                            self.load_repo_context(selected);
+                        }
+
+                        if let Some(branch) = self.branches_panel.take_history_request() {
+                            self.active_tab = MainTab::History;
+                            self.history_panel
+                                .set_branch_filter(branch, self.current_repo.as_ref());
+                        }
+                    });
+            });
         }
-
-        egui::CentralPanel::default().show(ctx, |ui| {
-            let _tab_interaction = layout.tab_bar(ui, &mut self.tab_order, &mut self.active_tab);
-            let available_height = ui.available_height();
-            egui::ScrollArea::vertical()
-                .id_source("main_tab_content")
-                .max_height(available_height)
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    if let Some(selected) = layout.tab_content(
-                        ui,
-                        self.active_tab,
-                        &mut self.clone_panel,
-                        &mut self.recent_list,
-                        &self.config,
-                        &mut self.repo_overview,
-                        &mut self.stage_panel,
-                        &mut self.history_panel,
-                        &mut self.branches_panel,
-                        &mut self.auth_panel,
-                        &mut self.settings_panel,
-                        &mut self.notifications,
-                        self.current_repo.as_ref(),
-                        &self.auth_manager,
-                        Some(&mut self.dev_gallery_panel),
-                    ) {
-                        self.load_repo_context(selected);
-                    }
-
-                    if let Some(branch) = self.branches_panel.take_history_request() {
-                        self.active_tab = MainTab::History;
-                        self.history_panel
-                            .set_branch_filter(branch, self.current_repo.as_ref());
-                    }
-                });
-        });
 
         // Handle changes from both settings panel and preferences panel
         if let Some(updated_preferences) = self.settings_panel.take_changes() {

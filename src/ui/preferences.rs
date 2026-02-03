@@ -128,23 +128,16 @@ impl PreferencesPanel {
         self.update_status = Some(status.into());
     }
 
-    /// Show the preferences window if open
-    pub fn show(&mut self, ctx: &egui::Context, notifications: &mut NotificationCenter) {
+    /// Show the preferences as a fullscreen panel (replaces all other content)
+    /// Returns true if the panel is open (caller should skip rendering other panels)
+    pub fn show(&mut self, ctx: &egui::Context, notifications: &mut NotificationCenter) -> bool {
         if !self.open {
-            return;
+            return false;
         }
 
-        let window_size = Vec2::new(800.0, 560.0);
-
-        egui::Window::new("Préférences")
-            .id(egui::Id::new("preferences_window"))
-            .collapsible(false)
-            .resizable(true)
-            .default_size(window_size)
-            .min_width(600.0)
-            .min_height(400.0)
-            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-            .frame(egui::Frame::window(&ctx.style()).fill(self.theme.palette.background))
+        // Fullscreen panel that covers everything below the header
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none().fill(self.theme.palette.background))
             .show(ctx, |ui| {
                 self.ui_content(ui, notifications);
             });
@@ -153,6 +146,8 @@ impl PreferencesPanel {
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.open = false;
         }
+
+        true
     }
 
     fn ui_content(&mut self, ui: &mut Ui, notifications: &mut NotificationCenter) {
