@@ -10,7 +10,7 @@ use crate::git::branch::{
 use crate::git::compare::{BranchComparison, DiffSummary, compare_branch_with_head};
 use crate::git::log::{CommitInfo, commits_between_refs, latest_commit_for_branch};
 use crate::git::merge::{MergeOutcome, MergeStrategy, detect_conflicts, merge_branch};
-use crate::ui::{context::RepoContext, menu, theme::SharedTheme};
+use crate::ui::{context::RepoContext, theme::SharedTheme};
 
 const STALE_DAYS: i64 = 30;
 const REMOTE_PAGE_SIZE: usize = 25;
@@ -43,7 +43,7 @@ pub struct BranchPanel {
     new_branch: String,
     rename_buffer: String,
     last_repo: Option<String>,
-    selected_branch: Option<String>,
+    selected_branch: Option<BranchEntry>,
     selected_comparison: Option<BranchComparison>,
     selected_error: Option<String>,
     compare_branch: Option<String>,
@@ -107,10 +107,8 @@ impl BranchPanel {
         ui.add_space(8.0);
         ui.heading(RichText::new("Branch explorer").color(self.theme.palette.text_primary));
         ui.label(
-            RichText::new(
-                "Navigate branches, manage them, and merge or rebase with context menus.",
-            )
-            .color(self.theme.palette.text_secondary),
+            RichText::new("Navigate branches, manage them, and perform git operations.")
+                .color(self.theme.palette.text_secondary),
         );
 
         if let Some(repo) = repo {
@@ -144,27 +142,33 @@ impl BranchPanel {
             });
             ui.add_space(8.0);
 
-            let available_height = ui.available_height();
+            let col_width = ui.available_width() * 0.5;
+
             ui.horizontal(|ui| {
+                // Left column: Local branches + Selection details + Compare
                 ui.vertical(|ui| {
-                    ui.set_min_height(available_height);
-                    ui.set_width(ui.available_width() * 0.5);
+                    ui.set_width(col_width);
+
                     self.render_tree(ui, repo, BranchKind::Local, "Local branches");
+
+                    ui.add_space(16.0);
+                    ui.separator();
+                    ui.add_space(8.0);
+
+                    self.render_selection_panel(ui, repo);
+
+                    ui.add_space(16.0);
+                    self.render_compare_panel(ui);
                 });
 
                 ui.separator();
 
+                // Right column: Remote branches
                 ui.vertical(|ui| {
-                    ui.set_min_height(available_height);
                     ui.set_width(ui.available_width());
                     self.render_tree(ui, repo, BranchKind::Remote, "Remote branches");
                 });
             });
-
-            ui.add_space(10.0);
-            self.render_selection_panel(ui);
-            ui.add_space(10.0);
-            self.render_compare_panel(ui);
         } else {
             ui.add_space(8.0);
             ui.label(
@@ -416,193 +420,11 @@ impl BranchPanel {
     fn render_branch_entry(&mut self, ui: &mut Ui, repo: &RepoContext, branch: &BranchEntry) {
         let response = self.branch_label(ui, branch);
         if response.clicked() {
-            self.select_branch(repo, &branch.name);
+            self.select_branch(repo, branch);
         }
-        self.context_menu(repo, branch, &response);
         if let Some(upstream) = &branch.upstream {
             response.on_hover_text(format!("Upstream: {upstream}"));
         }
-    }
-
-    fn context_menu(
-        &mut self,
-        repo: &RepoContext,
-        branch: &BranchEntry,
-        response: &egui::Response,
-    ) {
-        response.context_menu(|ui| {
-            menu::with_menu_popup_motion(ui, ("branch-menu", &branch.name), |ui| {
-                let pin_label = if self.is_branch_pinned(branch) {
-                    "Unpin branch"
-                } else {
-                    "Pin branch"
-                };
-                if menu::menu_item(
-                    ui,
-                    &self.theme,
-                    ("branch-pin", &branch.name),
-                    pin_label,
-                    false,
-                )
-                .clicked()
-                {
-                    self.toggle_pin(branch);
-                    ui.close_menu();
-                }
-
-                if menu::menu_item(
-                    ui,
-                    &self.theme,
-                    ("branch-checkout", &branch.name),
-                    "Checkout",
-                    false,
-                )
-                .clicked()
-                {
-                    self.run_branch_action(repo, || checkout_branch(&repo.path, &branch.name));
-                    ui.close_menu();
-                }
-
-                if branch.kind == BranchKind::Remote {
-                    if menu::menu_item(
-                        ui,
-                        &self.theme,
-                        ("branch-track", &branch.name),
-                        "Checkout & Track",
-                        false,
-                    )
-                    .clicked()
-                    {
-                        self.run_branch_action(repo, || {
-                            let local_name = create_tracking_branch(&repo.path, &branch.name)?;
-                            checkout_branch(&repo.path, &local_name)?;
-                            Ok(())
-                        });
-                        ui.close_menu();
-                    }
-                }
-
-                if branch.kind == BranchKind::Local && !branch.is_head {
-                    if menu::menu_item(
-                        ui,
-                        &self.theme,
-                        ("branch-delete", &branch.name),
-                        "Delete branch",
-                        false,
-                    )
-                    .clicked()
-                    {
-                        self.run_branch_action(repo, || delete_branch(&repo.path, &branch.name));
-                        ui.close_menu();
-                    }
-                }
-
-                if menu::menu_item(
-                    ui,
-                    &self.theme,
-                    ("branch-merge", &branch.name),
-                    "Merge into current",
-                    false,
-                )
-                .clicked()
-                {
-                    self.run_merge_action(repo, &branch.name, MergeStrategy::Merge);
-                    ui.close_menu();
-                }
-
-                if menu::menu_item(
-                    ui,
-                    &self.theme,
-                    ("branch-rebase", &branch.name),
-                    "Rebase onto current",
-                    false,
-                )
-                .clicked()
-                {
-                    self.run_merge_action(repo, &branch.name, MergeStrategy::Rebase);
-                    ui.close_menu();
-                }
-
-                if menu::menu_item(
-                    ui,
-                    &self.theme,
-                    ("branch-compare", &branch.name),
-                    "Compare with current",
-                    false,
-                )
-                .clicked()
-                {
-                    self.compare_with_current(repo, &branch.name);
-                    ui.close_menu();
-                }
-
-                if menu::menu_item(
-                    ui,
-                    &self.theme,
-                    ("branch-history", &branch.name),
-                    "Open in History",
-                    false,
-                )
-                .clicked()
-                {
-                    self.open_history_branch = Some(branch.name.clone());
-                    ui.close_menu();
-                }
-
-                if branch.kind == BranchKind::Local {
-                    if menu::menu_item(
-                        ui,
-                        &self.theme,
-                        ("branch-archive", &branch.name),
-                        "Archive",
-                        false,
-                    )
-                    .clicked()
-                    {
-                        self.status = None;
-                        self.error = None;
-                        match archive_branch(&repo.path, &branch.name) {
-                            Ok(tag) => {
-                                self.status =
-                                    Some(format!("Archived {} as tag {}", branch.name, tag));
-                                self.refresh(repo);
-                            }
-                            Err(err) => self.error = Some(err.to_string()),
-                        }
-                        ui.close_menu();
-                    }
-
-                    ui.separator();
-                    if self.rename_buffer.is_empty() {
-                        self.rename_buffer = branch.name.clone();
-                    }
-                    ui.horizontal(|ui| {
-                        ui.label("Rename:");
-                        ui.add(egui::TextEdit::singleline(&mut self.rename_buffer));
-                        if menu::menu_item_sized(
-                            ui,
-                            &self.theme,
-                            ("branch-rename", &branch.name),
-                            "Apply",
-                            false,
-                            egui::vec2(70.0, ui.spacing().interact_size.y),
-                            Sense::click(),
-                        )
-                        .clicked()
-                        {
-                            let new_name = self.rename_buffer.trim().to_string();
-                            if !new_name.is_empty() {
-                                self.run_branch_action(repo, || {
-                                    rename_branch(&repo.path, &branch.name, new_name.as_str())
-                                });
-                                self.rename_buffer.clear();
-                                ui.close_menu();
-                            }
-                        }
-                    });
-                }
-            });
-        });
     }
 
     fn run_branch_action<F>(&mut self, repo: &RepoContext, action: F)
@@ -629,10 +451,11 @@ impl BranchPanel {
         }
     }
 
-    fn select_branch(&mut self, repo: &RepoContext, branch_name: &str) {
-        self.selected_branch = Some(branch_name.to_string());
+    fn select_branch(&mut self, repo: &RepoContext, branch: &BranchEntry) {
+        self.selected_branch = Some(branch.clone());
         self.selected_error = None;
-        match compare_branch_with_head(&repo.path, branch_name) {
+        self.rename_buffer = branch.name.clone();
+        match compare_branch_with_head(&repo.path, &branch.name) {
             Ok(comparison) => self.selected_comparison = Some(comparison),
             Err(err) => {
                 self.selected_comparison = None;
@@ -641,13 +464,13 @@ impl BranchPanel {
         }
     }
 
-    fn render_selection_panel(&self, ui: &mut Ui) {
+    fn render_selection_panel(&mut self, ui: &mut Ui, repo: &RepoContext) {
         ui.heading(RichText::new("Selection details").color(self.theme.palette.text_primary));
         ui.add_space(6.0);
 
-        let Some(branch_name) = &self.selected_branch else {
+        let Some(branch) = self.selected_branch.clone() else {
             ui.label(
-                RichText::new("Select a branch to see its latest commit and comparison details.")
+                RichText::new("Select a branch to see its details and available actions.")
                     .color(self.theme.palette.text_secondary),
             );
             return;
@@ -655,61 +478,148 @@ impl BranchPanel {
 
         if let Some(error) = &self.selected_error {
             ui.colored_label(self.theme.palette.accent, error);
-            return;
         }
 
-        let Some(comparison) = &self.selected_comparison else {
-            ui.label(
-                RichText::new("No comparison data available yet.")
-                    .color(self.theme.palette.text_secondary),
-            );
-            return;
+        // Branch name and type
+        ui.label(
+            RichText::new(&branch.name)
+                .color(self.theme.palette.text_primary)
+                .strong(),
+        );
+        let kind_label = match branch.kind {
+            BranchKind::Local => "Local branch",
+            BranchKind::Remote => "Remote branch",
         };
-
         ui.label(
-            RichText::new(branch_name)
-                .color(self.theme.palette.text_primary)
-                .strong(),
+            RichText::new(kind_label)
+                .color(self.theme.palette.text_secondary)
+                .small(),
         );
 
-        if let Some(commit) = &comparison.commit {
-            ui.add_space(4.0);
-            ui.label(
-                RichText::new(commit.summary.clone())
-                    .color(self.theme.palette.text_primary)
-                    .strong(),
-            );
-            ui.label(
-                RichText::new(format!("Author: {}", commit.author))
-                    .color(self.theme.palette.text_secondary),
-            );
-            let date = chrono::DateTime::<Utc>::from_timestamp(commit.time.seconds(), 0)
-                .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
-                .unwrap_or_else(|| "Unknown time".to_string());
-            ui.label(RichText::new(date).color(self.theme.palette.text_secondary));
-        } else {
-            ui.label(
-                RichText::new("No commits found for this branch.")
-                    .color(self.theme.palette.text_secondary),
-            );
+        // Comparison info
+        if let Some(comparison) = &self.selected_comparison {
+            if let Some(commit) = &comparison.commit {
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(commit.summary.clone())
+                        .color(self.theme.palette.text_primary),
+                );
+                ui.label(
+                    RichText::new(format!("by {}", commit.author))
+                        .color(self.theme.palette.text_secondary)
+                        .small(),
+                );
+            }
+
+            if let Some(diff) = &comparison.diff {
+                ui.label(
+                    RichText::new(format!(
+                        "{} files • +{} / -{}",
+                        diff.files_changed, diff.additions, diff.deletions
+                    ))
+                    .color(self.theme.palette.text_secondary)
+                    .small(),
+                );
+            }
         }
 
-        ui.add_space(8.0);
+        // Actions section
+        ui.add_space(12.0);
         ui.label(
-            RichText::new("Comparison with current HEAD")
-                .color(self.theme.palette.text_primary)
-                .strong(),
-        );
-        if let Some(diff) = &comparison.diff {
-            ui.label(
-                RichText::new(format!(
-                    "{} files changed • +{} / -{}",
-                    diff.files_changed, diff.additions, diff.deletions
-                ))
+            RichText::new("Actions")
                 .color(self.theme.palette.text_secondary),
-            );
-        } else {
-            ui.label(RichText::new("No diff available.").color(self.theme.palette.text_secondary));
+        );
+        ui.add_space(4.0);
+
+        // Pin/Unpin
+        let is_pinned = self.is_branch_pinned(&branch);
+        let pin_label = if is_pinned { "Unpin" } else { "Pin" };
+        if ui.button(pin_label).clicked() {
+            self.toggle_pin(&branch);
+        }
+
+        // Checkout
+        ui.horizontal(|ui| {
+            if ui.button("Checkout").clicked() {
+                self.run_branch_action(repo, || checkout_branch(&repo.path, &branch.name));
+            }
+
+            // Checkout & Track (remote only)
+            if branch.kind == BranchKind::Remote {
+                if ui.button("Checkout & Track").clicked() {
+                    self.run_branch_action(repo, || {
+                        let local_name = create_tracking_branch(&repo.path, &branch.name)?;
+                        checkout_branch(&repo.path, &local_name)?;
+                        Ok(())
+                    });
+                }
+            }
+        });
+
+        // Merge and Rebase
+        ui.horizontal(|ui| {
+            if ui.button("Merge into current").clicked() {
+                self.run_merge_action(repo, &branch.name, MergeStrategy::Merge);
+            }
+            if ui.button("Rebase onto current").clicked() {
+                self.run_merge_action(repo, &branch.name, MergeStrategy::Rebase);
+            }
+        });
+
+        // Compare and History
+        ui.horizontal(|ui| {
+            if ui.button("Compare with current").clicked() {
+                self.compare_with_current(repo, &branch.name);
+            }
+            if ui.button("Open in History").clicked() {
+                self.open_history_branch = Some(branch.name.clone());
+            }
+        });
+
+        // Local branch only actions
+        if branch.kind == BranchKind::Local {
+            ui.add_space(8.0);
+
+            ui.horizontal(|ui| {
+                // Delete (not HEAD)
+                if !branch.is_head {
+                    if ui.button("Delete").clicked() {
+                        self.run_branch_action(repo, || delete_branch(&repo.path, &branch.name));
+                        self.selected_branch = None;
+                    }
+                }
+
+                // Archive
+                if ui.button("Archive").clicked() {
+                    self.status = None;
+                    self.error = None;
+                    match archive_branch(&repo.path, &branch.name) {
+                        Ok(tag) => {
+                            self.status = Some(format!("Archived {} as tag {}", branch.name, tag));
+                            self.refresh(repo);
+                            self.selected_branch = None;
+                        }
+                        Err(err) => self.error = Some(err.to_string()),
+                    }
+                }
+            });
+
+            // Rename
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label("Rename:");
+                ui.add(egui::TextEdit::singleline(&mut self.rename_buffer).desired_width(120.0));
+                if ui.button("Apply").clicked() {
+                    let new_name = self.rename_buffer.trim().to_string();
+                    if !new_name.is_empty() && new_name != branch.name {
+                        let old_name = branch.name.clone();
+                        self.run_branch_action(repo, || {
+                            rename_branch(&repo.path, &old_name, &new_name)
+                        });
+                        self.selected_branch = None;
+                    }
+                }
+            });
         }
     }
 

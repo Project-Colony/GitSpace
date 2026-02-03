@@ -214,26 +214,9 @@ impl StagePanel {
                             pending_diff = Some((staged, entry.path.clone()));
                         }
 
-                        response.context_menu(|ui| {
-                            menu::with_menu_popup_motion(
-                                ui,
-                                ("stage-context", &entry.path),
-                                |ui| {
-                                    if menu::menu_item(
-                                        ui,
-                                        &self.theme,
-                                        ("stage-restore", &entry.path),
-                                        "Restore file...",
-                                        false,
-                                    )
-                                    .clicked()
-                                    {
-                                        pending_restore = Some(entry.path.clone());
-                                        ui.close_menu();
-                                    }
-                                },
-                            );
-                        });
+                        if ui.button("Restore").clicked() {
+                            pending_restore = Some(entry.path.clone());
+                        }
                     });
                 }
             });

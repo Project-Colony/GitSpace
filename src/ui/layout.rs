@@ -24,7 +24,6 @@ pub enum MainTab {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum NavigationTrigger {
     Click,
-    ContextMenu,
     DragAndDrop,
 }
 
@@ -114,7 +113,12 @@ impl ShellLayout {
         clicked
     }
 
-    pub fn sidebar(&self, ctx: &egui::Context, active_tab: MainTab) -> Option<NavigationSelection> {
+    pub fn sidebar(
+        &self,
+        ctx: &egui::Context,
+        active_tab: MainTab,
+        repo: Option<&RepoContext>,
+    ) -> Option<NavigationSelection> {
         let mut selection = None;
         egui::SidePanel::left("sidebar")
             .resizable(true)
@@ -180,32 +184,17 @@ impl ShellLayout {
                         });
                     }
                 }
-            });
-        selection
-    }
 
-    pub fn right_panel(
-        &self,
-        ctx: &egui::Context,
-        repo: Option<&RepoContext>,
-    ) -> Option<NavigationSelection> {
-        let mut selection = None;
-        egui::SidePanel::right("context")
-            .resizable(true)
-            .default_width(260.0)
-            .frame(
-                egui::Frame::none()
-                    .fill(self.theme.palette.surface)
-                    .stroke(egui::Stroke::new(1.0, self.theme.palette.surface_highlight)),
-            )
-            .show(ctx, |ui| {
+                // Context section - Active repository info
                 ui.add_space(12.0);
-                ui.heading(RichText::new("Context").color(self.theme.palette.text_primary));
-                ui.separator();
+                ui.label(RichText::new("Context").color(self.theme.palette.text_secondary));
+                ui.add_space(4.0);
+
                 if let Some(repo) = repo {
                     ui.label(
                         RichText::new("Active repository")
-                            .color(self.theme.palette.text_secondary),
+                            .color(self.theme.palette.text_secondary)
+                            .small(),
                     );
                     ui.label(
                         RichText::new(&repo.name)
@@ -215,43 +204,33 @@ impl ShellLayout {
                     ui.label(
                         RichText::new(&repo.path)
                             .color(self.theme.palette.text_secondary)
+                            .small()
                             .italics(),
                     );
 
-                    ui.add_space(10.0);
-                    ui.horizontal(|ui| {
-                        if ui.button("Open in file manager").clicked() {
-                            if let Err(err) = open::that(&repo.path) {
-                                tracing::warn!("Failed to open repo path: {err}");
-                            }
+                    ui.add_space(8.0);
+                    if ui
+                        .small_button("Open in file manager")
+                        .on_hover_text("Open repository folder")
+                        .clicked()
+                    {
+                        if let Err(err) = open::that(&repo.path) {
+                            tracing::warn!("Failed to open repo path: {err}");
                         }
-
-                        if ui.button("Copy path").clicked() {
-                            ui.output_mut(|o| o.copied_text = repo.path.clone());
-                        }
-                    });
-
-                    ui.horizontal(|ui| {
-                        if ui.button("Switch repository").clicked() {
-                            selection = Some(NavigationSelection {
-                                tab: MainTab::Open,
-                                trigger: NavigationTrigger::Click,
-                            });
-                        }
-
-                        if ui.button("Branch view").clicked() {
-                            selection = Some(NavigationSelection {
-                                tab: MainTab::Branches,
-                                trigger: NavigationTrigger::Click,
-                            });
-                        }
-                    });
+                    }
+                    if ui
+                        .small_button("Copy path")
+                        .on_hover_text("Copy repository path to clipboard")
+                        .clicked()
+                    {
+                        ui.output_mut(|o| o.copied_text = repo.path.clone());
+                    }
                 } else {
                     ui.label(
-                        RichText::new(
-                            "Select a repository from Recent or finish cloning to load its context.",
-                        )
-                        .color(self.theme.palette.text_secondary),
+                        RichText::new("No repository selected")
+                            .color(self.theme.palette.text_secondary)
+                            .small()
+                            .italics(),
                     );
                 }
             });
@@ -315,24 +294,6 @@ impl ShellLayout {
                     *active = tab;
                     interaction.selected = Some((tab, NavigationTrigger::Click));
                 }
-
-                response.context_menu(|ui| {
-                    menu::with_menu_popup_motion(ui, ("tab-menu", tab), |ui| {
-                        if menu::menu_item(
-                            ui,
-                            &self.theme,
-                            ("tab-menu-switch", tab),
-                            format!("Switch to {}", tab.label()),
-                            is_active,
-                        )
-                        .clicked()
-                        {
-                            *active = tab;
-                            interaction.selected = Some((tab, NavigationTrigger::ContextMenu));
-                            ui.close_menu();
-                        }
-                    });
-                });
 
                 if response.drag_started() {
                     dragging = Some(index);
