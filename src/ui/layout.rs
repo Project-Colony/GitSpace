@@ -77,21 +77,41 @@ impl ShellLayout {
         Self { theme }
     }
 
-    pub fn header(&self, ctx: &egui::Context) {
+    /// Returns true if the GitSpace logo was clicked (to open preferences)
+    pub fn header(&self, ctx: &egui::Context) -> bool {
+        let mut clicked = false;
         egui::TopBottomPanel::top("header")
             .exact_height(48.0)
             .frame(egui::Frame::none().fill(self.theme.palette.surface))
             .show(ctx, |ui| {
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.add_space(8.0);
-                    ui.heading(
-                        RichText::new("GitSpace")
-                            .color(self.theme.palette.text_primary)
-                            .strong(),
+
+                    // Make GitSpace clickable
+                    let response = ui.add(
+                        egui::Label::new(
+                            RichText::new("GitSpace")
+                                .color(self.theme.palette.text_primary)
+                                .strong()
+                                .heading(),
+                        )
+                        .sense(Sense::click()),
                     );
+
+                    if response.clicked() {
+                        clicked = true;
+                    }
+
+                    if response.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+
+                    response.on_hover_text("Ouvrir les préférences");
+
                     ui.colored_label(self.theme.palette.accent, RichText::new("Workspace shell"));
                 });
             });
+        clicked
     }
 
     pub fn sidebar(&self, ctx: &egui::Context, active_tab: MainTab) -> Option<NavigationSelection> {

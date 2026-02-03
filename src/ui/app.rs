@@ -16,6 +16,7 @@ use crate::ui::{
     history::HistoryPanel,
     layout::{MainTab, ShellLayout},
     notifications::{Notification, NotificationAction, NotificationCenter},
+    preferences::PreferencesPanel,
     recent::RecentList,
     repo_overview::RepoOverviewPanel,
     settings::SettingsPanel,
@@ -40,6 +41,7 @@ pub struct GitSpaceApp {
     auth_manager: AuthManager,
     auth_panel: AuthPanel,
     settings_panel: SettingsPanel,
+    preferences_panel: PreferencesPanel,
     dev_gallery_panel: DevGalleryPanel,
     notifications: NotificationCenter,
     update_promise: Option<Promise<update::UpdateResult>>,
@@ -82,7 +84,8 @@ impl GitSpaceApp {
             current_repo,
             auth_panel: AuthPanel::new(Arc::clone(&theme), auth_manager.clone()),
             auth_manager,
-            settings_panel: SettingsPanel::new(Arc::clone(&theme), preferences, logging),
+            settings_panel: SettingsPanel::new(Arc::clone(&theme), preferences.clone(), logging),
+            preferences_panel: PreferencesPanel::new(Arc::clone(&theme), preferences, logging),
             dev_gallery_panel: DevGalleryPanel::new(Arc::clone(&theme)),
             theme,
             initialized: false,
@@ -92,6 +95,8 @@ impl GitSpaceApp {
             update_checked: false,
             tab_order: {
                 let mut tabs = MainTab::ALL.to_vec();
+                // Settings is now accessed via GitSpace header click
+                tabs.retain(|tab| *tab != MainTab::Settings);
                 if !cfg!(debug_assertions) {
                     tabs.retain(|tab| *tab != MainTab::DevGallery);
                 }
@@ -127,7 +132,12 @@ impl eframe::App for GitSpaceApp {
         self.handle_keyboard_navigation(ctx);
 
         let layout = ShellLayout::new(Arc::clone(&self.theme));
-        layout.header(ctx);
+        if layout.header(ctx) {
+            self.preferences_panel.toggle();
+        }
+
+        // Show preferences panel as a modal window
+        self.preferences_panel.show(ctx, &mut self.notifications);
         if let Some(selection) = layout.sidebar(ctx, self.active_tab) {
             if self.active_tab != selection.tab {
                 self.active_tab = selection.tab;
@@ -177,11 +187,19 @@ impl eframe::App for GitSpaceApp {
                 });
         });
 
+        // Handle changes from both settings panel and preferences panel
         if let Some(updated_preferences) = self.settings_panel.take_changes() {
+            self.apply_preferences(updated_preferences, ctx);
+        }
+        if let Some(updated_preferences) = self.preferences_panel.take_changes() {
             self.apply_preferences(updated_preferences, ctx);
         }
 
         if let Some(updated_logging) = self.settings_panel.take_logging_changes() {
+            self.config.set_logging(updated_logging);
+            let _ = self.config.save();
+        }
+        if let Some(updated_logging) = self.preferences_panel.take_logging_changes() {
             self.config.set_logging(updated_logging);
             let _ = self.config.save();
         }
@@ -196,6 +214,9 @@ impl eframe::App for GitSpaceApp {
         if let Some(control_height) = self.settings_panel.take_control_height_change() {
             self.apply_control_height(control_height, ctx);
         }
+        if let Some(control_height) = self.preferences_panel.take_control_height_change() {
+            self.apply_control_height(control_height, ctx);
+        }
 
         if let Some(branch_height) = self.repo_overview.take_branch_box_height_change() {
             self.apply_branch_box_height(branch_height);
@@ -206,6 +227,9 @@ impl eframe::App for GitSpaceApp {
         }
 
         if self.settings_panel.take_update_request() {
+            self.trigger_update_check();
+        }
+        if self.preferences_panel.take_update_request() {
             self.trigger_update_check();
         }
 
@@ -303,6 +327,8 @@ impl GitSpaceApp {
             .set_encrypted_fallback(preferences.allow_encrypted_tokens());
         self.auth_panel.set_auth_manager(self.auth_manager.clone());
         self.settings_panel.set_preferences(preferences.clone());
+        self.preferences_panel.set_preferences(preferences.clone());
+        self.preferences_panel.set_theme(Arc::clone(&self.theme));
         self.clone_panel
             .set_network_preferences(preferences.network().clone());
 
@@ -358,6 +384,8 @@ impl GitSpaceApp {
 
         self.settings_panel
             .set_update_status("Checking for updates...");
+        self.preferences_panel
+            .set_update_status("Vérification des mises à jour...");
 
         self.update_promise = Some(Promise::spawn_thread("update-check", move || {
             update::check_for_updates(channel, feed_override.as_deref(), &network)
@@ -379,18 +407,22 @@ impl GitSpaceApp {
                 notification =
                     notification.with_action(NotificationAction::OpenRelease(release.url.clone()));
                 self.notifications.push(notification);
-                self.settings_panel.set_update_status(format!(
+                let status = format!(
                     "Update {} available on the {:?} channel",
                     release.version, release.channel
-                ));
+                );
+                self.settings_panel.set_update_status(&status);
+                self.preferences_panel.set_update_status(&status);
             }
             Ok(None) => {
-                self.settings_panel
-                    .set_update_status("You're already on the latest version.");
+                let status = "You're already on the latest version.";
+                self.settings_panel.set_update_status(status);
+                self.preferences_panel.set_update_status(status);
             }
             Err(err) => {
-                self.settings_panel
-                    .set_update_status(format!("Update check failed: {err}"));
+                let status = format!("Update check failed: {err}");
+                self.settings_panel.set_update_status(&status);
+                self.preferences_panel.set_update_status(&status);
                 self.notifications
                     .push(Notification::error("Update check failed", err.to_string()));
             }
