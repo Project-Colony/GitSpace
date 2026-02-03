@@ -16,6 +16,7 @@
 //! # let _ = (timing, fade);
 //! ```
 
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use eframe::egui::{self, Id};
@@ -24,6 +25,9 @@ use serde_json::json;
 
 use crate::config::{MotionIntensity, Preferences};
 use crate::dotnet::{DotnetClient, LibraryCallRequest};
+
+/// Cached animation profile from dotnet (loaded once at startup)
+static DOTNET_ANIMATION_PROFILE: OnceLock<Option<AnimationProfile>> = OnceLock::new();
 
 /// High-level intent buckets for animation decisions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -282,7 +286,11 @@ impl MotionSettings {
 const MOTION_SETTINGS_KEY: &str = "motion_settings";
 
 pub fn store_motion_settings(ctx: &egui::Context, preferences: &Preferences) {
-    let profile = load_dotnet_animation_profile().unwrap_or_else(AnimationProfile::default_profile);
+    // Use cached profile (only loads from dotnet once at startup)
+    let profile = DOTNET_ANIMATION_PROFILE
+        .get_or_init(load_dotnet_animation_profile)
+        .clone()
+        .unwrap_or_else(AnimationProfile::default_profile);
     let motion = MotionSettings::with_profile(
         preferences.reduced_motion(),
         preferences.motion_intensity(),

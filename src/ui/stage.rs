@@ -1,5 +1,6 @@
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
+use std::sync::Arc;
 
 use eframe::egui::{self, Align, ComboBox, Layout, RichText, ScrollArea, Ui, Window};
 use git2::{Repository, Signature, Status, StatusOptions, StatusShow};
@@ -8,7 +9,7 @@ use crate::git::branch::restore_file_from_branch;
 use crate::git::diff::{diff_file, staged_diff, working_tree_diff};
 use crate::git::stash::{StashEntry, apply_stash, create_stash, drop_stash, list_stashes};
 use crate::git::status::read_repo_status;
-use crate::ui::{context::RepoContext, menu, theme::Theme};
+use crate::ui::{context::RepoContext, menu, theme::SharedTheme};
 
 #[derive(Debug, Clone)]
 struct FileEntry {
@@ -19,7 +20,7 @@ struct FileEntry {
 }
 
 pub struct StagePanel {
-    theme: Theme,
+    theme: SharedTheme,
     staged: Vec<FileEntry>,
     unstaged: Vec<FileEntry>,
     selected_diff: Option<(bool, String)>,
@@ -51,7 +52,7 @@ const COMMIT_TEMPLATES: &[(&str, &str)] = &[
 ];
 
 impl StagePanel {
-    pub fn new(theme: Theme) -> Self {
+    pub fn new(theme: SharedTheme) -> Self {
         let signoff_line = default_signoff_line();
         Self {
             theme,
@@ -74,7 +75,7 @@ impl StagePanel {
         }
     }
 
-    pub fn set_theme(&mut self, theme: Theme) {
+    pub fn set_theme(&mut self, theme: SharedTheme) {
         self.theme = theme;
     }
 
@@ -317,7 +318,7 @@ impl StagePanel {
                     let icon_id = ui.make_persistent_id("commit-template-icon");
                     ComboBox::from_id_source("commit_template")
                         .selected_text(COMMIT_TEMPLATES[self.selected_template].0)
-                        .icon(menu::combo_icon(self.theme.clone(), icon_id))
+                        .icon(menu::combo_icon(Arc::clone(&self.theme), icon_id))
                         .show_ui(ui, |ui| {
                             menu::with_menu_popup_motion(ui, "commit-template-menu", |ui| {
                                 for (idx, (label, _)) in COMMIT_TEMPLATES.iter().enumerate() {
@@ -400,36 +401,43 @@ impl StagePanel {
                     return;
                 }
 
-                for stash in self.stashes.clone() {
+                // Collect stash info to avoid cloning the entire Vec
+                let stash_info: Vec<(usize, String)> = self
+                    .stashes
+                    .iter()
+                    .map(|s| (s.index, s.message.clone()))
+                    .collect();
+
+                for (index, message) in stash_info {
                     ui.horizontal(|ui| {
                         ui.label(
-                            RichText::new(format!("#{} — {}", stash.index, stash.message))
+                            RichText::new(format!("#{} — {}", index, message))
                                 .color(self.theme.palette.text_primary),
                         );
                         if ui.button("Apply").clicked() {
-                            match apply_stash(&repo.path, stash.index) {
+                            match apply_stash(&repo.path, index) {
                                 Ok(_) => {
-                                    self.status = Some(format!("Applied stash #{}", stash.index));
+                                    self.status = Some(format!("Applied stash #{}", index));
                                     self.needs_refresh = true;
                                 }
                                 Err(err) => {
                                     self.error = Some(format!(
                                         "Failed to apply stash #{}: {err}",
-                                        stash.index
+                                        index
                                     ))
                                 }
                             }
                         }
                         if ui.button("Drop").clicked() {
-                            match drop_stash(&repo.path, stash.index) {
+                            match drop_stash(&repo.path, index) {
                                 Ok(_) => {
-                                    self.status = Some(format!("Dropped stash #{}", stash.index));
+                                    self.status = Some(format!("Dropped stash #{}", index));
                                     self.needs_refresh = true;
                                 }
                                 Err(err) => {
                                     self.error = Some(format!(
                                         "Failed to drop stash #{}: {err}",
-                                        stash.index
+                                        index
                                     ))
                                 }
                             }
@@ -564,12 +572,12 @@ impl StagePanel {
                 self.commit_message.push('\n');
             }
             self.commit_message.push_str(&self.signoff_line);
-        } else if !self.include_signoff
-            && let Some(idx) = self.commit_message.find(&self.signoff_line)
-        {
-            self.commit_message
-                .replace_range(idx..idx + self.signoff_line.len(), "");
-            self.commit_message = self.commit_message.trim_end().to_string();
+        } else if !self.include_signoff {
+            if let Some(idx) = self.commit_message.find(&self.signoff_line) {
+                self.commit_message
+                    .replace_range(idx..idx + self.signoff_line.len(), "");
+                self.commit_message = self.commit_message.trim_end().to_string();
+            }
         }
     }
 

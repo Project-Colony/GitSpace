@@ -1,12 +1,11 @@
+use std::sync::Arc;
+
 use eframe::egui::{self, Key, Modifiers};
 use poll_promise::Promise;
-use serde_json::{Map, Value};
-use sha2::{Digest, Sha256};
 
 use crate::auth::AuthManager;
 use crate::config::{AppConfig, Preferences};
 use crate::git::remote::fetch_remote;
-use crate::telemetry::TelemetryEmitter;
 use crate::ui::{
     animation::store_motion_settings,
     auth::AuthPanel,
@@ -15,19 +14,20 @@ use crate::ui::{
     context::RepoContext,
     fonts,
     history::HistoryPanel,
-    layout::{MainTab, NavigationTrigger, ShellLayout},
+    layout::{MainTab, ShellLayout},
     notifications::{Notification, NotificationAction, NotificationCenter},
+    preferences::PreferencesPanel,
     recent::RecentList,
     repo_overview::RepoOverviewPanel,
     settings::SettingsPanel,
     stage::StagePanel,
     dev_gallery::DevGalleryPanel,
-    theme::Theme,
+    theme::{SharedTheme, Theme},
 };
 use crate::update;
 
 pub struct GitSpaceApp {
-    theme: Theme,
+    theme: SharedTheme,
     initialized: bool,
     active_tab: MainTab,
     clone_panel: ClonePanel,
@@ -41,12 +41,11 @@ pub struct GitSpaceApp {
     auth_manager: AuthManager,
     auth_panel: AuthPanel,
     settings_panel: SettingsPanel,
+    preferences_panel: PreferencesPanel,
     dev_gallery_panel: DevGalleryPanel,
     notifications: NotificationCenter,
     update_promise: Option<Promise<update::UpdateResult>>,
     update_checked: bool,
-    telemetry: TelemetryEmitter,
-    telemetry_prompt_enqueued: bool,
     tab_order: Vec<MainTab>,
     auto_fetch_promise: Option<Promise<AutoFetchOutcome>>,
     auto_fetch_last_trigger: Option<f64>,
@@ -59,56 +58,45 @@ impl GitSpaceApp {
         let preferences = config.preferences().clone();
         let logging = config.logging().clone();
         let default_clone_path = preferences.default_clone_path().to_string();
-        let theme = Theme::from_mode(preferences.theme_mode());
-        let settings_theme = theme.clone();
-        let dev_gallery_theme = theme.clone();
+        let theme = Theme::shared_from_mode(preferences.theme_mode());
         let auth_manager =
             AuthManager::with_encrypted_fallback(preferences.allow_encrypted_tokens());
         let current_repo = config
             .recent_repos()
             .first()
             .map(|entry| RepoContext::from_path(&entry.path));
-        let mut telemetry = TelemetryEmitter::new();
-        telemetry.set_enabled(preferences.telemetry_enabled());
-        if preferences.telemetry_enabled() {
-            let mut properties = Map::new();
-            properties.insert(
-                "release_channel".to_string(),
-                Value::String(format!("{:?}", preferences.release_channel())),
-            );
-            telemetry.record_event("app_launch", properties);
-        }
         Self {
             clone_panel: ClonePanel::new(
-                theme.clone(),
+                Arc::clone(&theme),
                 default_clone_path,
                 preferences.network().clone(),
             ),
-            recent_list: RecentList::new(theme.clone()),
+            recent_list: RecentList::new(Arc::clone(&theme)),
             repo_overview: RepoOverviewPanel::new(
-                theme.clone(),
+                Arc::clone(&theme),
                 preferences.branch_box_height(),
                 preferences.network().clone(),
             ),
-            history_panel: HistoryPanel::new(theme.clone()),
-            branches_panel: BranchPanel::new(theme.clone(), preferences.pinned_branches().to_vec()),
-            stage_panel: StagePanel::new(theme.clone()),
+            history_panel: HistoryPanel::new(Arc::clone(&theme)),
+            branches_panel: BranchPanel::new(Arc::clone(&theme), preferences.pinned_branches().to_vec()),
+            stage_panel: StagePanel::new(Arc::clone(&theme)),
             config,
             current_repo,
-            auth_panel: AuthPanel::new(theme.clone(), auth_manager.clone()),
+            auth_panel: AuthPanel::new(Arc::clone(&theme), auth_manager.clone()),
             auth_manager,
+            settings_panel: SettingsPanel::new(Arc::clone(&theme), preferences.clone(), logging),
+            preferences_panel: PreferencesPanel::new(Arc::clone(&theme), preferences, logging),
+            dev_gallery_panel: DevGalleryPanel::new(Arc::clone(&theme)),
             theme,
             initialized: false,
             active_tab: MainTab::Clone,
-            settings_panel: SettingsPanel::new(settings_theme, preferences, logging),
-            dev_gallery_panel: DevGalleryPanel::new(dev_gallery_theme),
             notifications: NotificationCenter::default(),
             update_promise: None,
             update_checked: false,
-            telemetry,
-            telemetry_prompt_enqueued: false,
             tab_order: {
                 let mut tabs = MainTab::ALL.to_vec();
+                // Settings is now accessed via GitSpace header click
+                tabs.retain(|tab| *tab != MainTab::Settings);
                 if !cfg!(debug_assertions) {
                     tabs.retain(|tab| *tab != MainTab::DevGallery);
                 }
@@ -135,90 +123,86 @@ impl GitSpaceApp {
         if self.config.touch_recent(path_ref) {
             let _ = self.config.save();
         }
-
-        if self.telemetry_enabled() {
-            let mut properties = Map::new();
-            let mut hasher = Sha256::new();
-            hasher.update(path_ref.to_string_lossy().as_bytes());
-            let hash = format!("{:x}", hasher.finalize());
-            properties.insert("repo_hash".to_string(), Value::String(hash));
-            self.telemetry.record_event("repo_opened", properties);
-        }
     }
 }
 
 impl eframe::App for GitSpaceApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.initialize_if_needed(ctx);
-        self.prompt_for_telemetry_if_needed();
         self.handle_keyboard_navigation(ctx);
 
-        let theme = self.theme.clone();
-        let layout = ShellLayout::new(&theme);
-        layout.header(ctx);
-        if let Some(selection) = layout.sidebar(ctx, self.active_tab) {
-            if self.active_tab != selection.tab {
-                self.active_tab = selection.tab;
-                self.record_tab_switch(selection.tab, selection.trigger);
-            }
+        let layout = ShellLayout::new(Arc::clone(&self.theme));
+        if layout.header(ctx) {
+            self.preferences_panel.toggle();
         }
-        if !matches!(self.active_tab, MainTab::History | MainTab::Branches) {
-            if let Some(selection) = layout.right_panel(ctx, self.current_repo.as_ref()) {
+
+        // Show preferences panel fullscreen - if open, skip other panels
+        let preferences_open = self.preferences_panel.show(ctx, &mut self.notifications);
+
+        if !preferences_open {
+            if let Some(selection) = layout.sidebar(ctx, self.active_tab) {
                 if self.active_tab != selection.tab {
                     self.active_tab = selection.tab;
-                    self.record_tab_switch(selection.tab, selection.trigger);
                 }
             }
+            if !matches!(self.active_tab, MainTab::History | MainTab::Branches) {
+                if let Some(selection) = layout.right_panel(ctx, self.current_repo.as_ref()) {
+                    if self.active_tab != selection.tab {
+                        self.active_tab = selection.tab;
+                    }
+                }
+            }
+
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let _tab_interaction = layout.tab_bar(ui, &mut self.tab_order, &mut self.active_tab);
+                let available_height = ui.available_height();
+                egui::ScrollArea::vertical()
+                    .id_source("main_tab_content")
+                    .max_height(available_height)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        if let Some(selected) = layout.tab_content(
+                            ui,
+                            self.active_tab,
+                            &mut self.clone_panel,
+                            &mut self.recent_list,
+                            &self.config,
+                            &mut self.repo_overview,
+                            &mut self.stage_panel,
+                            &mut self.history_panel,
+                            &mut self.branches_panel,
+                            &mut self.auth_panel,
+                            &mut self.settings_panel,
+                            &mut self.notifications,
+                            self.current_repo.as_ref(),
+                            &self.auth_manager,
+                            Some(&mut self.dev_gallery_panel),
+                        ) {
+                            self.load_repo_context(selected);
+                        }
+
+                        if let Some(branch) = self.branches_panel.take_history_request() {
+                            self.active_tab = MainTab::History;
+                            self.history_panel
+                                .set_branch_filter(branch, self.current_repo.as_ref());
+                        }
+                    });
+            });
         }
 
-        egui::CentralPanel::default().show(ctx, |ui| {
-            let tab_interaction = layout.tab_bar(ui, &mut self.tab_order, &mut self.active_tab);
-            if let Some((tab, trigger)) = tab_interaction.selected {
-                self.record_tab_switch(tab, trigger);
-            }
-            if let Some((from, to)) = tab_interaction.reordered {
-                self.record_tab_reorder(from, to);
-            }
-            let available_height = ui.available_height();
-            egui::ScrollArea::vertical()
-                .id_source("main_tab_content")
-                .max_height(available_height)
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    if let Some(selected) = layout.tab_content(
-                        ui,
-                        self.active_tab,
-                        &mut self.clone_panel,
-                        &mut self.recent_list,
-                        &self.config,
-                        &mut self.repo_overview,
-                        &mut self.stage_panel,
-                        &mut self.history_panel,
-                        &mut self.branches_panel,
-                        &mut self.auth_panel,
-                        &mut self.settings_panel,
-                        &mut self.notifications,
-                        self.current_repo.as_ref(),
-                        &self.auth_manager,
-                        Some(&mut self.dev_gallery_panel),
-                    ) {
-                        self.load_repo_context(selected);
-                    }
-
-                    if let Some(branch) = self.branches_panel.take_history_request() {
-                        self.active_tab = MainTab::History;
-                        self.record_tab_switch(MainTab::History, NavigationTrigger::ContextMenu);
-                        self.history_panel
-                            .set_branch_filter(branch, self.current_repo.as_ref());
-                    }
-                });
-        });
-
+        // Handle changes from both settings panel and preferences panel
         if let Some(updated_preferences) = self.settings_panel.take_changes() {
+            self.apply_preferences(updated_preferences, ctx);
+        }
+        if let Some(updated_preferences) = self.preferences_panel.take_changes() {
             self.apply_preferences(updated_preferences, ctx);
         }
 
         if let Some(updated_logging) = self.settings_panel.take_logging_changes() {
+            self.config.set_logging(updated_logging);
+            let _ = self.config.save();
+        }
+        if let Some(updated_logging) = self.preferences_panel.take_logging_changes() {
             self.config.set_logging(updated_logging);
             let _ = self.config.save();
         }
@@ -233,19 +217,12 @@ impl eframe::App for GitSpaceApp {
         if let Some(control_height) = self.settings_panel.take_control_height_change() {
             self.apply_control_height(control_height, ctx);
         }
+        if let Some(control_height) = self.preferences_panel.take_control_height_change() {
+            self.apply_control_height(control_height, ctx);
+        }
 
         if let Some(branch_height) = self.repo_overview.take_branch_box_height_change() {
             self.apply_branch_box_height(branch_height);
-        }
-
-        if self.settings_panel.take_telemetry_purge_request() {
-            self.telemetry.purge();
-            self.settings_panel
-                .set_telemetry_status("Pending diagnostics cleared");
-            self.notifications.push(Notification::success(
-                "Telemetry cleared",
-                "Queued and offline telemetry events were removed.",
-            ));
         }
 
         if let Some(cloned_path) = self.clone_panel.take_last_cloned_repo() {
@@ -253,6 +230,9 @@ impl eframe::App for GitSpaceApp {
         }
 
         if self.settings_panel.take_update_request() {
+            self.trigger_update_check();
+        }
+        if self.preferences_panel.take_update_request() {
             self.trigger_update_check();
         }
 
@@ -282,17 +262,10 @@ impl eframe::App for GitSpaceApp {
                         });
                     });
                 }
-                NotificationAction::EnableTelemetry => {
-                    self.enable_telemetry(ctx);
-                }
-                NotificationAction::DeclineTelemetry => {
-                    self.decline_telemetry(ctx);
-                }
             }
         }
 
         self.handle_auto_fetch(ctx);
-        self.telemetry.tick();
     }
 }
 
@@ -328,80 +301,39 @@ impl GitSpaceApp {
         if let Some(tab) = selected {
             if self.active_tab != tab {
                 self.active_tab = tab;
-                self.record_tab_switch(tab, NavigationTrigger::Keyboard);
             }
         }
     }
 
-    fn record_tab_switch(&mut self, tab: MainTab, trigger: NavigationTrigger) {
-        if !self.telemetry_enabled() {
-            return;
-        }
-
-        let mut properties = Map::new();
-        properties.insert("tab".to_string(), Value::String(tab.label().to_string()));
-        properties.insert(
-            "trigger".to_string(),
-            Value::String(trigger.as_str().to_string()),
-        );
-        self.telemetry.record_event("ui_tab_switch", properties);
-    }
-
-    fn record_tab_reorder(&mut self, from: usize, to: usize) {
-        if !self.telemetry_enabled() {
-            return;
-        }
-
-        let mut properties = Map::new();
-        if let Some(tab) = self.tab_order.get(to) {
-            properties.insert("tab".to_string(), Value::String(tab.label().to_string()));
-        }
-        properties.insert(
-            "from_index".to_string(),
-            Value::Number((from as u64).into()),
-        );
-        properties.insert("to_index".to_string(), Value::Number((to as u64).into()));
-        self.telemetry.record_event("ui_tab_reordered", properties);
-    }
-
     fn apply_preferences(&mut self, preferences: Preferences, ctx: &egui::Context) {
         self.config.set_preferences(preferences.clone());
-        self.theme = Theme::from_mode(preferences.theme_mode());
+        self.theme = Theme::shared_from_mode(preferences.theme_mode());
         self.apply_style_preferences(ctx, &preferences);
 
-        self.clone_panel.set_theme(self.theme.clone());
+        self.clone_panel.set_theme(Arc::clone(&self.theme));
         self.clone_panel
             .set_default_destination(preferences.default_clone_path().to_string());
-        self.recent_list.set_theme(self.theme.clone());
-        self.repo_overview.set_theme(self.theme.clone());
+        self.recent_list.set_theme(Arc::clone(&self.theme));
+        self.repo_overview.set_theme(Arc::clone(&self.theme));
         self.repo_overview
             .set_branch_box_height(preferences.branch_box_height());
         self.repo_overview
             .set_network_preferences(preferences.network().clone());
-        self.history_panel.set_theme(self.theme.clone());
-        self.branches_panel.set_theme(self.theme.clone());
+        self.history_panel.set_theme(Arc::clone(&self.theme));
+        self.branches_panel.set_theme(Arc::clone(&self.theme));
         self.branches_panel
             .set_pinned_branches(preferences.pinned_branches().to_vec());
-        self.stage_panel.set_theme(self.theme.clone());
-        self.auth_panel.set_theme(self.theme.clone());
-        self.settings_panel.set_theme(self.theme.clone());
+        self.stage_panel.set_theme(Arc::clone(&self.theme));
+        self.auth_panel.set_theme(Arc::clone(&self.theme));
+        self.settings_panel.set_theme(Arc::clone(&self.theme));
         self.auth_manager
             .set_encrypted_fallback(preferences.allow_encrypted_tokens());
         self.auth_panel.set_auth_manager(self.auth_manager.clone());
         self.settings_panel.set_preferences(preferences.clone());
+        self.preferences_panel.set_preferences(preferences.clone());
+        self.preferences_panel.set_theme(Arc::clone(&self.theme));
         self.clone_panel
             .set_network_preferences(preferences.network().clone());
-
-        self.telemetry.set_enabled(preferences.telemetry_enabled());
-        if self.telemetry_enabled() {
-            let mut properties = Map::new();
-            properties.insert(
-                "auto_update".to_string(),
-                Value::Bool(self.config.preferences().auto_check_updates()),
-            );
-            self.telemetry
-                .record_event("preferences_updated", properties);
-        }
 
         let _ = self.config.save();
 
@@ -455,6 +387,8 @@ impl GitSpaceApp {
 
         self.settings_panel
             .set_update_status("Checking for updates...");
+        self.preferences_panel
+            .set_update_status("Vérification des mises à jour...");
 
         self.update_promise = Some(Promise::spawn_thread("update-check", move || {
             update::check_for_updates(channel, feed_override.as_deref(), &network)
@@ -476,18 +410,22 @@ impl GitSpaceApp {
                 notification =
                     notification.with_action(NotificationAction::OpenRelease(release.url.clone()));
                 self.notifications.push(notification);
-                self.settings_panel.set_update_status(format!(
+                let status = format!(
                     "Update {} available on the {:?} channel",
                     release.version, release.channel
-                ));
+                );
+                self.settings_panel.set_update_status(&status);
+                self.preferences_panel.set_update_status(&status);
             }
             Ok(None) => {
-                self.settings_panel
-                    .set_update_status("You're already on the latest version.");
+                let status = "You're already on the latest version.";
+                self.settings_panel.set_update_status(status);
+                self.preferences_panel.set_update_status(status);
             }
             Err(err) => {
-                self.settings_panel
-                    .set_update_status(format!("Update check failed: {err}"));
+                let status = format!("Update check failed: {err}");
+                self.settings_panel.set_update_status(&status);
+                self.preferences_panel.set_update_status(&status);
                 self.notifications
                     .push(Notification::error("Update check failed", err.to_string()));
             }
@@ -564,10 +502,10 @@ impl GitSpaceApp {
     fn handle_auto_fetch_result(&mut self, outcome: AutoFetchOutcome) {
         match outcome.result {
             Ok(()) => {
-                if let Some(current_repo) = self.current_repo.as_ref()
-                    && current_repo.path == outcome.repo_path
-                {
-                    self.repo_overview.reload_repo_state(current_repo);
+                if let Some(current_repo) = self.current_repo.as_ref() {
+                    if current_repo.path == outcome.repo_path {
+                        self.repo_overview.reload_repo_state(current_repo);
+                    }
                 }
                 self.repo_overview.set_action_status(Some(format!(
                     "Auto-fetched {}",
@@ -584,52 +522,6 @@ impl GitSpaceApp {
                 ));
             }
         }
-    }
-
-    fn telemetry_enabled(&self) -> bool {
-        self.config.preferences().telemetry_enabled()
-    }
-
-    fn prompt_for_telemetry_if_needed(&mut self) {
-        if self.config.telemetry_prompt_shown() || self.telemetry_prompt_enqueued {
-            return;
-        }
-
-        let mut notification = Notification::success(
-            "Help improve GitSpace",
-            "Share anonymized diagnostics to guide future improvements.",
-        );
-        notification.detail = Some(
-            "Telemetry is optional, batched, and stored locally when offline. You can clear it anytime.".to_string(),
-        );
-        notification = notification
-            .with_action(NotificationAction::EnableTelemetry)
-            .with_action(NotificationAction::DeclineTelemetry);
-        self.notifications.push(notification);
-        self.telemetry_prompt_enqueued = true;
-    }
-
-    fn enable_telemetry(&mut self, ctx: &egui::Context) {
-        if self.telemetry_enabled() {
-            return;
-        }
-
-        let mut preferences = self.config.preferences().clone();
-        preferences.set_telemetry_enabled(true);
-        self.config.mark_telemetry_prompt_shown();
-        self.settings_panel.set_preferences(preferences.clone());
-        self.apply_preferences(preferences, ctx);
-
-        self.telemetry.record_event("telemetry_opt_in", Map::new());
-        let _ = self.config.save();
-    }
-
-    fn decline_telemetry(&mut self, ctx: &egui::Context) {
-        let mut preferences = self.config.preferences().clone();
-        preferences.set_telemetry_enabled(false);
-        self.config.mark_telemetry_prompt_shown();
-        self.settings_panel.set_preferences(preferences.clone());
-        self.apply_preferences(preferences, ctx);
     }
 }
 

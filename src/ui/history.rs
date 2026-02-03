@@ -1,11 +1,14 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use chrono::{Datelike, NaiveDate, TimeZone, Utc};
 use eframe::egui::{self, Align, Layout, Pos2, RichText, Sense, Ui};
 
 use crate::git::{
-    diff::{FileDiff, commit_diff},
+    diff::{FileDiff, FileDiffSummary, commit_diff_file, commit_diff_summaries},
     log::{CommitFilter, CommitInfo, list_local_branches, read_commit_log},
 };
-use crate::ui::{context::RepoContext, menu, theme::Theme};
+use crate::ui::{context::RepoContext, menu, theme::SharedTheme};
 
 const MAX_COMMITS: usize = 200;
 const ROW_HEIGHT: f32 = 88.0;
@@ -20,12 +23,15 @@ pub struct HistoryFilters {
 }
 
 pub struct HistoryPanel {
-    theme: Theme,
+    theme: SharedTheme,
     filters: HistoryFilters,
     branches: Vec<String>,
     commits: Vec<CommitInfo>,
     selected_commit: Option<String>,
-    diffs: Vec<FileDiff>,
+    /// Lightweight summaries - loaded when commit is selected
+    diff_summaries: Vec<FileDiffSummary>,
+    /// Full diffs loaded on demand when file is expanded (keyed by file path)
+    loaded_patches: HashMap<String, FileDiff>,
     last_repo: Option<String>,
     error: Option<String>,
     diff_error: Option<String>,
@@ -33,14 +39,15 @@ pub struct HistoryPanel {
 }
 
 impl HistoryPanel {
-    pub fn new(theme: Theme) -> Self {
+    pub fn new(theme: SharedTheme) -> Self {
         Self {
             theme,
             filters: HistoryFilters::default(),
             branches: Vec::new(),
             commits: Vec::new(),
             selected_commit: None,
-            diffs: Vec::new(),
+            diff_summaries: Vec::new(),
+            loaded_patches: HashMap::new(),
             last_repo: None,
             error: None,
             diff_error: None,
@@ -48,7 +55,7 @@ impl HistoryPanel {
         }
     }
 
-    pub fn set_theme(&mut self, theme: Theme) {
+    pub fn set_theme(&mut self, theme: SharedTheme) {
         self.theme = theme;
     }
 
@@ -140,7 +147,7 @@ impl HistoryPanel {
                             } else {
                                 &self.filters.branch
                             })
-                            .icon(menu::combo_icon(self.theme.clone(), icon_id))
+                            .icon(menu::combo_icon(Arc::clone(&self.theme), icon_id))
                             .show_ui(ui, |ui| {
                                 menu::with_menu_popup_motion(ui, "branch-filter-menu", |ui| {
                                     if menu::menu_item(
@@ -255,11 +262,8 @@ impl HistoryPanel {
                                         );
                                         ui.add(
                                             egui::Label::new(
-                                                RichText::new(format!(
-                                                    "{}",
-                                                    commit.id.chars().take(8).collect::<String>()
-                                                ))
-                                                .color(palette.text_secondary),
+                                                RichText::new(&commit.short_id)
+                                                    .color(palette.text_secondary),
                                             )
                                             .wrap(true),
                                         );
@@ -382,32 +386,79 @@ impl HistoryPanel {
                     ui.add_space(6.0);
                 }
                 let diff_height = ui.available_height().max(220.0);
+                // Collect file paths that need patch loading
+                let mut files_to_load: Vec<String> = Vec::new();
+
                 egui::ScrollArea::vertical()
                     .id_source("history_details_files")
                     .auto_shrink([false, false])
                     .min_scrolled_height(diff_height)
                     .show(ui, |ui| {
-                        for (idx, diff) in self.diffs.iter().enumerate() {
+                        for (idx, summary) in self.diff_summaries.iter().enumerate() {
+                            let file_path = summary.path.clone();
                             ui.push_id(idx, |ui| {
-                                ui.collapsing(
-                                    RichText::new(format!(
+                                let header_text = if summary.is_binary {
+                                    format!("{} (binary)", summary.path)
+                                } else {
+                                    format!(
                                         "{} (+{}, -{})",
-                                        diff.path, diff.additions, diff.deletions
-                                    ))
-                                    .color(self.theme.palette.text_primary),
-                                    |ui| {
-                                        ui.add(
-                                            egui::TextEdit::multiline(&mut diff.patch.clone())
-                                                .font(egui::TextStyle::Monospace)
-                                                .desired_width(f32::INFINITY)
-                                                .interactive(false),
-                                        );
-                                    },
+                                        summary.path, summary.additions, summary.deletions
+                                    )
+                                };
+
+                                let header_id = ui.make_persistent_id(("diff_file", &file_path));
+                                let state = egui::collapsing_header::CollapsingState::load_with_default_open(
+                                    ui.ctx(),
+                                    header_id,
+                                    false,
                                 );
+
+                                let is_open = state.is_open();
+
+                                // If expanded and not yet loaded, mark for loading
+                                if is_open && !self.loaded_patches.contains_key(&file_path) {
+                                    files_to_load.push(file_path.clone());
+                                }
+
+                                state
+                                    .show_header(ui, |ui| {
+                                        ui.label(
+                                            RichText::new(header_text)
+                                                .color(self.theme.palette.text_primary),
+                                        );
+                                    })
+                                    .body(|ui| {
+                                        if let Some(diff) = self.loaded_patches.get(&file_path) {
+                                            let mut patch_text = diff.patch.clone();
+                                            if diff.truncated {
+                                                ui.label(
+                                                    RichText::new("⚠ File truncated (too large)")
+                                                        .color(self.theme.palette.accent)
+                                                        .small(),
+                                                );
+                                            }
+                                            ui.add(
+                                                egui::TextEdit::multiline(&mut patch_text)
+                                                    .font(egui::TextStyle::Monospace)
+                                                    .desired_width(f32::INFINITY)
+                                                    .interactive(false),
+                                            );
+                                        } else {
+                                            ui.label(
+                                                RichText::new("Loading...")
+                                                    .color(self.theme.palette.text_secondary),
+                                            );
+                                        }
+                                    });
                                 ui.add_space(6.0);
                             });
                         }
                     });
+
+                // Load patches for expanded files (outside the UI loop)
+                for file_path in files_to_load {
+                    self.load_file_patch(&file_path);
+                }
             } else {
                 ui.label(
                     RichText::new("Commit not found.").color(self.theme.palette.text_secondary),
@@ -426,7 +477,8 @@ impl HistoryPanel {
         self.diff_error = None;
         self.last_repo = Some(repo.path.clone());
         self.selected_commit = None;
-        self.diffs.clear();
+        self.diff_summaries.clear();
+        self.loaded_patches.clear();
 
         let filter = CommitFilter {
             branch: if self.filters.branch.is_empty() {
@@ -455,17 +507,55 @@ impl HistoryPanel {
     }
 
     fn load_diff(&mut self) {
+        // Clear previously loaded patches when selecting a new commit
+        self.loaded_patches.clear();
+
         if let Some(repo) = self.last_repo.clone() {
             if let Some(commit) = &self.selected_commit {
-                match commit_diff(&repo, commit) {
-                    Ok(diffs) => {
-                        self.diffs = diffs;
+                // Load only summaries - patches will be loaded on demand
+                match commit_diff_summaries(&repo, commit) {
+                    Ok(summaries) => {
+                        self.diff_summaries = summaries;
                         self.diff_error = None;
                     }
                     Err(err) => {
-                        self.diffs.clear();
+                        self.diff_summaries.clear();
                         self.diff_error = Some(format!("Failed to load diff: {err}"));
                     }
+                }
+            }
+        }
+    }
+
+    /// Load a file's patch on demand (lazy loading)
+    fn load_file_patch(&mut self, file_path: &str) {
+        if self.loaded_patches.contains_key(file_path) {
+            return; // Already loaded
+        }
+
+        if let (Some(repo), Some(commit)) = (self.last_repo.as_ref(), self.selected_commit.as_ref()) {
+            match commit_diff_file(repo, commit, file_path) {
+                Ok(Some(diff)) => {
+                    self.loaded_patches.insert(file_path.to_string(), diff);
+                }
+                Ok(None) => {
+                    // File not found in diff, insert empty placeholder
+                    self.loaded_patches.insert(file_path.to_string(), FileDiff {
+                        path: file_path.to_string(),
+                        additions: 0,
+                        deletions: 0,
+                        patch: String::from("(no changes)"),
+                        truncated: false,
+                    });
+                }
+                Err(err) => {
+                    self.loaded_patches.insert(file_path.to_string(), FileDiff {
+                        path: file_path.to_string(),
+                        additions: 0,
+                        deletions: 0,
+                        patch: format!("Error loading diff: {err}"),
+                        truncated: false,
+                    });
                 }
             }
         }

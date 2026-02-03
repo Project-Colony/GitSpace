@@ -6,7 +6,6 @@ mod dotnet;
 mod error;
 mod git;
 mod logging;
-mod telemetry;
 mod ui;
 mod update;
 
@@ -21,12 +20,16 @@ fn main() {
         ..Default::default()
     };
 
-    eframe::run_native(
+    if let Err(err) = eframe::run_native(
         "GitSpace",
         native_options,
         Box::new(|_cc| Box::new(GitSpaceApp::new())),
-    )
-    .expect("failed to start GitSpace UI");
+    ) {
+        tracing::error!(target: "gitspace::main", error = %err, "failed to start GitSpace UI");
+        eprintln!("Error: Failed to start GitSpace UI: {err}");
+        eprintln!("Please check that your display server is running and accessible.");
+        std::process::exit(1);
+    }
 }
 
 fn log_dev_feature_flags() {

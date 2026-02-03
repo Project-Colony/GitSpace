@@ -5,7 +5,7 @@ use crate::config::AppConfig;
 use crate::ui::{
     auth::AuthPanel, branches::BranchPanel, clone::ClonePanel, context::RepoContext, dev_gallery,
     menu, notifications::NotificationCenter, perf::PerfScope, recent::RecentList,
-    repo_overview::RepoOverviewPanel, settings::SettingsPanel, stage::StagePanel, theme::Theme,
+    repo_overview::RepoOverviewPanel, settings::SettingsPanel, stage::StagePanel, theme::SharedTheme,
 };
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -24,7 +24,6 @@ pub enum MainTab {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum NavigationTrigger {
     Click,
-    Keyboard,
     ContextMenu,
     DragAndDrop,
 }
@@ -33,17 +32,6 @@ pub enum NavigationTrigger {
 pub struct NavigationSelection {
     pub tab: MainTab,
     pub trigger: NavigationTrigger,
-}
-
-impl NavigationTrigger {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Click => "click",
-            Self::Keyboard => "keyboard",
-            Self::ContextMenu => "context_menu",
-            Self::DragAndDrop => "drag_and_drop",
-        }
-    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -80,30 +68,50 @@ impl MainTab {
     }
 }
 
-pub struct ShellLayout<'a> {
-    theme: &'a Theme,
+pub struct ShellLayout {
+    theme: SharedTheme,
 }
 
-impl<'a> ShellLayout<'a> {
-    pub fn new(theme: &'a Theme) -> Self {
+impl ShellLayout {
+    pub fn new(theme: SharedTheme) -> Self {
         Self { theme }
     }
 
-    pub fn header(&self, ctx: &egui::Context) {
+    /// Returns true if the GitSpace logo was clicked (to open preferences)
+    pub fn header(&self, ctx: &egui::Context) -> bool {
+        let mut clicked = false;
         egui::TopBottomPanel::top("header")
             .exact_height(48.0)
             .frame(egui::Frame::none().fill(self.theme.palette.surface))
             .show(ctx, |ui| {
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.add_space(8.0);
-                    ui.heading(
-                        RichText::new("GitSpace")
-                            .color(self.theme.palette.text_primary)
-                            .strong(),
+
+                    // Make GitSpace clickable
+                    let response = ui.add(
+                        egui::Label::new(
+                            RichText::new("GitSpace")
+                                .color(self.theme.palette.text_primary)
+                                .strong()
+                                .heading(),
+                        )
+                        .sense(Sense::click()),
                     );
+
+                    if response.clicked() {
+                        clicked = true;
+                    }
+
+                    if response.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+
+                    response.on_hover_text("Ouvrir les préférences");
+
                     ui.colored_label(self.theme.palette.accent, RichText::new("Workspace shell"));
                 });
             });
+        clicked
     }
 
     pub fn sidebar(&self, ctx: &egui::Context, active_tab: MainTab) -> Option<NavigationSelection> {
@@ -131,7 +139,7 @@ impl<'a> ShellLayout<'a> {
                     ui.add_space(4.0);
                     let response = menu::menu_item_sized(
                         ui,
-                        self.theme,
+                        &self.theme,
                         ("sidebar-nav", label),
                         label,
                         active_tab == tab,
@@ -157,7 +165,7 @@ impl<'a> ShellLayout<'a> {
                 ] {
                     let response = menu::menu_item_sized(
                         ui,
-                        self.theme,
+                        &self.theme,
                         ("sidebar-action", action),
                         RichText::new(action).strong(),
                         active_tab == tab,
@@ -288,7 +296,7 @@ impl<'a> ShellLayout<'a> {
 
                 let response = menu::menu_item_sized(
                     ui,
-                    self.theme,
+                    &self.theme,
                     ("tab-bar", tab),
                     label,
                     is_active,
@@ -312,7 +320,7 @@ impl<'a> ShellLayout<'a> {
                     menu::with_menu_popup_motion(ui, ("tab-menu", tab), |ui| {
                         if menu::menu_item(
                             ui,
-                            self.theme,
+                            &self.theme,
                             ("tab-menu-switch", tab),
                             format!("Switch to {}", tab.label()),
                             is_active,

@@ -471,13 +471,22 @@ fn fetch_checksum(
         .next()
         .ok_or_else(|| UpdateError::Verification("Checksum file was empty.".to_string()))?;
 
-    if parsed.len() < 64 {
+    // SHA-256 checksum must be exactly 64 hex characters
+    if parsed.len() != 64 {
+        return Err(UpdateError::Verification(format!(
+            "Invalid SHA-256 checksum length: expected 64 characters, got {}",
+            parsed.len()
+        )));
+    }
+
+    // Validate hex format
+    if !parsed.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(UpdateError::Verification(
-            "Checksum entry is too short to be valid SHA-256.".to_string(),
+            "Checksum contains invalid characters (must be hexadecimal)".to_string(),
         ));
     }
 
-    Ok(parsed.to_string())
+    Ok(parsed.to_lowercase())
 }
 
 fn build_client(network: &NetworkOptions) -> Result<Client, UpdateError> {

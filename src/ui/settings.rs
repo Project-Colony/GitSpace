@@ -1,6 +1,7 @@
+use std::sync::Arc;
+
 use eframe::egui::{
     ComboBox, RichText, Slider, TextEdit, Ui, collapsing_header::CollapsingState,
-    output::OpenUrl,
 };
 use rfd::FileDialog;
 
@@ -11,10 +12,10 @@ use crate::config::{
 use crate::dotnet::{DialogOpenRequest, DialogOptions, DotnetClient};
 use crate::ui::menu;
 use crate::ui::notifications::{Notification, NotificationCenter};
-use crate::ui::theme::Theme;
+use crate::ui::theme::SharedTheme;
 
 pub struct SettingsPanel {
-    theme: Theme,
+    theme: SharedTheme,
     preferences: Preferences,
     logging: LoggingOptions,
     pending_preferences: Option<Preferences>,
@@ -25,12 +26,10 @@ pub struct SettingsPanel {
     native_dialog_status: Option<String>,
     update_request: bool,
     update_status: Option<String>,
-    telemetry_status: Option<String>,
-    telemetry_purge_requested: bool,
 }
 
 impl SettingsPanel {
-    pub fn new(theme: Theme, preferences: Preferences, logging: LoggingOptions) -> Self {
+    pub fn new(theme: SharedTheme, preferences: Preferences, logging: LoggingOptions) -> Self {
         Self {
             theme,
             preferences,
@@ -43,12 +42,10 @@ impl SettingsPanel {
             native_dialog_status: None,
             update_request: false,
             update_status: None,
-            telemetry_status: None,
-            telemetry_purge_requested: false,
         }
     }
 
-    pub fn set_theme(&mut self, theme: Theme) {
+    pub fn set_theme(&mut self, theme: SharedTheme) {
         self.theme = theme;
     }
 
@@ -79,19 +76,6 @@ impl SettingsPanel {
 
     pub fn set_update_status<S: Into<String>>(&mut self, status: S) {
         self.update_status = Some(status.into());
-    }
-
-    pub fn set_telemetry_status<S: Into<String>>(&mut self, status: S) {
-        self.telemetry_status = Some(status.into());
-    }
-
-    pub fn take_telemetry_purge_request(&mut self) -> bool {
-        if self.telemetry_purge_requested {
-            self.telemetry_purge_requested = false;
-            return true;
-        }
-
-        false
     }
 
     pub fn ui(&mut self, ui: &mut Ui, notifications: &mut NotificationCenter) {
@@ -131,7 +115,7 @@ impl SettingsPanel {
                     RichText::new("Theme").color(panel.theme.palette.text_secondary),
                 )
                 .selected_text(mode_label(panel.preferences.theme_mode()))
-                .icon(menu::combo_icon(panel.theme.clone(), icon_id))
+                .icon(menu::combo_icon(Arc::clone(&panel.theme), icon_id))
                 .show_ui(ui, |ui| {
                     menu::with_menu_popup_motion(ui, "settings-theme-menu", |ui| {
                         let mut selected_mode = panel.preferences.theme_mode();
@@ -188,12 +172,12 @@ impl SettingsPanel {
                             .hint_text("/home/me/code"),
                     );
 
-                    if ui.button("Choose folder").clicked()
-                        && let Some(path) = FileDialog::new().pick_folder()
-                    {
-                        panel
-                            .preferences
-                            .set_default_clone_path(path.display().to_string());
+                    if ui.button("Choose folder").clicked() {
+                        if let Some(path) = FileDialog::new().pick_folder() {
+                            panel
+                                .preferences
+                                .set_default_clone_path(path.display().to_string());
+                        }
                     }
 
                     if ui.button("Choose folder (native helper)").clicked() {
@@ -363,7 +347,7 @@ impl SettingsPanel {
                             .color(panel.theme.palette.text_secondary),
                     )
                     .selected_text(selected_text)
-                    .icon(menu::combo_icon(panel.theme.clone(), icon_id))
+                    .icon(menu::combo_icon(Arc::clone(&panel.theme), icon_id))
                     .show_ui(ui, |ui| {
                         menu::with_menu_popup_motion(ui, "settings-auto-fetch-interval-menu", |ui| {
                             let mut selected_interval = current_interval;
@@ -439,16 +423,8 @@ impl SettingsPanel {
             ui,
             "settings-privacy",
             "Privacy",
-            "Opt in to anonymized diagnostics and decide what gets shared. Nothing leaves your machine unless enabled.",
+            "Control token storage and security settings.",
             |ui, panel| {
-                let mut telemetry_enabled = panel.preferences.telemetry_enabled();
-                ui.checkbox(
-                    &mut telemetry_enabled,
-                    "Share anonymized events (feature usage, performance)",
-                );
-                panel.preferences.set_telemetry_enabled(telemetry_enabled);
-
-                ui.add_space(6.0);
                 let mut encrypted_tokens = panel.preferences.allow_encrypted_tokens();
                 ui.checkbox(
                     &mut encrypted_tokens,
@@ -460,52 +436,6 @@ impl SettingsPanel {
                 panel
                     .preferences
                     .set_allow_encrypted_tokens(encrypted_tokens);
-
-                ui.add_space(4.0);
-                ui.label(
-                    RichText::new(
-                        "Collected: launch/session counts, tab switches, hashed repository identifiers. Excludes content or credentials.",
-                    )
-                    .color(panel.theme.palette.text_secondary),
-                );
-
-                ui.add_space(6.0);
-                ui.horizontal_wrapped(|ui| {
-                    if ui.button("Voir la doc").clicked() {
-                        let doc_path = std::env::current_dir()
-                            .ok()
-                            .map(|dir| dir.join("docs/telemetry.md"));
-                        if let Some(path) = doc_path.filter(|path| path.exists()) {
-                            let url = format!("file://{}", path.display());
-                            ui.ctx().output_mut(|output| {
-                                output.open_url = Some(OpenUrl {
-                                    url,
-                                    new_tab: true,
-                                });
-                            });
-                        } else {
-                            panel.telemetry_status =
-                                Some("Impossible d'ouvrir la documentation.".to_string());
-                        }
-                    }
-
-                    ui.label(
-                        RichText::new("Détails sur la télémétrie.")
-                            .color(panel.theme.palette.text_secondary)
-                            .small(),
-                    );
-                });
-
-                ui.add_space(6.0);
-                if ui.button("Purge collected diagnostics").clicked() {
-                    panel.telemetry_purge_requested = true;
-                    panel.telemetry_status = Some("Queued telemetry purge".to_string());
-                }
-
-                if let Some(status) = &panel.telemetry_status {
-                    ui.add_space(4.0);
-                    ui.label(RichText::new(status).color(panel.theme.palette.text_secondary));
-                }
             },
         );
     }
@@ -551,7 +481,7 @@ impl SettingsPanel {
                     RichText::new("Release channel").color(panel.theme.palette.text_secondary),
                 )
                 .selected_text(channel_label(panel.preferences.release_channel()))
-                .icon(menu::combo_icon(panel.theme.clone(), icon_id))
+                .icon(menu::combo_icon(Arc::clone(&panel.theme), icon_id))
                 .show_ui(ui, |ui| {
                     menu::with_menu_popup_motion(ui, "settings-release-menu", |ui| {
                         let mut selected_channel = panel.preferences.release_channel();
@@ -625,7 +555,7 @@ impl SettingsPanel {
                     RichText::new("Motion intensity").color(panel.theme.palette.text_secondary),
                 )
                 .selected_text(motion_intensity_label(panel.preferences.motion_intensity()))
-                .icon(menu::combo_icon(panel.theme.clone(), icon_id))
+                .icon(menu::combo_icon(Arc::clone(&panel.theme), icon_id))
                 .show_ui(ui, |ui| {
                     menu::with_menu_popup_motion(ui, "settings-motion-intensity-menu", |ui| {
                         let mut selected_intensity = panel.preferences.motion_intensity();
@@ -697,35 +627,37 @@ impl SettingsPanel {
             "Move your GitSpace preferences between machines as JSON.",
             |ui, panel| {
                 ui.horizontal(|ui| {
-                    if ui.button("Import settings").clicked()
-                        && let Some(path) =
+                    if ui.button("Import settings").clicked() {
+                        if let Some(path) =
                             FileDialog::new().add_filter("JSON", &["json"]).pick_file()
-                    {
-                        match Preferences::from_path(&path) {
-                            Ok(prefs) => {
-                                panel.preferences = prefs.clone();
-                                panel.pending_preferences = Some(prefs);
-                                panel.import_status =
-                                    Some(format!("Imported preferences from {}", path.display()));
-                            }
-                            Err(err) => {
-                                panel.import_status = Some(err.to_string());
+                        {
+                            match Preferences::from_path(&path) {
+                                Ok(prefs) => {
+                                    panel.preferences = prefs.clone();
+                                    panel.pending_preferences = Some(prefs);
+                                    panel.import_status =
+                                        Some(format!("Imported preferences from {}", path.display()));
+                                }
+                                Err(err) => {
+                                    panel.import_status = Some(err.to_string());
+                                }
                             }
                         }
                     }
 
-                    if ui.button("Export settings").clicked()
-                        && let Some(path) = FileDialog::new()
+                    if ui.button("Export settings").clicked() {
+                        if let Some(path) = FileDialog::new()
                             .add_filter("JSON", &["json"])
                             .set_file_name("gitspace-preferences.json")
                             .save_file()
-                    {
-                        match panel.preferences.save_to_path(&path) {
-                            Ok(_) => {
-                                panel.export_status =
-                                    Some(format!("Saved preferences to {}", path.display()));
+                        {
+                            match panel.preferences.save_to_path(&path) {
+                                Ok(_) => {
+                                    panel.export_status =
+                                        Some(format!("Saved preferences to {}", path.display()));
+                                }
+                                Err(err) => panel.export_status = Some(err.to_string()),
                             }
-                            Err(err) => panel.export_status = Some(err.to_string()),
                         }
                     }
                 });

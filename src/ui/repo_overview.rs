@@ -8,11 +8,10 @@ use crate::git::{
     remote::{PullOutcome, RemoteInfo, fetch_remote, list_remotes, pull_branch, push_branch},
     status::{RepoStatus, read_repo_status},
 };
-use crate::ui::{animation::motion_settings, context::RepoContext, perf::PerfScope, theme::Theme};
+use crate::ui::{animation::motion_settings, context::RepoContext, perf::PerfScope, theme::SharedTheme};
 
-#[derive(Debug, Clone)]
 pub struct RepoOverviewPanel {
-    theme: Theme,
+    theme: SharedTheme,
     status: Option<RepoStatus>,
     remotes: Vec<RemoteInfo>,
     last_repo: Option<String>,
@@ -34,7 +33,7 @@ pub struct AutoFetchContext {
 }
 
 impl RepoOverviewPanel {
-    pub fn new(theme: Theme, branch_box_height: f32, network: NetworkOptions) -> Self {
+    pub fn new(theme: SharedTheme, branch_box_height: f32, network: NetworkOptions) -> Self {
         Self {
             theme,
             status: None,
@@ -50,7 +49,7 @@ impl RepoOverviewPanel {
         }
     }
 
-    pub fn set_theme(&mut self, theme: Theme) {
+    pub fn set_theme(&mut self, theme: SharedTheme) {
         self.theme = theme;
     }
 

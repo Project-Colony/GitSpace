@@ -1,6 +1,11 @@
+use std::sync::Arc;
+
 use egui::{Color32, TextStyle};
 
 use crate::config::ThemeMode;
+
+/// Shared reference-counted theme for efficient passing between components.
+pub type SharedTheme = Arc<Theme>;
 
 #[derive(Debug, Clone)]
 pub struct Palette {
@@ -210,5 +215,10 @@ impl Theme {
         .into();
 
         ctx.set_style(style);
+    }
+
+    /// Creates a shared (Arc-wrapped) theme from a theme mode.
+    pub fn shared_from_mode(mode: ThemeMode) -> SharedTheme {
+        Arc::new(Self::from_mode(mode))
     }
 }

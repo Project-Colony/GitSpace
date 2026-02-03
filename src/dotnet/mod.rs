@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 
 use crate::error::AppError;
-use crate::telemetry::{log_dotnet_helper_launch_failure, log_dotnet_json_parse_error};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -116,7 +115,7 @@ impl DotnetClient {
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|err| {
-                log_dotnet_helper_launch_failure(&err);
+                tracing::warn!(target: "gitspace::dotnet", error = %err, "dotnet helper launch failure");
                 AppError::from(err)
             })?;
 
@@ -139,7 +138,7 @@ impl DotnetClient {
         }
 
         serde_json::from_slice(&output.stdout).map_err(|err| {
-            log_dotnet_json_parse_error(&err, "dotnet_response");
+            tracing::warn!(target: "gitspace::dotnet", error = %err, context = "dotnet_response", "JSON parse error");
             AppError::Unknown(err.to_string())
         })
     }
@@ -157,7 +156,7 @@ impl DotnetClient {
         let response = self.send_request(&request)?;
         let payload = response_payload(response, "dialog response payload")?;
         serde_json::from_value(payload).map_err(|err| {
-            log_dotnet_json_parse_error(&err, "dialog_open_payload");
+            tracing::warn!(target: "gitspace::dotnet", error = %err, context = "dialog_open_payload", "JSON parse error");
             AppError::Unknown(err.to_string())
         })
     }
@@ -175,7 +174,7 @@ impl DotnetClient {
         let response = self.send_request(&request)?;
         let payload = response_payload(response, "credential response payload")?;
         serde_json::from_value(payload).map_err(|err| {
-            log_dotnet_json_parse_error(&err, "credential_payload");
+            tracing::warn!(target: "gitspace::dotnet", error = %err, context = "credential_payload", "JSON parse error");
             AppError::Unknown(err.to_string())
         })
     }

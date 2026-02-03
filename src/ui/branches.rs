@@ -10,7 +10,7 @@ use crate::git::branch::{
 use crate::git::compare::{BranchComparison, DiffSummary, compare_branch_with_head};
 use crate::git::log::{CommitInfo, commits_between_refs, latest_commit_for_branch};
 use crate::git::merge::{MergeOutcome, MergeStrategy, detect_conflicts, merge_branch};
-use crate::ui::{context::RepoContext, menu, theme::Theme};
+use crate::ui::{context::RepoContext, menu, theme::SharedTheme};
 
 const STALE_DAYS: i64 = 30;
 const REMOTE_PAGE_SIZE: usize = 25;
@@ -37,7 +37,7 @@ impl BranchNode {
 }
 
 pub struct BranchPanel {
-    theme: Theme,
+    theme: SharedTheme,
     branches: Vec<BranchEntry>,
     branch_commits: BTreeMap<String, CommitInfo>,
     new_branch: String,
@@ -61,7 +61,7 @@ pub struct BranchPanel {
 }
 
 impl BranchPanel {
-    pub fn new(theme: Theme, pinned_branches: Vec<String>) -> Self {
+    pub fn new(theme: SharedTheme, pinned_branches: Vec<String>) -> Self {
         Self {
             theme,
             branches: Vec::new(),
@@ -87,7 +87,7 @@ impl BranchPanel {
         }
     }
 
-    pub fn set_theme(&mut self, theme: Theme) {
+    pub fn set_theme(&mut self, theme: SharedTheme) {
         self.theme = theme;
     }
 
@@ -247,47 +247,53 @@ impl BranchPanel {
         ui.heading(RichText::new(label).color(self.theme.palette.text_primary));
         ui.add_space(4.0);
 
-        let mut pinned: Vec<BranchEntry> = self
+        // Single pass: partition branches into pinned and unpinned indices
+        // Using indices allows us to avoid cloning until we need to build the tree
+        let visible_branches: Vec<usize> = self
             .branches
             .iter()
-            .filter(|branch| branch.kind == kind)
-            .filter(|branch| self.should_show_branch(branch))
-            .filter(|branch| self.is_branch_pinned(branch))
-            .cloned()
+            .enumerate()
+            .filter(|(_, branch)| branch.kind == kind && self.should_show_branch(branch))
+            .map(|(i, _)| i)
             .collect();
-        pinned.sort_by(|a, b| a.name.cmp(&b.name));
 
-        let mut branches: Vec<BranchEntry> = self
-            .branches
-            .iter()
-            .filter(|branch| branch.kind == kind)
-            .filter(|branch| self.should_show_branch(branch))
-            .filter(|branch| !self.is_branch_pinned(branch))
-            .cloned()
-            .collect();
-        branches.sort_by(|a, b| a.name.cmp(&b.name));
+        let (pinned_indices, unpinned_indices): (Vec<_>, Vec<_>) = visible_branches
+            .into_iter()
+            .partition(|&i| self.is_branch_pinned(&self.branches[i]));
 
-        let (page_branches, total_pages) = if kind == BranchKind::Remote {
-            let total_pages = branches.len().div_ceil(REMOTE_PAGE_SIZE).max(1);
+        // Sort indices by branch name
+        let mut pinned_indices = pinned_indices;
+        let mut unpinned_indices = unpinned_indices;
+        pinned_indices.sort_by(|&a, &b| self.branches[a].name.cmp(&self.branches[b].name));
+        unpinned_indices.sort_by(|&a, &b| self.branches[a].name.cmp(&self.branches[b].name));
+
+        let (page_indices, total_pages) = if kind == BranchKind::Remote {
+            let total_pages = unpinned_indices.len().div_ceil(REMOTE_PAGE_SIZE).max(1);
             if self.remote_page >= total_pages {
                 self.remote_page = total_pages - 1;
             }
             let start = self.remote_page * REMOTE_PAGE_SIZE;
-            let end = (start + REMOTE_PAGE_SIZE).min(branches.len());
-            let page_branches = branches.get(start..end).unwrap_or_default().to_vec();
-            (page_branches, total_pages)
+            let end = (start + REMOTE_PAGE_SIZE).min(unpinned_indices.len());
+            (&unpinned_indices[start..end], total_pages)
         } else {
-            (branches, 1)
+            (&unpinned_indices[..], 1)
         };
 
+        // Clone only the branches we need for the tree (page only, not pinned)
         let mut root = BranchNode::default();
-        for branch in page_branches {
-            let name = branch.name.clone();
-            let segments: Vec<&str> = name.split('/').collect();
-            root.insert(&segments, branch);
+        for &idx in page_indices {
+            let branch = &self.branches[idx];
+            let segments: Vec<&str> = branch.name.split('/').collect();
+            root.insert(&segments, branch.clone());
         }
 
-        if pinned.is_empty() && root.children.is_empty() {
+        // Clone pinned branches to avoid borrow issues in closure
+        let pinned_branches: Vec<BranchEntry> = pinned_indices
+            .iter()
+            .map(|&i| self.branches[i].clone())
+            .collect();
+
+        if pinned_branches.is_empty() && root.children.is_empty() {
             ui.label(RichText::new("No branches found.").color(self.theme.palette.text_secondary));
             return;
         }
@@ -300,9 +306,9 @@ impl BranchPanel {
             .id_source(("branch_scroll", kind_id))
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                if !pinned.is_empty() {
+                if !pinned_branches.is_empty() {
                     ui.label(RichText::new("Pinned").color(self.theme.palette.text_secondary));
-                    for branch in &pinned {
+                    for branch in &pinned_branches {
                         self.render_branch_entry(ui, repo, branch);
                     }
                     if !root.children.is_empty() {
