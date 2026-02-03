@@ -128,6 +128,12 @@ impl PreferencesPanel {
         self.update_status = Some(status.into());
     }
 
+    /// Mark preferences as changed (triggers auto-save)
+    fn mark_changed(&mut self) {
+        self.pending_preferences = Some(self.preferences.clone());
+        self.pending_logging = Some(self.logging);
+    }
+
     /// Show the preferences as a fullscreen panel (replaces all other content)
     /// Returns true if the panel is open (caller should skip rendering other panels)
     pub fn show(&mut self, ctx: &egui::Context, notifications: &mut NotificationCenter) -> bool {
@@ -282,14 +288,17 @@ impl PreferencesPanel {
         ui.add_space(8.0);
 
         let mut encrypted_tokens = self.preferences.allow_encrypted_tokens();
-        ui.checkbox(
+        let response = ui.checkbox(
             &mut encrypted_tokens,
             "Autoriser le stockage chiffré si le trousseau natif n'est pas disponible",
         )
         .on_hover_text(
             "GitSpace utilise le trousseau du système par défaut. Activez cette option pour utiliser un fichier chiffré local si l'accès au trousseau échoue.",
         );
-        self.preferences.set_allow_encrypted_tokens(encrypted_tokens);
+        if response.changed() {
+            self.preferences.set_allow_encrypted_tokens(encrypted_tokens);
+            self.mark_changed();
+        }
 
         ui.add_space(20.0);
 
@@ -307,6 +316,7 @@ impl PreferencesPanel {
         );
         if response.changed() {
             self.logging.set_retention_files(retention_files as usize);
+            self.mark_changed();
         }
 
         ui.add_space(20.0);
@@ -360,22 +370,12 @@ impl PreferencesPanel {
 
         ui.add_space(20.0);
 
-        // Actions
-        ui.horizontal(|ui| {
-            if ui.button("Sauvegarder les préférences").clicked() {
-                self.pending_preferences = Some(self.preferences.clone());
-                self.pending_logging = Some(self.logging);
-                notifications.push(Notification::success(
-                    "Préférences sauvegardées",
-                    "Vos préférences ont été enregistrées.",
-                ));
-            }
-
-            if ui.button("Réinitialiser par défaut").clicked() {
-                self.preferences = Preferences::default();
-                self.logging = LoggingOptions::default();
-            }
-        });
+        // Reset button only (changes are auto-saved)
+        if ui.button("Réinitialiser par défaut").clicked() {
+            self.preferences = Preferences::default();
+            self.logging = LoggingOptions::default();
+            self.mark_changed();
+        }
     }
 
     // ========================
@@ -401,7 +401,8 @@ impl PreferencesPanel {
         .icon(menu::combo_icon(Arc::clone(&self.theme), icon_id))
         .show_ui(ui, |ui| {
             menu::with_menu_popup_motion(ui, "prefs-theme-menu", |ui| {
-                let mut selected_mode = self.preferences.theme_mode();
+                let current_mode = self.preferences.theme_mode();
+                let mut selected_mode = current_mode;
                 for mode in [
                     ThemeMode::Latte,
                     ThemeMode::Frappe,
@@ -420,7 +421,10 @@ impl PreferencesPanel {
                         selected_mode = mode;
                     }
                 }
-                self.preferences.set_theme_mode(selected_mode);
+                if selected_mode != current_mode {
+                    self.preferences.set_theme_mode(selected_mode);
+                    self.pending_preferences = Some(self.preferences.clone());
+                }
             });
         });
 
@@ -435,6 +439,7 @@ impl PreferencesPanel {
         if response.changed() {
             self.preferences.set_control_height(control_height);
             self.pending_control_height = Some(control_height);
+            self.mark_changed();
         }
     }
 
@@ -461,7 +466,8 @@ impl PreferencesPanel {
         .icon(menu::combo_icon(Arc::clone(&self.theme), icon_id))
         .show_ui(ui, |ui| {
             menu::with_menu_popup_motion(ui, "prefs-motion-intensity-menu", |ui| {
-                let mut selected_intensity = self.preferences.motion_intensity();
+                let current_intensity = self.preferences.motion_intensity();
+                let mut selected_intensity = current_intensity;
                 for intensity in [
                     MotionIntensity::Low,
                     MotionIntensity::Medium,
@@ -482,24 +488,33 @@ impl PreferencesPanel {
                         selected_intensity = intensity;
                     }
                 }
-                self.preferences.set_motion_intensity(selected_intensity);
+                if selected_intensity != current_intensity {
+                    self.preferences.set_motion_intensity(selected_intensity);
+                    self.pending_preferences = Some(self.preferences.clone());
+                }
             });
         });
 
         ui.add_space(12.0);
 
         let mut reduced_motion = self.preferences.reduced_motion();
-        ui.checkbox(&mut reduced_motion, "Réduire les animations");
-        self.preferences.set_reduced_motion(reduced_motion);
+        let response = ui.checkbox(&mut reduced_motion, "Réduire les animations");
+        if response.changed() {
+            self.preferences.set_reduced_motion(reduced_motion);
+            self.mark_changed();
+        }
 
         ui.add_space(8.0);
 
         let mut performance_mode = self.preferences.performance_mode();
-        ui.checkbox(&mut performance_mode, "Mode performance")
+        let response = ui.checkbox(&mut performance_mode, "Mode performance")
             .on_hover_text(
                 "Réduit les effets d'animation pour maintenir l'interface réactive sur du matériel moins puissant.",
             );
-        self.preferences.set_performance_mode(performance_mode);
+        if response.changed() {
+            self.preferences.set_performance_mode(performance_mode);
+            self.mark_changed();
+        }
     }
 
     // ========================
@@ -532,6 +547,7 @@ impl PreferencesPanel {
             if ui.button("Choisir").clicked() {
                 if let Some(path) = FileDialog::new().pick_folder() {
                     self.preferences.set_default_clone_path(path.display().to_string());
+                    self.pending_preferences = Some(self.preferences.clone());
                 }
             }
 
@@ -553,6 +569,7 @@ impl PreferencesPanel {
                         } else {
                             let selected = &response.selected_paths[0];
                             self.preferences.set_default_clone_path(selected.clone());
+                            self.pending_preferences = Some(self.preferences.clone());
                             self.native_dialog_status =
                                 Some(format!("Sélectionné: {}", selected));
                         }
@@ -625,15 +642,23 @@ impl PreferencesPanel {
         }
 
         ui.add_space(4.0);
+        let prev_use_https = network.use_https;
+        let prev_allow_ssh = network.allow_ssh;
         ui.horizontal(|ui| {
             ui.checkbox(&mut network.use_https, "Préférer HTTPS");
             ui.checkbox(&mut network.allow_ssh, "Autoriser SSH");
         });
+        if network.use_https != prev_use_https || network.allow_ssh != prev_allow_ssh {
+            self.pending_preferences = Some(self.preferences.clone());
+        }
 
         ui.add_space(8.0);
         let mut auto_fetch_enabled = self.preferences.auto_fetch_enabled();
-        ui.checkbox(&mut auto_fetch_enabled, "Récupération automatique des remotes");
-        self.preferences.set_auto_fetch_enabled(auto_fetch_enabled);
+        let response = ui.checkbox(&mut auto_fetch_enabled, "Récupération automatique des remotes");
+        if response.changed() {
+            self.preferences.set_auto_fetch_enabled(auto_fetch_enabled);
+            self.pending_preferences = Some(self.preferences.clone());
+        }
 
         if auto_fetch_enabled {
             ui.add_space(4.0);
@@ -680,7 +705,10 @@ impl PreferencesPanel {
                         {
                             selected_interval = current_interval;
                         }
-                        self.preferences.set_auto_fetch_interval_minutes(selected_interval);
+                        if selected_interval != current_interval {
+                            self.preferences.set_auto_fetch_interval_minutes(selected_interval);
+                            self.pending_preferences = Some(self.preferences.clone());
+                        }
                     });
                 });
 
@@ -742,10 +770,12 @@ impl PreferencesPanel {
 
         if let Some(index) = remove_index {
             self.preferences.keybindings_mut().remove(index);
+            self.pending_preferences = Some(self.preferences.clone());
         }
 
         if ui.button("Ajouter un raccourci").clicked() {
             self.preferences.keybindings_mut().push(Keybinding::default());
+            self.pending_preferences = Some(self.preferences.clone());
         }
 
         ui.add_space(20.0);
@@ -755,19 +785,23 @@ impl PreferencesPanel {
         ui.add_space(8.0);
 
         let mut auto_check = self.preferences.auto_check_updates();
-        ui.checkbox(&mut auto_check, "Vérifier automatiquement les mises à jour au lancement");
-        self.preferences.set_auto_check_updates(auto_check);
+        let response = ui.checkbox(&mut auto_check, "Vérifier automatiquement les mises à jour au lancement");
+        if response.changed() {
+            self.preferences.set_auto_check_updates(auto_check);
+            self.pending_preferences = Some(self.preferences.clone());
+        }
 
         ui.add_space(4.0);
         let icon_id = ui.make_persistent_id("prefs-release-icon");
+        let current_channel = self.preferences.release_channel();
         ComboBox::from_label(
             RichText::new("Canal de release").color(self.theme.palette.text_secondary),
         )
-        .selected_text(channel_label(self.preferences.release_channel()))
+        .selected_text(channel_label(current_channel))
         .icon(menu::combo_icon(Arc::clone(&self.theme), icon_id))
         .show_ui(ui, |ui| {
             menu::with_menu_popup_motion(ui, "prefs-release-menu", |ui| {
-                let mut selected_channel = self.preferences.release_channel();
+                let mut selected_channel = current_channel;
                 for channel in [ReleaseChannel::Stable, ReleaseChannel::Preview] {
                     if menu::menu_item(
                         ui,
@@ -781,7 +815,10 @@ impl PreferencesPanel {
                         selected_channel = channel;
                     }
                 }
-                self.preferences.set_release_channel(selected_channel);
+                if selected_channel != current_channel {
+                    self.preferences.set_release_channel(selected_channel);
+                    self.pending_preferences = Some(self.preferences.clone());
+                }
             });
         });
 
