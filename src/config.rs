@@ -357,38 +357,6 @@ impl Preferences {
         self.default_clone_path = expanded;
     }
 
-    /// Validates that the default clone path exists and is writable.
-    pub fn validate_clone_path(&self) -> Result<(), String> {
-        let path = std::path::Path::new(&self.default_clone_path);
-
-        if self.default_clone_path.trim().is_empty() {
-            return Err("Clone path cannot be empty".to_string());
-        }
-
-        // Check if path exists
-        if !path.exists() {
-            // Try to create it
-            if let Err(err) = std::fs::create_dir_all(path) {
-                return Err(format!("Cannot create clone directory: {err}"));
-            }
-        }
-
-        // Check if it's a directory
-        if !path.is_dir() {
-            return Err("Clone path must be a directory".to_string());
-        }
-
-        // Check if we can write to it (try to create a temp file)
-        let test_file = path.join(".gitspace_write_test");
-        match std::fs::write(&test_file, b"test") {
-            Ok(_) => {
-                let _ = std::fs::remove_file(&test_file);
-                Ok(())
-            }
-            Err(err) => Err(format!("Clone directory is not writable: {err}")),
-        }
-    }
-
     pub fn default_clone_path_mut(&mut self) -> &mut String {
         &mut self.default_clone_path
     }

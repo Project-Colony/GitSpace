@@ -24,7 +24,6 @@ pub enum MainTab {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum NavigationTrigger {
     Click,
-    Keyboard,
     ContextMenu,
     DragAndDrop,
 }
@@ -33,17 +32,6 @@ pub enum NavigationTrigger {
 pub struct NavigationSelection {
     pub tab: MainTab,
     pub trigger: NavigationTrigger,
-}
-
-impl NavigationTrigger {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Click => "click",
-            Self::Keyboard => "keyboard",
-            Self::ContextMenu => "context_menu",
-            Self::DragAndDrop => "drag_and_drop",
-        }
-    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
