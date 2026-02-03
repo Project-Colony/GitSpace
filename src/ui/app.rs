@@ -140,16 +140,11 @@ impl eframe::App for GitSpaceApp {
         let preferences_open = self.preferences_panel.show(ctx, &mut self.notifications);
 
         if !preferences_open {
-            if let Some(selection) = layout.sidebar(ctx, self.active_tab) {
+            if let Some(selection) =
+                layout.sidebar(ctx, self.active_tab, self.current_repo.as_ref())
+            {
                 if self.active_tab != selection.tab {
                     self.active_tab = selection.tab;
-                }
-            }
-            if !matches!(self.active_tab, MainTab::History | MainTab::Branches) {
-                if let Some(selection) = layout.right_panel(ctx, self.current_repo.as_ref()) {
-                    if self.active_tab != selection.tab {
-                        self.active_tab = selection.tab;
-                    }
                 }
             }
 
