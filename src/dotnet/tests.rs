@@ -1,3 +1,5 @@
+use std::sync::{Mutex, MutexGuard};
+
 use serde_json::json;
 
 use crate::dotnet::{DotnetClient, DotnetError, DotnetRequest};
@@ -20,11 +22,22 @@ fn skip_if_dotnet_unavailable(test_name: &str) -> bool {
     false
 }
 
+/// Each IPC test goes through `dotnet run`, which builds the helper first. On a
+/// fresh checkout, parallel builds of the same project race on its output.
+static HELPER_BUILD: Mutex<()> = Mutex::new(());
+
+fn lock_helper() -> MutexGuard<'static, ()> {
+    HELPER_BUILD
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 #[test]
 fn ipc_handshake_ping_ok() {
     if skip_if_dotnet_unavailable("IPC handshake test") {
         return;
     }
+    let _helper = lock_helper();
 
     let request = DotnetRequest {
         id: "req-test-handshake".to_string(),
@@ -67,6 +80,7 @@ fn ipc_credential_request_statuses() {
     if skip_if_dotnet_unavailable("credential.request test") {
         return;
     }
+    let _helper = lock_helper();
 
     let client = DotnetClient::helper();
 
@@ -106,6 +120,7 @@ fn ipc_library_call() {
     if skip_if_dotnet_unavailable("library.call test") {
         return;
     }
+    let _helper = lock_helper();
 
     let client = DotnetClient::helper();
 
