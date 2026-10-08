@@ -470,7 +470,7 @@ impl RepoOverviewPanel {
                 .args(["/K", "cd", "/d", &repo.path])
                 .spawn()
                 .map_err(|err| err.to_string())?;
-            return Ok("Terminal opened".to_string());
+            Ok("Terminal opened".to_string())
         }
 
         #[cfg(target_os = "macos")]
@@ -479,7 +479,7 @@ impl RepoOverviewPanel {
                 .args(["-a", "Terminal", &repo.path])
                 .spawn()
                 .map_err(|err| err.to_string())?;
-            return Ok("Terminal opened".to_string());
+            Ok("Terminal opened".to_string())
         }
 
         #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
