@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::{engine::general_purpose, Engine as _};
-use chacha20poly1305::aead::{Aead, KeyInit};
+use chacha20poly1305::aead::{Aead, AeadCore, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use keyring::Entry;
 use rand::rngs::OsRng;
@@ -446,14 +446,12 @@ impl TokenStorage {
 
 fn encrypt_tokens(map: &TokenMap, key: &[u8; 32]) -> Result<EncryptedTokenFile, String> {
     let cipher = ChaCha20Poly1305::new(Key::from_slice(key));
-    let mut nonce = [0u8; 12];
-    OsRng.fill_bytes(&mut nonce);
-    let nonce_obj = Nonce::from_slice(&nonce);
+    let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng);
 
     let serialized =
         serde_json::to_string(map).map_err(|err| format!("Failed to serialize tokens: {err}"))?;
     let encrypted = cipher
-        .encrypt(nonce_obj, serialized.as_bytes())
+        .encrypt(&nonce, serialized.as_bytes())
         .map_err(|err| format!("Failed to encrypt tokens: {err}"))?;
 
     Ok(EncryptedTokenFile {
@@ -701,4 +699,23 @@ pub fn extract_host(target: &str) -> Option<String> {
         .next()
         .filter(|segment| !segment.is_empty())
         .map(|h| h.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn token_encryption_round_trips_with_fresh_nonces() {
+        let key: [u8; 32] = ChaCha20Poly1305::generate_key(&mut OsRng).into();
+        let mut map = TokenMap::default();
+        map.tokens.insert("github.com".into(), "secret".into());
+
+        let first = encrypt_tokens(&map, &key).expect("encrypt");
+        let second = encrypt_tokens(&map, &key).expect("encrypt");
+        assert_ne!(first.nonce, second.nonce);
+
+        let decrypted = decrypt_tokens(&first, &key).expect("decrypt");
+        assert_eq!(decrypted.tokens, map.tokens);
+    }
 }
