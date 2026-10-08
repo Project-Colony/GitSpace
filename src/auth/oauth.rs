@@ -10,10 +10,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use oauth2::basic::{BasicClient, BasicTokenResponse};
-use oauth2::reqwest::http_client;
 use oauth2::{
-    AuthUrl, AuthorizationCode, ClientId, CsrfToken, PkceCodeChallenge, PkceCodeVerifier,
-    RedirectUrl, Scope, TokenResponse, TokenUrl,
+    AuthUrl, AuthorizationCode, ClientId, CsrfToken, EndpointNotSet, EndpointSet,
+    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope, TokenResponse, TokenUrl,
 };
 use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
@@ -130,7 +129,7 @@ pub enum OAuthResult {
 /// OAuth flow state.
 pub struct OAuthFlow {
     provider: OAuthProvider,
-    client: BasicClient,
+    client: BasicClient<EndpointSet, EndpointNotSet, EndpointNotSet, EndpointNotSet, EndpointSet>,
     pkce_verifier: Option<PkceCodeVerifier>,
     csrf_token: Option<CsrfToken>,
     redirect_port: u16,
@@ -142,19 +141,20 @@ impl OAuthFlow {
         let redirect_port = find_available_port()?;
         let redirect_url = format!("http://127.0.0.1:{}/callback", redirect_port);
 
-        let client = BasicClient::new(
-            ClientId::new(provider.client_id.clone()),
-            None, // No client secret for PKCE public clients
-            AuthUrl::new(provider.auth_url.clone())
-                .map_err(|e| format!("Invalid auth URL: {}", e))?,
-            Some(
+        // No client secret: PKCE public client.
+        let client = BasicClient::new(ClientId::new(provider.client_id.clone()))
+            .set_auth_uri(
+                AuthUrl::new(provider.auth_url.clone())
+                    .map_err(|e| format!("Invalid auth URL: {}", e))?,
+            )
+            .set_token_uri(
                 TokenUrl::new(provider.token_url.clone())
                     .map_err(|e| format!("Invalid token URL: {}", e))?,
-            ),
-        )
-        .set_redirect_uri(
-            RedirectUrl::new(redirect_url).map_err(|e| format!("Invalid redirect URL: {}", e))?,
-        );
+            )
+            .set_redirect_uri(
+                RedirectUrl::new(redirect_url)
+                    .map_err(|e| format!("Invalid redirect URL: {}", e))?,
+            );
 
         Ok(Self {
             provider,
@@ -288,11 +288,21 @@ impl OAuthFlow {
             "Exchanging authorization code for tokens"
         );
 
+        // Redirects stay off, as oauth2 recommends, so the token endpoint
+        // cannot bounce the request (and the code) elsewhere.
+        let http_client = match oauth2::reqwest::blocking::Client::builder()
+            .redirect(oauth2::reqwest::redirect::Policy::none())
+            .build()
+        {
+            Ok(client) => client,
+            Err(err) => return OAuthResult::Error(format!("Failed to build HTTP client: {err}")),
+        };
+
         let token_result = self
             .client
             .exchange_code(AuthorizationCode::new(code))
             .set_pkce_verifier(pkce_verifier)
-            .request(http_client);
+            .request(&http_client);
 
         match token_result {
             Ok(response) => {
