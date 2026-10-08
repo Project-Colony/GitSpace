@@ -2,6 +2,9 @@
 name = "GitSpace"
 version = "0.1.0"
 edition = "2021"
+description = "Desktop Git client that gathers your GitHub and GitLab repositories in one panel-based interface"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/Project-Colony/GitSpace"
 
 [features]
 default = []

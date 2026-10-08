@@ -1,60 +1,51 @@
 # GitSpace
 
-GitSpace is a Git hub application that centralizes multiple repositories in one modern, GitKraken-inspired interface. It is primarily implemented in Rust with planned .NET interoperability where it adds value (for example, leveraging existing .NET libraries or UI components).
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](LICENSE)
 
-## Goals
-- Provide an intuitive, panel-based GUI for browsing repositories, viewing history, and managing clones.
-- Make it easy to list, browse, download, and clone repositories from a single workspace.
-- Offer optional automated setup or installation steps for repositories when available.
+GitSpace is a desktop Git client that gathers your GitHub and GitLab repositories in one
+panel-based interface inspired by GitKraken. It is written in Rust with egui.
 
-## Prerequisites
-- **Rust** (latest stable toolchain) for building and running the application.
-- **.NET SDK 8.x** for any forthcoming .NET integration components.
-- **Git** for interacting with repositories.
+> **Status:** early development. The app builds and runs from source, but CI is not green
+> yet and there is no signed release. The only published build is an old unsigned Windows
+> prerelease. The update checker can report a new version but never installs one.
 
-## .NET Installation Notes
-- Follow the platform-specific instructions in [`docs/dotnet-setup.md`](docs/dotnet-setup.md).
-- Ensure the `dotnet` CLI is available on your `PATH`.
-- If you install the SDK to a custom location, set `DOTNET_ROOT` and add it to your `PATH`.
-- Optional: set `DOTNET_CLI_TELEMETRY_OPTOUT=1` to disable .NET CLI telemetry.
+## What it does
 
-## Key Dependencies
-- **eframe/egui** for the panel-based desktop UI (with WGPU rendering).
-- **git2** for repository operations (branches, status, history, stash, remotes).
-- **tracing** + **tracing-subscriber** for structured logging.
-- **reqwest** for networked features and update checks.
-- **keyring** + **chacha20poly1305** for secure credential handling.
+- Clone repositories from GitHub, GitLab or any Git URL, and keep a list of recent ones.
+- Browse a repository: overview, history, local and remote branches, staging with diffs,
+  stashes and remotes.
+- Branch actions: create, rename, delete, check out, merge, rebase and compare.
+- Sign in to GitHub and GitLab through OAuth or a personal access token. Tokens are kept in
+  the system keyring or in an encrypted local file.
+- Structured logs with rotation (`GITSPACE_LOG` sets the filter).
 
-## Current Functionality
-- Launches a multi-pane egui interface (`GitSpaceApp`) with logging configured out of the box.
-- Provides panels for cloning, recent repositories, repository overview, history, branches, staging, authentication, and settings.
-- Emits optional, anonymized telemetry about app and repository openings (with opt-out controls).
-- Implements git helpers for listing, creating, deleting, renaming, and checking out branches, along with status, history, diff, stash, and merge utilities.
+## Build from source
 
-## Architecture Overview
-- **UI (`src/ui/`)**: egui components and layout wiring for the GitKraken-inspired interface.
-- **Git (`src/git/`)**: wrappers around `git2` for repository operations consumed by the UI.
-- **Auth (`src/auth/`)**: authentication primitives to be wired into provider flows.
-- **Config (`src/config.rs`)**: user and runtime configuration settings.
-- **Telemetry (`src/telemetry.rs`)**: anonymized diagnostics with batching and user controls.
-- **Logging (`src/logging.rs`)**: structured log setup for the desktop app.
+Requirements:
 
-## Quick Start
-1. Install the prerequisites above.
-2. Clone this repository.
-3. Build the project:
-   ```bash
-   cargo build
-   ```
-4. Run the project:
-   ```bash
-   cargo run
-   ```
+- Rust (latest stable) and Git.
+- On Linux, the usual egui/wgpu system libraries (see `.github/workflows/ci.yml`).
+- Optional: the .NET 10 SDK, only for the experimental helper in `dotnet/`
+  (see [docs/dotnet-setup.md](docs/dotnet-setup.md)).
 
-## Project Structure
-- `src/` – Rust source code for the application entry point and modules.
-- `docs/` – High-level documentation about architecture, design, and decisions (see `docs/docs.md`).
-- `docs/telemetry.md` – Details on optional diagnostics, collected fields, batching, and how to purge data.
-- `tasks/` – Task tracking and folder conventions (see `tasks/tasks.md`).
+```bash
+git clone https://github.com/Project-Colony/GitSpace
+cd GitSpace
+cargo run --release
+```
 
-As the project grows, new folders will include their own documentation files following the conventions described in `tasks/tasks.md`.
+## Project layout
+
+- `src/ui/`: egui panels and layout.
+- `src/git/`: `git2` wrappers for repository operations.
+- `src/auth/`: OAuth and token storage.
+- `src/update.rs`: update check against the release feed.
+- `dotnet/` and `schemas/`: experimental .NET helper and its JSON contracts.
+- `docs/`: design notes and contributor guide ([docs/contrib.md](docs/contrib.md)).
+
+## License
+
+GitSpace is licensed under the [GNU General Public License v3.0 or later](LICENSE).
+
+The bundled JetBrains Mono Nerd Font files in `assets/JetBrainsMonoNerdFont/` are licensed
+under the SIL Open Font License 1.1 (see [OFL.txt](assets/JetBrainsMonoNerdFont/OFL.txt)).

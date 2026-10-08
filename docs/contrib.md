@@ -1,6 +1,6 @@
 # Contributing to GitSpace
 
-This guide outlines how to work on GitSpace so changes stay consistent and maintainable. Pair it with `docs.md` for folder context and `tasks/tasks.md` for open work.
+This guide outlines how to work on GitSpace so changes stay consistent and maintainable.
 
 ## Coding standards
 - **Rust edition**: Target Rust 2024 and keep the codebase `cargo fmt` clean. Formatting is configured via `rustfmt.toml`; run `cargo fmt-all` before opening a PR.
@@ -21,5 +21,4 @@ This guide outlines how to work on GitSpace so changes stay consistent and maint
 6. **PRs**: Summarize user-visible changes and validation steps. Mention enabled feature flags and logging changes when relevant.
 
 ## Folder expectations
-- Every folder includes a Markdown explainer (see `tasks/tasks.md` for the convention).
 - Keep documentation close to the implementation it describes; link files when cross-referencing.
