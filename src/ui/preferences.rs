@@ -1,19 +1,41 @@
-use std::sync::Arc;
+//! Panneau de preferences plein ecran avec sidebar et categories.
+//!
+//! Remplace le contenu principal quand ouvert. Utilise une sidebar
+//! gauche avec 4 categories et un contenu scrollable a droite.
 
-use eframe::egui::{
-    self, Align, ComboBox, Layout, Rect, RichText, Rounding, Sense, Slider, TextEdit, Ui, Vec2,
+use iced::widget::{
+    button, checkbox, column, container, horizontal_rule, pick_list, row, scrollable, slider, text,
+    text_input, Space,
 };
-use rfd::FileDialog;
+use iced::{Alignment, Color, Element, Length, Task};
 
 use crate::config::{
-    Keybinding, LoggingOptions, MotionIntensity, Preferences, ReleaseChannel, ThemeMode,
+    LoggingOptions, MotionIntensity, Preferences, ReleaseChannel, ThemeMode,
     MAX_LOG_RETENTION_FILES, MIN_LOG_RETENTION_FILES,
 };
-use crate::dotnet::{DialogOpenRequest, DialogOptions, DotnetClient};
-use crate::ui::menu;
-use crate::ui::notifications::{Notification, NotificationCenter};
-use crate::ui::theme::SharedTheme;
+use crate::ui::theme::{with_alpha, Theme};
 
+/// Modes de theme disponibles pour le pick_list.
+const THEME_MODES: &[ThemeMode] = &[
+    ThemeMode::Latte,
+    ThemeMode::Frappe,
+    ThemeMode::Macchiato,
+    ThemeMode::Mocha,
+];
+
+/// Canaux de release disponibles.
+const RELEASE_CHANNELS: &[ReleaseChannel] = &[ReleaseChannel::Stable, ReleaseChannel::Preview];
+
+/// Intensites de mouvement disponibles.
+const MOTION_INTENSITIES: &[MotionIntensity] = &[
+    MotionIntensity::Low,
+    MotionIntensity::Medium,
+    MotionIntensity::High,
+];
+
+// ─── Categories ───────────────────────────────────────────────────────────
+
+/// Categorie de la sidebar preferences.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PreferencesCategory {
     General,
@@ -30,92 +52,180 @@ impl PreferencesCategory {
         Self::GitSpace,
     ];
 
+    /// Libelle affiche dans la sidebar.
     pub fn label(&self) -> &'static str {
         match self {
-            Self::General => "Général",
+            Self::General => "General",
             Self::Appearance => "Apparences",
-            Self::Accessibility => "Accessibilité",
+            Self::Accessibility => "Accessibilite",
             Self::GitSpace => "GitSpace",
         }
     }
 
+    /// Icone affichee devant le libelle.
     pub fn icon(&self) -> &'static str {
         match self {
-            Self::General => "⚙",
-            Self::Appearance => "🎨",
-            Self::Accessibility => "♿",
-            Self::GitSpace => "📦",
+            Self::General => "\u{2699}",       // ⚙
+            Self::Appearance => "\u{1f3a8}",   // 🎨
+            Self::Accessibility => "\u{267f}", // ♿
+            Self::GitSpace => "\u{1f680}",     // 🚀
         }
     }
 }
 
+// ─── Messages ─────────────────────────────────────────────────────────────
+
+/// Messages emis par le panneau de preferences.
+#[derive(Debug, Clone)]
+pub enum Message {
+    /// Changer la categorie active dans la sidebar.
+    SelectCategory(PreferencesCategory),
+    /// Fermer le panneau de preferences.
+    Close,
+
+    // -- General --
+    /// Chemin de destination par defaut modifie.
+    DefaultClonePathChanged(String),
+    /// Ouvrir le selecteur de dossier.
+    BrowseClonePath,
+    /// Resultat du selecteur de dossier.
+    BrowseClonePathResult(Option<String>),
+    /// Proxy HTTP modifie.
+    HttpProxyChanged(String),
+    /// Proxy HTTPS modifie.
+    HttpsProxyChanged(String),
+    /// Timeout reseau modifie.
+    NetworkTimeoutChanged(String),
+    /// Preference HTTPS modifiee.
+    UseHttpsChanged(bool),
+    /// Permission SSH modifiee.
+    AllowSshChanged(bool),
+    /// Recuperation automatique activee/desactivee.
+    AutoFetchEnabledChanged(bool),
+    /// Intervalle de recuperation automatique modifie.
+    AutoFetchIntervalChanged(String),
+
+    // -- Apparences --
+    /// Mode de theme modifie.
+    ThemeModeChanged(ThemeMode),
+    /// Hauteur des controles modifiee.
+    ControlHeightChanged(f32),
+
+    // -- Accessibilite --
+    /// Intensite de mouvement modifiee.
+    MotionIntensityChanged(MotionIntensity),
+    /// Mouvement reduit active/desactive.
+    ReducedMotionChanged(bool),
+    /// Mode performance active/desactive.
+    PerformanceModeChanged(bool),
+
+    // -- GitSpace --
+    /// Nombre de fichiers de log conserves modifie.
+    RetentionFilesChanged(f32),
+    /// Stockage chiffre autorise/desautorise.
+    AllowEncryptedTokensChanged(bool),
+    /// Verification automatique des mises a jour modifiee.
+    AutoCheckUpdatesChanged(bool),
+    /// Canal de release modifie.
+    ReleaseChannelChanged(ReleaseChannel),
+    /// Feed de mise a jour personnalise modifie.
+    UpdateFeedOverrideChanged(String),
+    /// Verifier les mises a jour maintenant.
+    CheckForUpdates,
+    /// Importer les parametres.
+    ImportSettings,
+    /// Resultat de l'import.
+    ImportResult(Result<Preferences, String>),
+    /// Exporter les parametres.
+    ExportSettings,
+    /// Resultat de l'export.
+    ExportResult(Result<String, String>),
+
+    // -- Actions globales --
+    /// Sauvegarder les preferences.
+    SavePreferences,
+    /// Reinitialiser les preferences par defaut.
+    ResetDefaults,
+}
+
+// ─── Etat ─────────────────────────────────────────────────────────────────
+
+/// Panneau de preferences plein ecran.
 pub struct PreferencesPanel {
-    theme: SharedTheme,
+    /// Preferences courantes en cours d'edition.
     preferences: Preferences,
+    /// Options de journalisation courantes.
     logging: LoggingOptions,
+    /// Preferences en attente d'application par l'app.
     pending_preferences: Option<Preferences>,
+    /// Journalisation en attente d'application.
     pending_logging: Option<LoggingOptions>,
-    pending_control_height: Option<f32>,
+    /// Demande de verification de mise a jour.
+    update_request: bool,
+    /// Statut de mise a jour affiche.
+    update_status: Option<String>,
+    /// Statut import/export.
     import_status: Option<String>,
     export_status: Option<String>,
-    native_dialog_status: Option<String>,
-    update_request: bool,
-    update_status: Option<String>,
+    /// Le panneau est-il ouvert ?
     open: bool,
+    /// Categorie active de la sidebar.
     active_category: PreferencesCategory,
+    /// Tampon texte pour le timeout reseau.
+    timeout_buffer: String,
+    /// Tampon texte pour l'intervalle de fetch.
+    fetch_interval_buffer: String,
 }
 
 impl PreferencesPanel {
-    pub fn new(theme: SharedTheme, preferences: Preferences, logging: LoggingOptions) -> Self {
+    /// Cree un nouveau panneau de preferences.
+    pub fn new(preferences: Preferences, logging: LoggingOptions) -> Self {
+        let timeout_buffer = preferences.network().network_timeout_secs.to_string();
+        let fetch_interval_buffer = preferences.auto_fetch_interval_minutes().to_string();
         Self {
-            theme,
             preferences,
             logging,
             pending_preferences: None,
             pending_logging: None,
-            pending_control_height: None,
-            import_status: None,
-            export_status: None,
-            native_dialog_status: None,
             update_request: false,
             update_status: None,
+            import_status: None,
+            export_status: None,
             open: false,
             active_category: PreferencesCategory::General,
+            timeout_buffer,
+            fetch_interval_buffer,
         }
     }
 
-    pub fn set_theme(&mut self, theme: SharedTheme) {
-        self.theme = theme;
-    }
-
+    /// Met a jour les preferences depuis l'exterieur.
     pub fn set_preferences(&mut self, preferences: Preferences) {
+        self.timeout_buffer = preferences.network().network_timeout_secs.to_string();
+        self.fetch_interval_buffer = preferences.auto_fetch_interval_minutes().to_string();
         self.preferences = preferences;
     }
 
+    /// Le panneau est-il ouvert ?
     pub fn is_open(&self) -> bool {
         self.open
     }
 
+    /// Bascule l'ouverture du panneau.
     pub fn toggle(&mut self) {
         self.open = !self.open;
     }
 
-    pub fn close(&mut self) {
-        self.open = false;
-    }
-
+    /// Recupere les preferences en attente d'application.
     pub fn take_changes(&mut self) -> Option<Preferences> {
         self.pending_preferences.take()
     }
 
+    /// Recupere les changements de journalisation en attente.
     pub fn take_logging_changes(&mut self) -> Option<LoggingOptions> {
         self.pending_logging.take()
     }
 
-    pub fn take_control_height_change(&mut self) -> Option<f32> {
-        self.pending_control_height.take()
-    }
-
+    /// Indique si une verification de mise a jour a ete demandee.
     pub fn take_update_request(&mut self) -> bool {
         if self.update_request {
             self.update_request = false;
@@ -124,791 +234,957 @@ impl PreferencesPanel {
         false
     }
 
+    /// Definit le statut de mise a jour affiche.
     pub fn set_update_status<S: Into<String>>(&mut self, status: S) {
         self.update_status = Some(status.into());
     }
 
-    /// Mark preferences as changed (triggers auto-save)
-    fn mark_changed(&mut self) {
-        self.pending_preferences = Some(self.preferences.clone());
-        self.pending_logging = Some(self.logging);
-    }
+    // ─── Update ───────────────────────────────────────────────────────
 
-    /// Show the preferences as a fullscreen panel (replaces all other content)
-    /// Returns true if the panel is open (caller should skip rendering other panels)
-    pub fn show(&mut self, ctx: &egui::Context, notifications: &mut NotificationCenter) -> bool {
-        if !self.open {
-            return false;
-        }
+    /// Traite un message et renvoie une tache Iced.
+    pub fn update(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::SelectCategory(cat) => {
+                self.active_category = cat;
+                Task::none()
+            }
+            Message::Close => {
+                self.open = false;
+                Task::none()
+            }
 
-        // Fullscreen panel that covers everything below the header
-        egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(self.theme.palette.background))
-            .show(ctx, |ui| {
-                self.ui_content(ui, notifications);
-            });
-
-        // Close on escape key
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            self.open = false;
-        }
-
-        true
-    }
-
-    fn ui_content(&mut self, ui: &mut Ui, notifications: &mut NotificationCenter) {
-        let available_size = ui.available_size();
-        let sidebar_width = 180.0;
-
-        ui.horizontal(|ui| {
-            // Sidebar
-            ui.vertical(|ui| {
-                ui.set_width(sidebar_width);
-                ui.set_min_height(available_size.y - 60.0);
-
-                ui.add_space(8.0);
-
-                for category in PreferencesCategory::ALL {
-                    let is_selected = self.active_category == category;
-                    self.sidebar_item(ui, category, is_selected);
+            // -- General --
+            Message::DefaultClonePathChanged(path) => {
+                self.preferences.set_default_clone_path(path);
+                Task::none()
+            }
+            Message::BrowseClonePath => Task::perform(
+                tokio::task::spawn_blocking(|| {
+                    rfd::FileDialog::new()
+                        .pick_folder()
+                        .map(|p| p.display().to_string())
+                }),
+                |result| Message::BrowseClonePathResult(result.ok().flatten()),
+            ),
+            Message::BrowseClonePathResult(Some(path)) => {
+                self.preferences.set_default_clone_path(path);
+                Task::none()
+            }
+            Message::BrowseClonePathResult(None) => Task::none(),
+            Message::HttpProxyChanged(val) => {
+                self.preferences.network_mut().http_proxy = val;
+                Task::none()
+            }
+            Message::HttpsProxyChanged(val) => {
+                self.preferences.network_mut().https_proxy = val;
+                Task::none()
+            }
+            Message::NetworkTimeoutChanged(val) => {
+                self.timeout_buffer = val.clone();
+                if let Ok(secs) = val.trim().parse::<u64>() {
+                    self.preferences.network_mut().network_timeout_secs = secs;
                 }
+                Task::none()
+            }
+            Message::UseHttpsChanged(val) => {
+                self.preferences.network_mut().use_https = val;
+                Task::none()
+            }
+            Message::AllowSshChanged(val) => {
+                self.preferences.network_mut().allow_ssh = val;
+                Task::none()
+            }
+            Message::AutoFetchEnabledChanged(val) => {
+                self.preferences.set_auto_fetch_enabled(val);
+                Task::none()
+            }
+            Message::AutoFetchIntervalChanged(val) => {
+                self.fetch_interval_buffer = val.clone();
+                if let Ok(minutes) = val.trim().parse::<u64>() {
+                    if minutes > 0 {
+                        self.preferences.set_auto_fetch_interval_minutes(minutes);
+                    }
+                }
+                Task::none()
+            }
 
-                ui.with_layout(Layout::bottom_up(Align::LEFT), |ui| {
-                    ui.add_space(8.0);
-                    ui.horizontal(|ui| {
-                        if ui.button("Fermer").clicked() {
-                            self.open = false;
+            // -- Apparences --
+            Message::ThemeModeChanged(mode) => {
+                self.preferences.set_theme_mode(mode);
+                // Applique immediatement le changement de theme
+                self.pending_preferences = Some(self.preferences.clone());
+                Task::none()
+            }
+            Message::ControlHeightChanged(height) => {
+                self.preferences.set_control_height(height);
+                Task::none()
+            }
+
+            // -- Accessibilite --
+            Message::MotionIntensityChanged(intensity) => {
+                self.preferences.set_motion_intensity(intensity);
+                Task::none()
+            }
+            Message::ReducedMotionChanged(val) => {
+                self.preferences.set_reduced_motion(val);
+                Task::none()
+            }
+            Message::PerformanceModeChanged(val) => {
+                self.preferences.set_performance_mode(val);
+                Task::none()
+            }
+
+            // -- GitSpace --
+            Message::RetentionFilesChanged(val) => {
+                self.logging.set_retention_files(val as usize);
+                Task::none()
+            }
+            Message::AllowEncryptedTokensChanged(val) => {
+                self.preferences.set_allow_encrypted_tokens(val);
+                Task::none()
+            }
+            Message::AutoCheckUpdatesChanged(val) => {
+                self.preferences.set_auto_check_updates(val);
+                Task::none()
+            }
+            Message::ReleaseChannelChanged(channel) => {
+                self.preferences.set_release_channel(channel);
+                Task::none()
+            }
+            Message::UpdateFeedOverrideChanged(val) => {
+                self.preferences.set_update_feed_override(Some(val));
+                Task::none()
+            }
+            Message::CheckForUpdates => {
+                self.update_request = true;
+                self.update_status = Some("Verification des mises a jour...".to_string());
+                Task::none()
+            }
+            Message::ImportSettings => Task::perform(
+                tokio::task::spawn_blocking(|| {
+                    let path = rfd::FileDialog::new()
+                        .add_filter("JSON", &["json"])
+                        .pick_file();
+                    match path {
+                        Some(p) => {
+                            Preferences::from_path(&p).map_err(|e| e.to_string())
                         }
-                    });
-                });
-            });
-
-            // Separator
-            ui.separator();
-
-            // Content area
-            ui.vertical(|ui| {
-                ui.set_min_width(available_size.x - sidebar_width - 20.0);
-
-                egui::ScrollArea::vertical()
-                    .id_source("preferences_content")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        ui.add_space(8.0);
-
-                        match self.active_category {
-                            PreferencesCategory::General => self.general_content(ui, notifications),
-                            PreferencesCategory::Appearance => self.appearance_content(ui),
-                            PreferencesCategory::Accessibility => self.accessibility_content(ui),
-                            PreferencesCategory::GitSpace => self.gitspace_content(ui, notifications),
+                        None => Err("Import annule".to_string()),
+                    }
+                }),
+                |result| match result {
+                    Ok(inner) => Message::ImportResult(inner),
+                    Err(err) => Message::ImportResult(Err(err.to_string())),
+                },
+            ),
+            Message::ImportResult(result) => {
+                match result {
+                    Ok(prefs) => {
+                        self.preferences = prefs.clone();
+                        self.pending_preferences = Some(prefs);
+                        self.import_status =
+                            Some("Preferences importees avec succes".to_string());
+                    }
+                    Err(e) => {
+                        self.import_status = Some(format!("Erreur d'import : {e}"));
+                    }
+                }
+                Task::none()
+            }
+            Message::ExportSettings => {
+                let prefs = self.preferences.clone();
+                Task::perform(
+                    tokio::task::spawn_blocking(move || {
+                        let path = rfd::FileDialog::new()
+                            .add_filter("JSON", &["json"])
+                            .set_file_name("gitspace-preferences.json")
+                            .save_file();
+                        match path {
+                            Some(p) => prefs
+                                .save_to_path(&p)
+                                .map(|_| p.display().to_string())
+                                .map_err(|e| e.to_string()),
+                            None => Err("Export annule".to_string()),
                         }
+                    }),
+                    |result| match result {
+                        Ok(inner) => Message::ExportResult(inner),
+                        Err(err) => Message::ExportResult(Err(err.to_string())),
+                    },
+                )
+            }
+            Message::ExportResult(result) => {
+                match result {
+                    Ok(path) => {
+                        self.export_status =
+                            Some(format!("Preferences exportees dans {path}"));
+                    }
+                    Err(e) => {
+                        self.export_status = Some(format!("Erreur d'export : {e}"));
+                    }
+                }
+                Task::none()
+            }
 
-                        ui.add_space(16.0);
-                    });
-            });
-        });
+            // -- Actions globales --
+            Message::SavePreferences => {
+                self.pending_preferences = Some(self.preferences.clone());
+                self.pending_logging = Some(self.logging);
+                Task::none()
+            }
+            Message::ResetDefaults => {
+                self.preferences = Preferences::default();
+                self.logging = LoggingOptions::default();
+                self.timeout_buffer =
+                    self.preferences.network().network_timeout_secs.to_string();
+                self.fetch_interval_buffer =
+                    self.preferences.auto_fetch_interval_minutes().to_string();
+                self.pending_preferences = Some(self.preferences.clone());
+                self.pending_logging = Some(self.logging);
+                Task::none()
+            }
+        }
     }
 
-    fn sidebar_item(&mut self, ui: &mut Ui, category: PreferencesCategory, is_selected: bool) {
-        let item_height = 36.0;
-        let (rect, response) = ui.allocate_exact_size(
-            Vec2::new(ui.available_width() - 8.0, item_height),
-            Sense::click(),
-        );
+    // ─── View ─────────────────────────────────────────────────────────
 
-        let bg_color = if is_selected {
-            self.theme.palette.surface_highlight
-        } else if response.hovered() {
-            self.theme.palette.surface.linear_multiply(1.1)
-        } else {
-            egui::Color32::TRANSPARENT
+    /// Construit la vue plein ecran du panneau de preferences.
+    /// Retourne `None` si le panneau est ferme.
+    pub fn view<'a>(&'a self, theme: &'a Theme) -> Option<Element<'a, Message>> {
+        if !self.open {
+            return None;
+        }
+        let palette = &theme.palette;
+
+        // Sidebar gauche
+        let sidebar = self.view_sidebar(theme);
+
+        // Contenu a droite selon la categorie
+        let content_area = match self.active_category {
+            PreferencesCategory::General => self.view_general(theme),
+            PreferencesCategory::Appearance => self.view_appearance(theme),
+            PreferencesCategory::Accessibility => self.view_accessibility(theme),
+            PreferencesCategory::GitSpace => self.view_gitspace(theme),
         };
 
-        ui.painter().rect_filled(rect, Rounding::same(6.0), bg_color);
+        // Boutons Sauvegarder / Reinitialiser en bas du contenu
+        let actions = self.view_content_actions(theme);
+
+        let right_panel = column![
+            scrollable(
+                container(content_area)
+                    .width(Length::Fill)
+                    .padding(theme.spacing.lg)
+            )
+            .width(Length::Fill)
+            .height(Length::Fill),
+            container(actions)
+                .width(Length::Fill)
+                .padding([theme.spacing.sm, theme.spacing.lg]),
+        ]
+        .width(Length::Fill)
+        .height(Length::Fill);
+
+        // Separateur vertical simule par un container colore
+        let separator = container(Space::with_width(1))
+            .height(Length::Fill)
+            .style(move |_: &iced::Theme| container::Style {
+                background: Some(palette.surface_highlight.into()),
+                ..Default::default()
+            });
+
+        let layout = row![sidebar, separator, right_panel]
+            .width(Length::Fill)
+            .height(Length::Fill);
+
+        let panel = container(layout)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(move |_: &iced::Theme| container::Style {
+                background: Some(palette.background.into()),
+                ..Default::default()
+            });
+
+        Some(panel.into())
+    }
+
+    // ─── Sidebar ──────────────────────────────────────────────────────
+
+    /// Construit la sidebar avec les categories et le bouton fermer.
+    fn view_sidebar<'a>(&'a self, theme: &'a Theme) -> Element<'a, Message> {
+        let palette = &theme.palette;
+        let typo = &theme.typography;
+
+        let mut sidebar_items = column![
+            Space::with_height(theme.spacing.sm),
+            text("Preferences")
+                .size(typo.title)
+                .color(palette.text_primary),
+            Space::with_height(theme.spacing.md),
+        ]
+        .spacing(2);
+
+        // Boutons de categories
+        for cat in PreferencesCategory::ALL {
+            let is_selected = self.active_category == cat;
+            sidebar_items = sidebar_items.push(
+                self.view_sidebar_button(theme, cat, is_selected),
+            );
+        }
+
+        // Espace flexible pour pousser le bouton Fermer en bas
+        sidebar_items = sidebar_items.push(Space::with_height(Length::Fill));
+
+        // Bouton Fermer
+        let close_accent = palette.accent;
+        let close_text_color = palette.text_primary;
+        let close_surface = palette.surface_highlight;
+        let close_btn = button(
+            text("Fermer")
+                .size(typo.body)
+                .color(close_text_color),
+        )
+        .on_press(Message::Close)
+        .padding([6, 12])
+        .width(Length::Fill)
+        .style(move |_: &iced::Theme, status| {
+            let bg = match status {
+                button::Status::Hovered => with_alpha(close_accent, 0.2),
+                button::Status::Pressed => with_alpha(close_accent, 0.3),
+                _ => with_alpha(close_surface, 0.3),
+            };
+            button::Style {
+                background: Some(bg.into()),
+                border: iced::Border {
+                    radius: 6.0.into(),
+                    ..Default::default()
+                },
+                text_color: close_text_color,
+                ..Default::default()
+            }
+        });
+
+        sidebar_items = sidebar_items.push(close_btn);
+        sidebar_items = sidebar_items.push(Space::with_height(theme.spacing.sm));
+
+        container(sidebar_items.padding(theme.spacing.sm))
+            .width(200)
+            .height(Length::Fill)
+            .style(move |_: &iced::Theme| container::Style {
+                background: Some(palette.surface.into()),
+                ..Default::default()
+            })
+            .into()
+    }
+
+    /// Construit un bouton de sidebar pour une categorie.
+    fn view_sidebar_button<'a>(
+        &'a self,
+        theme: &'a Theme,
+        category: PreferencesCategory,
+        is_selected: bool,
+    ) -> Element<'a, Message> {
+        let palette = &theme.palette;
+        let typo = &theme.typography;
 
         let text_color = if is_selected {
-            self.theme.palette.accent
+            palette.accent
         } else {
-            self.theme.palette.text_primary
+            palette.text_primary
+        };
+        let accent = palette.accent;
+        let surface_hl = palette.surface_highlight;
+
+        let label_text = format!("{} {}", category.icon(), category.label());
+
+        let content = row![
+            // Indicateur accent a gauche si selectionne
+            if is_selected {
+                container(Space::with_width(3))
+                    .height(24)
+                    .style(move |_: &iced::Theme| container::Style {
+                        background: Some(accent.into()),
+                        border: iced::Border {
+                            radius: 2.0.into(),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    })
+            } else {
+                container(Space::with_width(3)).height(24)
+            },
+            Space::with_width(6),
+            text(label_text)
+                .size(typo.body)
+                .color(text_color),
+        ]
+        .align_y(Alignment::Center);
+
+        let selected_bg = if is_selected {
+            with_alpha(surface_hl, 0.4)
+        } else {
+            Color::TRANSPARENT
         };
 
-        let icon_rect = Rect::from_min_size(
-            rect.min + Vec2::new(12.0, (item_height - 16.0) / 2.0),
-            Vec2::splat(16.0),
-        );
-        ui.painter().text(
-            icon_rect.center(),
-            egui::Align2::CENTER_CENTER,
-            category.icon(),
-            egui::FontId::proportional(14.0),
-            text_color,
-        );
-
-        let text_pos = rect.min + Vec2::new(36.0, (item_height - 14.0) / 2.0);
-        ui.painter().text(
-            text_pos,
-            egui::Align2::LEFT_TOP,
-            category.label(),
-            egui::FontId::proportional(14.0),
-            text_color,
-        );
-
-        if is_selected {
-            let indicator_rect = Rect::from_min_size(
-                rect.min,
-                Vec2::new(3.0, item_height),
-            );
-            ui.painter().rect_filled(
-                indicator_rect,
-                Rounding::ZERO,
-                self.theme.palette.accent,
-            );
-        }
-
-        if response.clicked() {
-            self.active_category = category;
-        }
-
-        ui.add_space(2.0);
-    }
-
-    // ========================
-    // Général (General) section
-    // ========================
-    fn general_content(&mut self, ui: &mut Ui, notifications: &mut NotificationCenter) {
-        ui.heading(RichText::new("Général").color(self.theme.palette.text_primary));
-        ui.label(
-            RichText::new("Paramètres généraux de l'application")
-                .color(self.theme.palette.text_secondary),
-        );
-        ui.add_space(16.0);
-
-        // Privacy subsection
-        self.section_header(ui, "Confidentialité", "Contrôlez le stockage des tokens et la sécurité");
-        ui.add_space(8.0);
-
-        let mut encrypted_tokens = self.preferences.allow_encrypted_tokens();
-        let response = ui.checkbox(
-            &mut encrypted_tokens,
-            "Autoriser le stockage chiffré si le trousseau natif n'est pas disponible",
-        )
-        .on_hover_text(
-            "GitSpace utilise le trousseau du système par défaut. Activez cette option pour utiliser un fichier chiffré local si l'accès au trousseau échoue.",
-        );
-        if response.changed() {
-            self.preferences.set_allow_encrypted_tokens(encrypted_tokens);
-            self.mark_changed();
-        }
-
-        ui.add_space(20.0);
-
-        // Logging subsection
-        self.section_header(ui, "Journalisation", "Configurez le nombre de fichiers de log conservés");
-        ui.add_space(8.0);
-
-        let mut retention_files = self.logging.retention_files() as u32;
-        let response = ui.add(
-            Slider::new(
-                &mut retention_files,
-                MIN_LOG_RETENTION_FILES as u32..=MAX_LOG_RETENTION_FILES as u32,
-            )
-            .text("Fichiers de log conservés"),
-        );
-        if response.changed() {
-            self.logging.set_retention_files(retention_files as usize);
-            self.mark_changed();
-        }
-
-        ui.add_space(20.0);
-
-        // Import/Export subsection
-        self.section_header(ui, "Import / Export", "Transférez vos préférences entre machines au format JSON");
-        ui.add_space(8.0);
-
-        ui.horizontal(|ui| {
-            if ui.button("Importer les paramètres").clicked() {
-                if let Some(path) = FileDialog::new().add_filter("JSON", &["json"]).pick_file() {
-                    match Preferences::from_path(&path) {
-                        Ok(prefs) => {
-                            self.preferences = prefs.clone();
-                            self.pending_preferences = Some(prefs);
-                            self.import_status =
-                                Some(format!("Préférences importées depuis {}", path.display()));
-                        }
-                        Err(err) => {
-                            self.import_status = Some(err.to_string());
-                        }
+        button(content)
+            .on_press(Message::SelectCategory(category))
+            .padding([6, 8])
+            .width(Length::Fill)
+            .style(move |_: &iced::Theme, status| {
+                let bg = match status {
+                    button::Status::Hovered if !is_selected => {
+                        with_alpha(surface_hl, 0.25)
                     }
-                }
-            }
-
-            if ui.button("Exporter les paramètres").clicked() {
-                if let Some(path) = FileDialog::new()
-                    .add_filter("JSON", &["json"])
-                    .set_file_name("gitspace-preferences.json")
-                    .save_file()
-                {
-                    match self.preferences.save_to_path(&path) {
-                        Ok(_) => {
-                            self.export_status =
-                                Some(format!("Préférences sauvegardées dans {}", path.display()));
-                        }
-                        Err(err) => self.export_status = Some(err.to_string()),
-                    }
-                }
-            }
-        });
-
-        if let Some(status) = &self.import_status {
-            ui.add_space(4.0);
-            ui.label(RichText::new(status).color(self.theme.palette.text_secondary));
-        }
-        if let Some(status) = &self.export_status {
-            ui.add_space(4.0);
-            ui.label(RichText::new(status).color(self.theme.palette.text_secondary));
-        }
-
-        ui.add_space(20.0);
-
-        // Reset button only (changes are auto-saved)
-        if ui.button("Réinitialiser par défaut").clicked() {
-            self.preferences = Preferences::default();
-            self.logging = LoggingOptions::default();
-            self.mark_changed();
-        }
-    }
-
-    // ========================
-    // Apparences (Appearance) section
-    // ========================
-    fn appearance_content(&mut self, ui: &mut Ui) {
-        ui.heading(RichText::new("Apparences").color(self.theme.palette.text_primary));
-        ui.label(
-            RichText::new("Personnalisez l'apparence de GitSpace")
-                .color(self.theme.palette.text_secondary),
-        );
-        ui.add_space(16.0);
-
-        // Theme subsection
-        self.section_header(ui, "Thème", "Choisissez un thème Catppuccin pour l'interface");
-        ui.add_space(8.0);
-
-        let icon_id = ui.make_persistent_id("prefs-theme-icon");
-        ComboBox::from_label(
-            RichText::new("Thème").color(self.theme.palette.text_secondary),
-        )
-        .selected_text(mode_label(self.preferences.theme_mode()))
-        .icon(menu::combo_icon(Arc::clone(&self.theme), icon_id))
-        .show_ui(ui, |ui| {
-            menu::with_menu_popup_motion(ui, "prefs-theme-menu", |ui| {
-                let current_mode = self.preferences.theme_mode();
-                let mut selected_mode = current_mode;
-                for mode in [
-                    ThemeMode::Latte,
-                    ThemeMode::Frappe,
-                    ThemeMode::Macchiato,
-                    ThemeMode::Mocha,
-                ] {
-                    if menu::menu_item(
-                        ui,
-                        &self.theme,
-                        ("prefs-theme-item", mode_label(mode)),
-                        mode_label(mode),
-                        selected_mode == mode,
-                    )
-                    .clicked()
-                    {
-                        selected_mode = mode;
-                    }
-                }
-                if selected_mode != current_mode {
-                    self.preferences.set_theme_mode(selected_mode);
-                    self.pending_preferences = Some(self.preferences.clone());
-                }
-            });
-        });
-
-        ui.add_space(16.0);
-
-        // Control height subsection
-        self.section_header(ui, "Taille des contrôles", "Ajustez la hauteur des éléments de l'interface");
-        ui.add_space(8.0);
-
-        let mut control_height = self.preferences.control_height();
-        let response = ui.add(Slider::new(&mut control_height, 20.0..=48.0).text("Hauteur"));
-        if response.changed() {
-            self.preferences.set_control_height(control_height);
-            self.pending_control_height = Some(control_height);
-            self.mark_changed();
-        }
-    }
-
-    // ========================
-    // Accessibilité (Accessibility) section
-    // ========================
-    fn accessibility_content(&mut self, ui: &mut Ui) {
-        ui.heading(RichText::new("Accessibilité").color(self.theme.palette.text_primary));
-        ui.label(
-            RichText::new("Options d'accessibilité et de mouvement")
-                .color(self.theme.palette.text_secondary),
-        );
-        ui.add_space(16.0);
-
-        // Motion subsection
-        self.section_header(ui, "Animations", "Contrôlez l'intensité et les préférences d'animation");
-        ui.add_space(8.0);
-
-        let icon_id = ui.make_persistent_id("prefs-motion-intensity-icon");
-        ComboBox::from_label(
-            RichText::new("Intensité des animations").color(self.theme.palette.text_secondary),
-        )
-        .selected_text(motion_intensity_label(self.preferences.motion_intensity()))
-        .icon(menu::combo_icon(Arc::clone(&self.theme), icon_id))
-        .show_ui(ui, |ui| {
-            menu::with_menu_popup_motion(ui, "prefs-motion-intensity-menu", |ui| {
-                let current_intensity = self.preferences.motion_intensity();
-                let mut selected_intensity = current_intensity;
-                for intensity in [
-                    MotionIntensity::Low,
-                    MotionIntensity::Medium,
-                    MotionIntensity::High,
-                ] {
-                    if menu::menu_item(
-                        ui,
-                        &self.theme,
-                        (
-                            "prefs-motion-intensity-item",
-                            motion_intensity_label(intensity),
-                        ),
-                        motion_intensity_label(intensity),
-                        selected_intensity == intensity,
-                    )
-                    .clicked()
-                    {
-                        selected_intensity = intensity;
-                    }
-                }
-                if selected_intensity != current_intensity {
-                    self.preferences.set_motion_intensity(selected_intensity);
-                    self.pending_preferences = Some(self.preferences.clone());
-                }
-            });
-        });
-
-        ui.add_space(12.0);
-
-        let mut reduced_motion = self.preferences.reduced_motion();
-        let response = ui.checkbox(&mut reduced_motion, "Réduire les animations");
-        if response.changed() {
-            self.preferences.set_reduced_motion(reduced_motion);
-            self.mark_changed();
-        }
-
-        ui.add_space(8.0);
-
-        let mut performance_mode = self.preferences.performance_mode();
-        let response = ui.checkbox(&mut performance_mode, "Mode performance")
-            .on_hover_text(
-                "Réduit les effets d'animation pour maintenir l'interface réactive sur du matériel moins puissant.",
-            );
-        if response.changed() {
-            self.preferences.set_performance_mode(performance_mode);
-            self.mark_changed();
-        }
-    }
-
-    // ========================
-    // GitSpace section
-    // ========================
-    fn gitspace_content(&mut self, ui: &mut Ui, notifications: &mut NotificationCenter) {
-        ui.heading(RichText::new("GitSpace").color(self.theme.palette.text_primary));
-        ui.label(
-            RichText::new("Paramètres spécifiques à GitSpace")
-                .color(self.theme.palette.text_secondary),
-        );
-        ui.add_space(16.0);
-
-        // Repositories subsection
-        self.section_header(ui, "Dépôts", "Contrôlez les paramètres par défaut pour les clones");
-        ui.add_space(8.0);
-
-        let control_height = ui.spacing().interact_size.y;
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new("Destination par défaut")
-                    .color(self.theme.palette.text_secondary),
-            );
-            ui.add_sized(
-                [280.0, control_height],
-                TextEdit::singleline(self.preferences.default_clone_path_mut())
-                    .hint_text("/home/me/code"),
-            );
-
-            if ui.button("Choisir").clicked() {
-                if let Some(path) = FileDialog::new().pick_folder() {
-                    self.preferences.set_default_clone_path(path.display().to_string());
-                    self.pending_preferences = Some(self.preferences.clone());
-                }
-            }
-
-            if ui.button("Choisir (natif)").clicked() {
-                let request = DialogOpenRequest {
-                    kind: "open_folder".to_string(),
-                    title: Some("Sélectionner la destination par défaut".to_string()),
-                    filters: Vec::new(),
-                    options: DialogOptions {
-                        multi_select: false,
-                        show_hidden: false,
+                    button::Status::Pressed => with_alpha(surface_hl, 0.5),
+                    _ => selected_bg,
+                };
+                button::Style {
+                    background: Some(bg.into()),
+                    border: iced::Border {
+                        radius: 6.0.into(),
+                        ..Default::default()
                     },
-                };
-                match DotnetClient::helper().dialog_open(request) {
-                    Ok(response) => {
-                        if response.cancelled || response.selected_paths.is_empty() {
-                            self.native_dialog_status =
-                                Some("Dialogue natif annulé.".to_string());
-                        } else {
-                            let selected = &response.selected_paths[0];
-                            self.preferences.set_default_clone_path(selected.clone());
-                            self.pending_preferences = Some(self.preferences.clone());
-                            self.native_dialog_status =
-                                Some(format!("Sélectionné: {}", selected));
-                        }
-                    }
-                    Err(err) => {
-                        notifications.push(Notification::error(
-                            "Helper natif échoué",
-                            err.user_message(),
-                        ));
-                        self.native_dialog_status =
-                            Some(format!("Helper natif échoué: {}", err));
-                    }
+                    text_color,
+                    ..Default::default()
                 }
-            }
-        });
+            })
+            .into()
+    }
 
-        if let Some(status) = &self.native_dialog_status {
-            ui.add_space(4.0);
-            ui.label(RichText::new(status).color(self.theme.palette.text_secondary));
-        }
+    // ─── Boutons d'actions bas du contenu ──────────────────────────────
 
-        ui.add_space(20.0);
+    /// Boutons Sauvegarder et Reinitialiser en bas du contenu.
+    fn view_content_actions<'a>(&'a self, theme: &'a Theme) -> Element<'a, Message> {
+        let palette = &theme.palette;
+        let typo = &theme.typography;
 
-        // Network subsection
-        self.section_header(ui, "Réseau", "Configurez les paramètres réseau et proxy");
-        ui.add_space(8.0);
+        let accent = palette.accent;
+        let surface_hl = palette.surface_highlight;
+        let text_primary = palette.text_primary;
+        let bg_color = palette.background;
 
-        let network = self.preferences.network_mut();
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("Proxy HTTP").color(self.theme.palette.text_secondary));
-            ui.add_sized(
-                [200.0, control_height],
-                TextEdit::singleline(&mut network.http_proxy)
-                    .hint_text("http://proxy:8080"),
-            );
-        });
-
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("Proxy HTTPS").color(self.theme.palette.text_secondary));
-            ui.add_sized(
-                [200.0, control_height],
-                TextEdit::singleline(&mut network.https_proxy)
-                    .hint_text("https://proxy:8443"),
-            );
-        });
-
-        ui.add_space(4.0);
-        let mut timeout_error = None;
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("Timeout (sec)").color(self.theme.palette.text_secondary));
-            let mut timeout_str = network.network_timeout_secs.to_string();
-            let response = ui.add_sized(
-                [90.0, control_height],
-                TextEdit::singleline(&mut timeout_str),
-            );
-            if response.changed() {
-                match timeout_str.trim().parse::<u64>() {
-                    Ok(parsed) => {
-                        network.network_timeout_secs = parsed;
-                    }
-                    Err(_) => {
-                        timeout_error = Some("Veuillez entrer un nombre valide".to_string());
-                    }
-                }
-            }
-        });
-        if let Some(error) = timeout_error {
-            ui.colored_label(self.theme.palette.accent, error);
-        }
-
-        ui.add_space(4.0);
-        let prev_use_https = network.use_https;
-        let prev_allow_ssh = network.allow_ssh;
-        ui.horizontal(|ui| {
-            ui.checkbox(&mut network.use_https, "Préférer HTTPS");
-            ui.checkbox(&mut network.allow_ssh, "Autoriser SSH");
-        });
-        if network.use_https != prev_use_https || network.allow_ssh != prev_allow_ssh {
-            self.pending_preferences = Some(self.preferences.clone());
-        }
-
-        ui.add_space(8.0);
-        let mut auto_fetch_enabled = self.preferences.auto_fetch_enabled();
-        let response = ui.checkbox(&mut auto_fetch_enabled, "Récupération automatique des remotes");
-        if response.changed() {
-            self.preferences.set_auto_fetch_enabled(auto_fetch_enabled);
-            self.pending_preferences = Some(self.preferences.clone());
-        }
-
-        if auto_fetch_enabled {
-            ui.add_space(4.0);
-            ui.add_enabled_ui(true, |ui| {
-                let icon_id = ui.make_persistent_id("prefs-auto-fetch-interval-icon");
-                let preset_intervals = [1_u64, 5, 15];
-                let current_interval = self.preferences.auto_fetch_interval_minutes();
-                let selected_text = if preset_intervals.contains(&current_interval) {
-                    auto_fetch_interval_label(current_interval)
-                } else {
-                    "Personnalisé".to_string()
-                };
-                ComboBox::from_label(
-                    RichText::new("Intervalle de récupération")
-                        .color(self.theme.palette.text_secondary),
-                )
-                .selected_text(selected_text)
-                .icon(menu::combo_icon(Arc::clone(&self.theme), icon_id))
-                .show_ui(ui, |ui| {
-                    menu::with_menu_popup_motion(ui, "prefs-auto-fetch-interval-menu", |ui| {
-                        let mut selected_interval = current_interval;
-                        for interval in preset_intervals {
-                            let label = auto_fetch_interval_label(interval);
-                            if menu::menu_item(
-                                ui,
-                                &self.theme,
-                                ("prefs-auto-fetch-interval-item", label.as_str()),
-                                label.as_str(),
-                                selected_interval == interval,
-                            )
-                            .clicked()
-                            {
-                                selected_interval = interval;
-                            }
-                        }
-                        if menu::menu_item(
-                            ui,
-                            &self.theme,
-                            ("prefs-auto-fetch-interval-item", "custom"),
-                            "Personnalisé",
-                            !preset_intervals.contains(&selected_interval),
-                        )
-                        .clicked()
-                        {
-                            selected_interval = current_interval;
-                        }
-                        if selected_interval != current_interval {
-                            self.preferences.set_auto_fetch_interval_minutes(selected_interval);
-                            self.pending_preferences = Some(self.preferences.clone());
-                        }
-                    });
-                });
-
-                ui.add_space(4.0);
-                let mut interval_minutes = current_interval.to_string();
-                let mut interval_error = None;
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new("Intervalle (min)")
-                            .color(self.theme.palette.text_secondary),
-                    );
-                    let response = ui.add_sized(
-                        [90.0, control_height],
-                        TextEdit::singleline(&mut interval_minutes),
-                    );
-                    if response.changed() {
-                        match interval_minutes.trim().parse::<u64>() {
-                            Ok(value) if value > 0 => {
-                                self.preferences.set_auto_fetch_interval_minutes(value);
-                            }
-                            Ok(_) => {
-                                interval_error = Some("L'intervalle doit être d'au moins 1 minute.".to_string());
-                            }
-                            Err(_) => {
-                                interval_error = Some("Entrez un nombre entier de minutes.".to_string());
-                            }
-                        }
-                    }
-                });
-                if let Some(error) = interval_error {
-                    ui.colored_label(self.theme.palette.accent, error);
-                }
-            });
-        }
-
-        ui.add_space(20.0);
-
-        // Keybindings subsection
-        self.section_header(ui, "Raccourcis clavier", "Associez vos raccourcis favoris aux actions fréquentes");
-        ui.add_space(8.0);
-
-        let mut remove_index: Option<usize> = None;
-        for (idx, binding) in self.preferences.keybindings_mut().iter_mut().enumerate() {
-            ui.horizontal(|ui| {
-                ui.add_sized(
-                    [180.0, control_height],
-                    TextEdit::singleline(&mut binding.action).hint_text("Action"),
-                );
-                ui.add_sized(
-                    [140.0, control_height],
-                    TextEdit::singleline(&mut binding.binding).hint_text("Raccourci"),
-                );
-                if ui.button("Supprimer").clicked() {
-                    remove_index = Some(idx);
-                }
-            });
-            ui.add_space(4.0);
-        }
-
-        if let Some(index) = remove_index {
-            self.preferences.keybindings_mut().remove(index);
-            self.pending_preferences = Some(self.preferences.clone());
-        }
-
-        if ui.button("Ajouter un raccourci").clicked() {
-            self.preferences.keybindings_mut().push(Keybinding::default());
-            self.pending_preferences = Some(self.preferences.clone());
-        }
-
-        ui.add_space(20.0);
-
-        // Updates subsection
-        self.section_header(ui, "Mises à jour", "Contrôlez la vérification des nouvelles versions");
-        ui.add_space(8.0);
-
-        let mut auto_check = self.preferences.auto_check_updates();
-        let response = ui.checkbox(&mut auto_check, "Vérifier automatiquement les mises à jour au lancement");
-        if response.changed() {
-            self.preferences.set_auto_check_updates(auto_check);
-            self.pending_preferences = Some(self.preferences.clone());
-        }
-
-        ui.add_space(4.0);
-        let icon_id = ui.make_persistent_id("prefs-release-icon");
-        let current_channel = self.preferences.release_channel();
-        ComboBox::from_label(
-            RichText::new("Canal de release").color(self.theme.palette.text_secondary),
+        let save_btn = button(
+            text("Sauvegarder")
+                .size(typo.body)
+                .color(bg_color),
         )
-        .selected_text(channel_label(current_channel))
-        .icon(menu::combo_icon(Arc::clone(&self.theme), icon_id))
-        .show_ui(ui, |ui| {
-            menu::with_menu_popup_motion(ui, "prefs-release-menu", |ui| {
-                let mut selected_channel = current_channel;
-                for channel in [ReleaseChannel::Stable, ReleaseChannel::Preview] {
-                    if menu::menu_item(
-                        ui,
-                        &self.theme,
-                        ("prefs-release-item", channel_label(channel)),
-                        channel_label(channel),
-                        selected_channel == channel,
-                    )
-                    .clicked()
-                    {
-                        selected_channel = channel;
-                    }
-                }
-                if selected_channel != current_channel {
-                    self.preferences.set_release_channel(selected_channel);
-                    self.pending_preferences = Some(self.preferences.clone());
-                }
-            });
+        .on_press(Message::SavePreferences)
+        .padding([8, 16])
+        .style(move |_: &iced::Theme, status| {
+            let bg = match status {
+                button::Status::Hovered => with_alpha(accent, 0.85),
+                button::Status::Pressed => with_alpha(accent, 0.7),
+                _ => accent,
+            };
+            button::Style {
+                background: Some(bg.into()),
+                border: iced::Border {
+                    radius: 6.0.into(),
+                    ..Default::default()
+                },
+                text_color: bg_color,
+                ..Default::default()
+            }
         });
 
-        ui.add_space(4.0);
-        let mut update_feed_override = self
+        let reset_btn = button(
+            text("Reinitialiser")
+                .size(typo.body)
+                .color(text_primary),
+        )
+        .on_press(Message::ResetDefaults)
+        .padding([8, 16])
+        .style(move |_: &iced::Theme, status| {
+            let bg = match status {
+                button::Status::Hovered => with_alpha(surface_hl, 0.4),
+                button::Status::Pressed => with_alpha(surface_hl, 0.6),
+                _ => with_alpha(surface_hl, 0.2),
+            };
+            button::Style {
+                background: Some(bg.into()),
+                border: iced::Border {
+                    radius: 6.0.into(),
+                    ..Default::default()
+                },
+                text_color: text_primary,
+                ..Default::default()
+            }
+        });
+
+        row![save_btn, Space::with_width(theme.spacing.sm), reset_btn]
+            .align_y(Alignment::Center)
+            .into()
+    }
+
+    // ─── Contenu : General ────────────────────────────────────────────
+
+    /// Section General : chemin de clone, options reseau.
+    fn view_general<'a>(&'a self, theme: &'a Theme) -> Element<'a, Message> {
+        let palette = &theme.palette;
+        let typo = &theme.typography;
+
+        let heading = text("General")
+            .size(typo.heading)
+            .color(palette.text_primary);
+
+        let subtitle = text("Chemin de clone par defaut et options reseau")
+            .size(typo.body)
+            .color(palette.text_secondary);
+
+        // -- Chemin de clone --
+        let clone_label = text("Destination par defaut")
+            .size(typo.body)
+            .color(palette.text_secondary);
+
+        let clone_input = text_input("/home/me/code", self.preferences.default_clone_path())
+            .on_input(Message::DefaultClonePathChanged)
+            .width(Length::Fixed(300.0));
+
+        let browse_btn = styled_secondary_button(
+            theme,
+            "Choisir",
+            Message::BrowseClonePath,
+        );
+
+        let clone_row = row![clone_label, clone_input, browse_btn]
+            .spacing(theme.spacing.sm)
+            .align_y(Alignment::Center);
+
+        // -- Reseau --
+        let network = self.preferences.network();
+
+        let http_proxy_label = text("Proxy HTTP")
+            .size(typo.body)
+            .color(palette.text_secondary);
+        let http_proxy_input = text_input("http://proxy:8080", &network.http_proxy)
+            .on_input(Message::HttpProxyChanged)
+            .width(Length::Fixed(260.0));
+        let http_proxy_row = row![http_proxy_label, http_proxy_input]
+            .spacing(theme.spacing.sm)
+            .align_y(Alignment::Center);
+
+        let https_proxy_label = text("Proxy HTTPS")
+            .size(typo.body)
+            .color(palette.text_secondary);
+        let https_proxy_input = text_input("https://proxy:8443", &network.https_proxy)
+            .on_input(Message::HttpsProxyChanged)
+            .width(Length::Fixed(260.0));
+        let https_proxy_row = row![https_proxy_label, https_proxy_input]
+            .spacing(theme.spacing.sm)
+            .align_y(Alignment::Center);
+
+        let timeout_label = text("Timeout (sec)")
+            .size(typo.body)
+            .color(palette.text_secondary);
+        let timeout_input = text_input("30", &self.timeout_buffer)
+            .on_input(Message::NetworkTimeoutChanged)
+            .width(Length::Fixed(80.0));
+        let timeout_row = row![timeout_label, timeout_input]
+            .spacing(theme.spacing.sm)
+            .align_y(Alignment::Center);
+
+        let use_https_cb = checkbox("Preferer HTTPS", network.use_https)
+            .on_toggle(Message::UseHttpsChanged);
+        let allow_ssh_cb = checkbox("Autoriser SSH", network.allow_ssh)
+            .on_toggle(Message::AllowSshChanged);
+        let proto_row = row![use_https_cb, Space::with_width(theme.spacing.md), allow_ssh_cb]
+            .align_y(Alignment::Center);
+
+        let auto_fetch_cb =
+            checkbox("Recuperation automatique des remotes", self.preferences.auto_fetch_enabled())
+                .on_toggle(Message::AutoFetchEnabledChanged);
+
+        let mut network_col = column![
+            section_header(theme, "Reseau", "Proxy, timeout et protocoles"),
+            Space::with_height(theme.spacing.xs),
+            http_proxy_row,
+            https_proxy_row,
+            timeout_row,
+            proto_row,
+            auto_fetch_cb,
+        ]
+        .spacing(theme.spacing.sm);
+
+        // Intervalle de fetch si active
+        if self.preferences.auto_fetch_enabled() {
+            let interval_label = text("Intervalle (min)")
+                .size(typo.body)
+                .color(palette.text_secondary);
+            let interval_input = text_input("5", &self.fetch_interval_buffer)
+                .on_input(Message::AutoFetchIntervalChanged)
+                .width(Length::Fixed(80.0));
+            let interval_row = row![interval_label, interval_input]
+                .spacing(theme.spacing.sm)
+                .align_y(Alignment::Center);
+            network_col = network_col.push(interval_row);
+        }
+
+        column![
+            heading,
+            subtitle,
+            Space::with_height(theme.spacing.md),
+            section_header(theme, "Depots", "Chemin de destination par defaut pour les clones"),
+            Space::with_height(theme.spacing.xs),
+            clone_row,
+            Space::with_height(theme.spacing.md),
+            horizontal_rule(1),
+            Space::with_height(theme.spacing.md),
+            network_col,
+        ]
+        .spacing(theme.spacing.sm)
+        .width(Length::Fill)
+        .into()
+    }
+
+    // ─── Contenu : Apparences ─────────────────────────────────────────
+
+    /// Section Apparences : selection du theme, hauteur des controles.
+    fn view_appearance<'a>(&'a self, theme: &'a Theme) -> Element<'a, Message> {
+        let palette = &theme.palette;
+        let typo = &theme.typography;
+
+        let heading = text("Apparences")
+            .size(typo.heading)
+            .color(palette.text_primary);
+
+        let subtitle = text("Personnalisez l'apparence de GitSpace")
+            .size(typo.body)
+            .color(palette.text_secondary);
+
+        // Theme
+        let theme_label = text("Theme Catppuccin")
+            .size(typo.body)
+            .color(palette.text_secondary);
+
+        let theme_pick = pick_list(
+            THEME_MODES,
+            Some(self.preferences.theme_mode()),
+            Message::ThemeModeChanged,
+        )
+        .width(Length::Fixed(160.0));
+
+        let theme_row = row![theme_label, theme_pick]
+            .spacing(theme.spacing.sm)
+            .align_y(Alignment::Center);
+
+        // Hauteur des controles
+        let height_label = text("Hauteur des controles")
+            .size(typo.body)
+            .color(palette.text_secondary);
+
+        let height_slider = slider(
+            20.0..=48.0,
+            self.preferences.control_height(),
+            Message::ControlHeightChanged,
+        )
+        .width(Length::Fixed(200.0));
+
+        let height_value = text(format!("{:.0}px", self.preferences.control_height()))
+            .size(typo.label)
+            .color(palette.text_secondary);
+
+        let height_row = row![height_label, height_slider, height_value]
+            .spacing(theme.spacing.sm)
+            .align_y(Alignment::Center);
+
+        column![
+            heading,
+            subtitle,
+            Space::with_height(theme.spacing.md),
+            section_header(theme, "Theme", "Choisissez un theme Catppuccin"),
+            Space::with_height(theme.spacing.xs),
+            theme_row,
+            Space::with_height(theme.spacing.md),
+            horizontal_rule(1),
+            Space::with_height(theme.spacing.md),
+            section_header(theme, "Taille des controles", "Ajustez la hauteur des elements"),
+            Space::with_height(theme.spacing.xs),
+            height_row,
+        ]
+        .spacing(theme.spacing.sm)
+        .width(Length::Fill)
+        .into()
+    }
+
+    // ─── Contenu : Accessibilite ──────────────────────────────────────
+
+    /// Section Accessibilite : mouvement reduit, intensite, mode performance.
+    fn view_accessibility<'a>(&'a self, theme: &'a Theme) -> Element<'a, Message> {
+        let palette = &theme.palette;
+        let typo = &theme.typography;
+
+        let heading = text("Accessibilite")
+            .size(typo.heading)
+            .color(palette.text_primary);
+
+        let subtitle = text("Options d'accessibilite et de mouvement")
+            .size(typo.body)
+            .color(palette.text_secondary);
+
+        // Intensite de mouvement
+        let motion_label = text("Intensite des animations")
+            .size(typo.body)
+            .color(palette.text_secondary);
+
+        let motion_pick = pick_list(
+            MOTION_INTENSITIES,
+            Some(self.preferences.motion_intensity()),
+            Message::MotionIntensityChanged,
+        )
+        .width(Length::Fixed(160.0));
+
+        let motion_row = row![motion_label, motion_pick]
+            .spacing(theme.spacing.sm)
+            .align_y(Alignment::Center);
+
+        // Checkboxes
+        let reduced_cb = checkbox("Reduire les animations", self.preferences.reduced_motion())
+            .on_toggle(Message::ReducedMotionChanged);
+
+        let perf_cb = checkbox("Mode performance", self.preferences.performance_mode())
+            .on_toggle(Message::PerformanceModeChanged);
+
+        column![
+            heading,
+            subtitle,
+            Space::with_height(theme.spacing.md),
+            section_header(theme, "Animations", "Controlez l'intensite et le comportement des animations"),
+            Space::with_height(theme.spacing.xs),
+            motion_row,
+            reduced_cb,
+            perf_cb,
+        ]
+        .spacing(theme.spacing.sm)
+        .width(Length::Fill)
+        .into()
+    }
+
+    // ─── Contenu : GitSpace ───────────────────────────────────────────
+
+    /// Section GitSpace : journalisation, import/export, mises a jour, reinitialisation.
+    fn view_gitspace<'a>(&'a self, theme: &'a Theme) -> Element<'a, Message> {
+        let palette = &theme.palette;
+        let typo = &theme.typography;
+
+        let heading = text("GitSpace")
+            .size(typo.heading)
+            .color(palette.text_primary);
+
+        let subtitle = text("Parametres specifiques a GitSpace")
+            .size(typo.body)
+            .color(palette.text_secondary);
+
+        // -- Journalisation --
+        let retention_label = text("Fichiers de log conserves")
+            .size(typo.body)
+            .color(palette.text_secondary);
+
+        let retention_slider = slider(
+            MIN_LOG_RETENTION_FILES as f32..=MAX_LOG_RETENTION_FILES as f32,
+            self.logging.retention_files() as f32,
+            Message::RetentionFilesChanged,
+        )
+        .width(Length::Fixed(200.0));
+
+        let retention_value = text(format!("{}", self.logging.retention_files()))
+            .size(typo.label)
+            .color(palette.text_secondary);
+
+        let retention_row = row![retention_label, retention_slider, retention_value]
+            .spacing(theme.spacing.sm)
+            .align_y(Alignment::Center);
+
+        // -- Confidentialite --
+        let encrypted_cb = checkbox(
+            "Autoriser le stockage chiffre des tokens",
+            self.preferences.allow_encrypted_tokens(),
+        )
+        .on_toggle(Message::AllowEncryptedTokensChanged);
+
+        // -- Mises a jour --
+        let auto_update_cb = checkbox(
+            "Verifier automatiquement les mises a jour",
+            self.preferences.auto_check_updates(),
+        )
+        .on_toggle(Message::AutoCheckUpdatesChanged);
+
+        let channel_label = text("Canal de release")
+            .size(typo.body)
+            .color(palette.text_secondary);
+
+        let channel_pick = pick_list(
+            RELEASE_CHANNELS,
+            Some(self.preferences.release_channel()),
+            Message::ReleaseChannelChanged,
+        )
+        .width(Length::Fixed(140.0));
+
+        let channel_row = row![channel_label, channel_pick]
+            .spacing(theme.spacing.sm)
+            .align_y(Alignment::Center);
+
+        let feed_label = text("Feed URL personnalise")
+            .size(typo.body)
+            .color(palette.text_secondary);
+        let feed_value = self
             .preferences
             .update_feed_override()
             .unwrap_or_default()
             .to_string();
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new("Feed URL personnalisé")
-                    .color(self.theme.palette.text_secondary),
-            );
-            ui.add_sized(
-                [280.0, control_height],
-                TextEdit::singleline(&mut update_feed_override)
-                    .hint_text("https://example.com/feed.json"),
-            );
-        });
-        self.preferences.set_update_feed_override(Some(update_feed_override));
-        ui.label(
-            RichText::new("Pour pré-release / feed interne.")
-                .color(self.theme.palette.text_secondary),
+        let feed_input = text_input("https://example.com/feed.json", &feed_value)
+            .on_input(Message::UpdateFeedOverrideChanged)
+            .width(Length::Fixed(300.0));
+        let feed_row = row![feed_label, feed_input]
+            .spacing(theme.spacing.sm)
+            .align_y(Alignment::Center);
+
+        let check_btn = styled_secondary_button(
+            theme,
+            "Verifier maintenant",
+            Message::CheckForUpdates,
         );
 
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            if ui.button("Vérifier maintenant").clicked() {
-                self.update_request = true;
-                self.update_status = Some("Vérification des mises à jour...".to_string());
-            }
-
-            if let Some(status) = &self.update_status {
-                ui.label(RichText::new(status).color(self.theme.palette.text_secondary));
-            }
-        });
-    }
-
-    fn section_header(&self, ui: &mut Ui, title: &str, subtitle: &str) {
-        ui.horizontal(|ui| {
-            ui.add_space(2.0);
-            let rect = ui.available_rect_before_wrap();
-            ui.painter().rect_filled(
-                Rect::from_min_size(rect.min, Vec2::new(3.0, 40.0)),
-                Rounding::ZERO,
-                self.theme.palette.accent,
+        let mut update_row = row![check_btn].spacing(theme.spacing.sm).align_y(Alignment::Center);
+        if let Some(status) = &self.update_status {
+            update_row = update_row.push(
+                text(status.as_str())
+                    .size(typo.label)
+                    .color(palette.text_secondary),
             );
-            ui.add_space(8.0);
-            ui.vertical(|ui| {
-                ui.label(
-                    RichText::new(title)
-                        .color(self.theme.palette.text_primary)
-                        .strong()
-                        .size(15.0),
-                );
-                ui.label(
-                    RichText::new(subtitle)
-                        .color(self.theme.palette.text_secondary)
-                        .size(12.0),
-                );
-            });
+        }
+
+        // -- Import / Export --
+        let import_btn = styled_secondary_button(
+            theme,
+            "Importer",
+            Message::ImportSettings,
+        );
+
+        let export_btn = styled_secondary_button(
+            theme,
+            "Exporter",
+            Message::ExportSettings,
+        );
+
+        let mut ie_col = column![
+            row![import_btn, Space::with_width(theme.spacing.sm), export_btn]
+                .align_y(Alignment::Center),
+        ]
+        .spacing(theme.spacing.xs);
+
+        if let Some(status) = &self.import_status {
+            ie_col = ie_col.push(
+                text(status.as_str())
+                    .size(typo.label)
+                    .color(palette.text_secondary),
+            );
+        }
+        if let Some(status) = &self.export_status {
+            ie_col = ie_col.push(
+                text(status.as_str())
+                    .size(typo.label)
+                    .color(palette.text_secondary),
+            );
+        }
+
+        column![
+            heading,
+            subtitle,
+            Space::with_height(theme.spacing.md),
+            section_header(theme, "Journalisation", "Nombre de fichiers de log conserves"),
+            Space::with_height(theme.spacing.xs),
+            retention_row,
+            Space::with_height(theme.spacing.md),
+            horizontal_rule(1),
+            Space::with_height(theme.spacing.md),
+            section_header(theme, "Confidentialite", "Stockage securise des tokens"),
+            Space::with_height(theme.spacing.xs),
+            encrypted_cb,
+            Space::with_height(theme.spacing.md),
+            horizontal_rule(1),
+            Space::with_height(theme.spacing.md),
+            section_header(theme, "Mises a jour", "Verification et canal de release"),
+            Space::with_height(theme.spacing.xs),
+            auto_update_cb,
+            channel_row,
+            feed_row,
+            update_row,
+            Space::with_height(theme.spacing.md),
+            horizontal_rule(1),
+            Space::with_height(theme.spacing.md),
+            section_header(theme, "Import / Export", "Transferez vos preferences au format JSON"),
+            Space::with_height(theme.spacing.xs),
+            ie_col,
+        ]
+        .spacing(theme.spacing.sm)
+        .width(Length::Fill)
+        .into()
+    }
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────
+
+/// En-tete de sous-section avec barre accent a gauche.
+fn section_header<'a, M: 'a>(theme: &'a Theme, title: &'a str, subtitle: &'a str) -> Element<'a, M> {
+    let palette = &theme.palette;
+    let typo = &theme.typography;
+    let accent = palette.accent;
+
+    let indicator = container(Space::with_width(3))
+        .height(32)
+        .style(move |_: &iced::Theme| container::Style {
+            background: Some(accent.into()),
+            border: iced::Border {
+                radius: 2.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
         });
-    }
+
+    let labels = column![
+        text(title)
+            .size(typo.body)
+            .color(palette.text_primary),
+        text(subtitle)
+            .size(typo.label)
+            .color(palette.text_secondary),
+    ]
+    .spacing(2);
+
+    row![indicator, Space::with_width(8), labels]
+        .align_y(Alignment::Center)
+        .into()
 }
 
-fn mode_label(mode: ThemeMode) -> &'static str {
-    match mode {
-        ThemeMode::Latte => "Latte",
-        ThemeMode::Frappe => "Frappe",
-        ThemeMode::Macchiato => "Macchiato",
-        ThemeMode::Mocha => "Mocha",
-    }
-}
+/// Cree un bouton secondaire style Colony (fond surface_highlight, coins arrondis).
+fn styled_secondary_button<'a>(
+    theme: &'a Theme,
+    label: &'a str,
+    on_press: Message,
+) -> Element<'a, Message> {
+    let palette = &theme.palette;
+    let typo = &theme.typography;
+    let text_color = palette.text_primary;
+    let surface_hl = palette.surface_highlight;
 
-fn channel_label(channel: ReleaseChannel) -> &'static str {
-    match channel {
-        ReleaseChannel::Stable => "Stable",
-        ReleaseChannel::Preview => "Preview",
-    }
-}
-
-fn motion_intensity_label(intensity: MotionIntensity) -> &'static str {
-    match intensity {
-        MotionIntensity::Low => "Faible",
-        MotionIntensity::Medium => "Moyenne",
-        MotionIntensity::High => "Élevée",
-    }
-}
-
-fn auto_fetch_interval_label(minutes: u64) -> String {
-    format!("{minutes} min")
+    button(text(label).size(typo.body).color(text_color))
+        .on_press(on_press)
+        .padding([6, 12])
+        .style(move |_: &iced::Theme, status| {
+            let bg = match status {
+                button::Status::Hovered => with_alpha(surface_hl, 0.5),
+                button::Status::Pressed => with_alpha(surface_hl, 0.7),
+                _ => with_alpha(surface_hl, 0.3),
+            };
+            button::Style {
+                background: Some(bg.into()),
+                border: iced::Border {
+                    radius: 6.0.into(),
+                    ..Default::default()
+                },
+                text_color,
+                ..Default::default()
+            }
+        })
+        .into()
 }

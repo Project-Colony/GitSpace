@@ -1,35 +1,24 @@
-#![allow(dead_code)]
-//! Shared animation tokens and effect presets for GitSpace.
+//! Tokens d'animation et presets d'effets pour GitSpace.
 //!
-//! ## Usage patterns
-//! - Use [`MotionSettings::timing`] with an [`AnimationIntent`] instead of ad-hoc durations.
-//! - Prefer the presets in [`AnimationEffects`] to keep fades, slides, and shadows consistent.
-//! - Respect reduced motion: when enabled, timings resolve to `0ms` so UI changes are instant.
-//! - Keep new animations aligned with the intent map (hover, press, focus, open/close, load).
+//! ## Patterns d'utilisation
+//! - Utiliser [`MotionSettings::timing`] avec un [`AnimationIntent`] au lieu de durées ad-hoc.
+//! - Préférer les presets dans [`AnimationEffects`] pour garder les fades, slides et shadows cohérents.
+//! - Respecter le mode réduit : quand activé, les timings deviennent `0ms` (transitions instantanées).
+//! - Garder les nouvelles animations alignées avec la carte des intents (hover, press, focus, open/close, load).
 //!
-//! ```
-//! use crate::ui::animation::{AnimationIntent, AnimationEffects, MotionSettings};
-//!
-//! let motion = MotionSettings::new(false);
-//! let timing = motion.timing(AnimationIntent::Hover);
-//! let fade = AnimationEffects::fade_in();
-//! # let _ = (timing, fade);
-//! ```
+//! En mode Iced, les animations sont pilotées par des subscriptions et un `AnimationState`
+//! qui track la progression de chaque animation active.
 
-use std::sync::OnceLock;
+#![allow(dead_code)]
+
+use std::collections::HashMap;
 use std::time::Duration;
 
-use eframe::egui::{self, Id};
 use serde::Deserialize;
-use serde_json::json;
 
 use crate::config::{MotionIntensity, Preferences};
-use crate::dotnet::{DotnetClient, LibraryCallRequest};
 
-/// Cached animation profile from dotnet (loaded once at startup)
-static DOTNET_ANIMATION_PROFILE: OnceLock<Option<AnimationProfile>> = OnceLock::new();
-
-/// High-level intent buckets for animation decisions.
+/// Buckets d'intent de haut niveau pour les décisions d'animation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AnimationIntent {
     Hover,
@@ -39,7 +28,7 @@ pub enum AnimationIntent {
     Load,
 }
 
-/// Common easing curves used by the UI.
+/// Courbes d'easing communes utilisées par l'UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EasingCurve {
     Standard,
@@ -60,7 +49,7 @@ impl EasingCurve {
         }
     }
 
-    /// Returns cubic bezier control points for the curve.
+    /// Retourne les points de contrôle cubic bezier pour la courbe.
     pub const fn control_points(self) -> (f32, f32, f32, f32) {
         match self {
             Self::Standard => (0.2, 0.0, 0.0, 1.0),
@@ -83,7 +72,7 @@ impl EasingCurve {
     }
 }
 
-/// Timing tokens that combine duration and easing.
+/// Tokens de timing qui combinent durée et easing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AnimationTiming {
     pub duration: Duration,
@@ -99,7 +88,7 @@ impl AnimationTiming {
     }
 }
 
-/// Standard duration tokens.
+/// Tokens de durée standard.
 pub mod durations {
     use std::time::Duration;
 
@@ -110,7 +99,7 @@ pub mod durations {
     pub const LONG: Duration = Duration::from_millis(320);
 }
 
-/// Mapping of intents to timing tokens.
+/// Mapping des intents vers les tokens de timing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AnimationTokens;
 
@@ -172,7 +161,7 @@ impl AnimationTimingSet {
     }
 }
 
-/// Global animation settings derived from user preferences.
+/// Paramètres d'animation globaux dérivés des préférences utilisateur.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MotionSettings {
     reduced_motion: bool,
@@ -283,83 +272,46 @@ impl MotionSettings {
     }
 }
 
-const MOTION_SETTINGS_KEY: &str = "motion_settings";
-
-pub fn store_motion_settings(ctx: &egui::Context, preferences: &Preferences) {
-    // Use cached profile (only loads from dotnet once at startup)
-    let profile = DOTNET_ANIMATION_PROFILE
-        .get_or_init(load_dotnet_animation_profile)
-        .clone()
-        .unwrap_or_else(AnimationProfile::default_profile);
-    let motion = MotionSettings::with_profile(
-        preferences.reduced_motion(),
-        preferences.motion_intensity(),
-        preferences.performance_mode(),
-        profile,
-    );
-    ctx.data_mut(|data| {
-        data.insert_persisted(Id::new(MOTION_SETTINGS_KEY), motion);
-    });
-}
-
-pub fn motion_settings(ctx: &egui::Context) -> MotionSettings {
-    ctx.data_mut(|data| {
-        data.get_persisted(Id::new(MOTION_SETTINGS_KEY))
-            .unwrap_or_else(|| MotionSettings::new(false))
-    })
-}
-
-/// Opacity transition preset.
+/// Preset de transition d'opacité.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 pub struct FadeEffect {
     pub from_opacity: f32,
     pub to_opacity: f32,
 }
 
-/// Positional offset transition preset.
+/// Preset de transition de position.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 pub struct SlideEffect {
     pub from_offset: [f32; 2],
     pub to_offset: [f32; 2],
 }
 
-/// Scale transition preset.
+/// Preset de transition d'échelle.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 pub struct ScaleEffect {
     pub from_scale: f32,
     pub to_scale: f32,
 }
 
-/// Blur effect preset.
+/// Preset d'effet de flou.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 pub struct BlurEffect {
     pub radius: f32,
 }
 
-/// Glow effect preset.
+/// Preset d'effet de glow.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 pub struct GlowEffect {
     pub intensity: f32,
     pub radius: f32,
 }
 
-/// Shadow effect preset.
+/// Preset d'effet d'ombre.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 pub struct ShadowEffect {
     pub offset: [f32; 2],
     pub blur: f32,
     pub opacity: f32,
-}
-
-impl ShadowEffect {
-    pub fn to_egui_shadow(self, color: egui::Color32) -> egui::epaint::Shadow {
-        egui::epaint::Shadow {
-            offset: egui::vec2(self.offset[0], self.offset[1]),
-            blur: self.blur,
-            spread: 0.0,
-            color: color.linear_multiply(self.opacity),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -396,43 +348,6 @@ impl AnimationProfile {
             slide_distance: 8.0,
         }
     }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AnimationTimingPayload {
-    duration_ms: u64,
-    easing: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AnimationTimingSetPayload {
-    hover: AnimationTimingPayload,
-    press: AnimationTimingPayload,
-    focus: AnimationTimingPayload,
-    open_close: AnimationTimingPayload,
-    load: AnimationTimingPayload,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AnimationEffectSetPayload {
-    fade_in: FadeEffect,
-    fade_out: FadeEffect,
-    scale_in: ScaleEffect,
-    scale_out: ScaleEffect,
-    soft_blur: BlurEffect,
-    subtle_glow: GlowEffect,
-    soft_shadow: ShadowEffect,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AnimationProfilePayload {
-    timings: AnimationTimingSetPayload,
-    effects: AnimationEffectSetPayload,
-    slide_distance: f32,
 }
 
 fn scale_duration(duration: Duration, scale: f32) -> Duration {
@@ -474,51 +389,7 @@ fn scale_scale_effect(effect: ScaleEffect, scale: f32) -> ScaleEffect {
     }
 }
 
-impl AnimationProfilePayload {
-    fn into_profile(self) -> Option<AnimationProfile> {
-        Some(AnimationProfile {
-            timings: AnimationTimingSet {
-                hover: timing_from_payload(self.timings.hover)?,
-                press: timing_from_payload(self.timings.press)?,
-                focus: timing_from_payload(self.timings.focus)?,
-                open_close: timing_from_payload(self.timings.open_close)?,
-                load: timing_from_payload(self.timings.load)?,
-            },
-            effects: AnimationEffectSet {
-                fade_in: self.effects.fade_in,
-                fade_out: self.effects.fade_out,
-                scale_in: self.effects.scale_in,
-                scale_out: self.effects.scale_out,
-                soft_blur: self.effects.soft_blur,
-                subtle_glow: self.effects.subtle_glow,
-                soft_shadow: self.effects.soft_shadow,
-            },
-            slide_distance: self.slide_distance,
-        })
-    }
-}
-
-fn timing_from_payload(payload: AnimationTimingPayload) -> Option<AnimationTiming> {
-    let easing = EasingCurve::from_label(payload.easing.as_str())?;
-    Some(AnimationTiming {
-        duration: Duration::from_millis(payload.duration_ms),
-        easing,
-    })
-}
-
-fn load_dotnet_animation_profile() -> Option<AnimationProfile> {
-    let client = DotnetClient::helper();
-    let response = client
-        .library_call(LibraryCallRequest {
-            name: "ui.animation_profile".to_string(),
-            payload: json!({}),
-        })
-        .ok()?;
-    let payload: AnimationProfilePayload = serde_json::from_value(response.payload).ok()?;
-    payload.into_profile()
-}
-
-/// Reusable effect presets aligned with GitSpace visuals.
+/// Presets d'effets réutilisables alignés avec le design GitSpace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AnimationEffects;
 
@@ -582,5 +453,93 @@ impl AnimationEffects {
             blur: 16.0,
             opacity: 0.25,
         }
+    }
+}
+
+// ─── État d'animation pour le mode retenu (Iced) ────────────────────────
+
+/// Identifiant unique pour une animation.
+pub type AnimationId = u64;
+
+/// Animation active avec progression et timing.
+struct ActiveAnimation {
+    target: bool,
+    progress: f32,
+    timing: AnimationTiming,
+}
+
+/// Gestionnaire d'état des animations pour le mode retenu d'Iced.
+///
+/// Chaque widget peut enregistrer une animation via `set_target`,
+/// et lire sa progression avec `progress`. Le tick global met à jour
+/// toutes les animations actives.
+pub struct AnimationState {
+    animations: HashMap<AnimationId, ActiveAnimation>,
+}
+
+impl Default for AnimationState {
+    fn default() -> Self {
+        Self {
+            animations: HashMap::new(),
+        }
+    }
+}
+
+impl AnimationState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Définit la cible d'une animation (true = vers 1.0, false = vers 0.0).
+    pub fn set_target(&mut self, id: AnimationId, target: bool, timing: AnimationTiming) {
+        let anim = self.animations.entry(id).or_insert(ActiveAnimation {
+            target,
+            progress: if target { 0.0 } else { 1.0 },
+            timing,
+        });
+        anim.target = target;
+        anim.timing = timing;
+    }
+
+    /// Met à jour toutes les animations actives. Retourne true si au moins
+    /// une animation est encore en cours (besoin de continuer le tick).
+    pub fn tick(&mut self, dt: Duration) -> bool {
+        let mut any_active = false;
+        self.animations.retain(|_, anim| {
+            let target_val = if anim.target { 1.0 } else { 0.0 };
+            if (anim.progress - target_val).abs() < f32::EPSILON {
+                // Animation terminée, on retire si cible est 0
+                return anim.target;
+            }
+
+            let duration_secs = anim.timing.duration.as_secs_f32().max(0.001);
+            let step = dt.as_secs_f32() / duration_secs;
+
+            if anim.target {
+                anim.progress = (anim.progress + step).min(1.0);
+            } else {
+                anim.progress = (anim.progress - step).max(0.0);
+            }
+
+            any_active = true;
+            true
+        });
+        any_active
+    }
+
+    /// Retourne la progression actuelle d'une animation (0.0 à 1.0).
+    pub fn progress(&self, id: AnimationId) -> f32 {
+        self.animations
+            .get(&id)
+            .map(|a| a.progress)
+            .unwrap_or(0.0)
+    }
+
+    /// Retourne true si au moins une animation est en cours.
+    pub fn is_animating(&self) -> bool {
+        self.animations.values().any(|a| {
+            let target_val = if a.target { 1.0 } else { 0.0 };
+            (a.progress - target_val).abs() > f32::EPSILON
+        })
     }
 }

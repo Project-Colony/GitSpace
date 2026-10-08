@@ -1,13 +1,13 @@
-use eframe::egui::{self, Align, Id, Layout, RichText, Sense, Ui, Vec2};
+//! Structure de la coquille de l'application : header, sidebar, tab bar.
 
-use crate::auth::AuthManager;
-use crate::config::AppConfig;
-use crate::ui::{
-    auth::AuthPanel, branches::BranchPanel, clone::ClonePanel, context::RepoContext, dev_gallery,
-    menu, notifications::NotificationCenter, perf::PerfScope, recent::RecentList,
-    repo_overview::RepoOverviewPanel, settings::SettingsPanel, stage::StagePanel, theme::SharedTheme,
-};
+use iced::widget::{button, column, container, horizontal_rule, row, scrollable, text, Space};
+use iced::{Alignment, Element, Length};
 
+use crate::ui::context::RepoContext;
+use crate::ui::menu;
+use crate::ui::theme::Theme;
+
+/// Onglet principal de l'application.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum MainTab {
     Clone,
@@ -17,30 +17,11 @@ pub enum MainTab {
     History,
     Branches,
     Auth,
-    Settings,
     DevGallery,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum NavigationTrigger {
-    Click,
-    DragAndDrop,
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct NavigationSelection {
-    pub tab: MainTab,
-    pub trigger: NavigationTrigger,
-}
-
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct TabInteraction {
-    pub selected: Option<(MainTab, NavigationTrigger)>,
-    pub reordered: Option<(usize, usize)>,
-}
-
 impl MainTab {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 8] = [
         Self::Clone,
         Self::Open,
         Self::RepoOverview,
@@ -48,7 +29,6 @@ impl MainTab {
         Self::History,
         Self::Branches,
         Self::Auth,
-        Self::Settings,
         Self::DevGallery,
     ];
 
@@ -61,336 +41,195 @@ impl MainTab {
             Self::History => "History",
             Self::Branches => "Branches",
             Self::Auth => "Auth",
-            Self::Settings => "Settings",
             Self::DevGallery => "Dev Gallery",
         }
     }
 }
 
-pub struct ShellLayout {
-    theme: SharedTheme,
+/// Messages générés par le layout shell.
+#[derive(Debug, Clone)]
+pub enum LayoutMessage {
+    TabSelected(MainTab),
+    HeaderClicked,
+    SidebarNav(MainTab),
+    OpenFileManager,
+    CopyPath,
 }
 
-impl ShellLayout {
-    pub fn new(theme: SharedTheme) -> Self {
-        Self { theme }
+/// Construit le header de l'application.
+pub fn view_header(theme: &Theme) -> Element<'_, LayoutMessage> {
+    let header_content = row![
+        Space::with_width(8),
+        button(
+            text("GitSpace")
+                .size(theme.typography.heading)
+                .color(theme.palette.text_primary)
+        )
+        .on_press(LayoutMessage::HeaderClicked)
+        .padding([4, 8])
+        .style(|_: &iced::Theme, _| button::Style {
+            background: None,
+            ..Default::default()
+        }),
+        Space::with_width(12),
+        text("Workspace shell")
+            .size(theme.typography.body)
+            .color(theme.palette.accent),
+        Space::with_width(Length::Fill),
+    ]
+    .align_y(Alignment::Center)
+    .height(48);
+
+    container(header_content)
+        .width(Length::Fill)
+        .style(move |_: &iced::Theme| {
+            let surface = theme.palette.surface;
+            container::Style {
+                background: Some(surface.into()),
+                ..Default::default()
+            }
+        })
+        .into()
+}
+
+/// Construit la sidebar de navigation.
+pub fn view_sidebar<'a>(
+    theme: &'a Theme,
+    active_tab: MainTab,
+    repo: Option<&'a RepoContext>,
+) -> Element<'a, LayoutMessage> {
+    let mut sidebar = column![].spacing(2).padding(8).width(220);
+
+    sidebar = sidebar.push(Space::with_height(12));
+    sidebar = sidebar.push(
+        text("Navigation")
+            .size(theme.typography.title)
+            .color(theme.palette.text_primary),
+    );
+    sidebar = sidebar.push(horizontal_rule(1));
+    sidebar = sidebar.push(Space::with_height(8));
+
+    // Section Workspaces
+    sidebar = sidebar.push(
+        text("Workspaces")
+            .size(theme.typography.label)
+            .color(theme.palette.text_secondary),
+    );
+    for (label, tab) in [
+        ("Recent", MainTab::Open),
+        ("Favorites", MainTab::Open),
+        ("Local Repos", MainTab::Open),
+        ("Remote Repos", MainTab::Clone),
+    ] {
+        sidebar = sidebar.push(menu::menu_item(
+            theme,
+            label,
+            active_tab == tab,
+            LayoutMessage::SidebarNav(tab),
+        ));
     }
 
-    /// Returns true if the GitSpace logo was clicked (to open preferences)
-    pub fn header(&self, ctx: &egui::Context) -> bool {
-        let mut clicked = false;
-        egui::TopBottomPanel::top("header")
-            .exact_height(48.0)
-            .frame(egui::Frame::none().fill(self.theme.palette.surface))
-            .show(ctx, |ui| {
-                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    ui.add_space(8.0);
-
-                    // Make GitSpace clickable
-                    let response = ui.add(
-                        egui::Label::new(
-                            RichText::new("GitSpace")
-                                .color(self.theme.palette.text_primary)
-                                .strong()
-                                .heading(),
-                        )
-                        .sense(Sense::click()),
-                    );
-
-                    if response.clicked() {
-                        clicked = true;
-                    }
-
-                    if response.hovered() {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                    }
-
-                    response.on_hover_text("Ouvrir les préférences");
-
-                    ui.colored_label(self.theme.palette.accent, RichText::new("Workspace shell"));
-                });
-            });
-        clicked
+    sidebar = sidebar.push(Space::with_height(12));
+    sidebar = sidebar.push(
+        text("Actions")
+            .size(theme.typography.label)
+            .color(theme.palette.text_secondary),
+    );
+    for (label, tab) in [
+        ("Clone", MainTab::Clone),
+        ("Open", MainTab::Open),
+        ("New Branch", MainTab::Branches),
+        ("Sync", MainTab::Stage),
+    ] {
+        sidebar = sidebar.push(menu::menu_item(
+            theme,
+            label,
+            active_tab == tab,
+            LayoutMessage::SidebarNav(tab),
+        ));
     }
 
-    pub fn sidebar(
-        &self,
-        ctx: &egui::Context,
-        active_tab: MainTab,
-        repo: Option<&RepoContext>,
-    ) -> Option<NavigationSelection> {
-        let mut selection = None;
-        egui::SidePanel::left("sidebar")
-            .resizable(true)
-            .default_width(220.0)
-            .frame(
-                egui::Frame::none()
-                    .fill(self.theme.palette.surface)
-                    .stroke(egui::Stroke::new(1.0, self.theme.palette.surface_highlight)),
-            )
-            .show(ctx, |ui| {
-                ui.add_space(12.0);
-                ui.heading(RichText::new("Navigation").color(self.theme.palette.text_primary));
-                ui.separator();
+    // Section contexte
+    sidebar = sidebar.push(Space::with_height(12));
+    sidebar = sidebar.push(
+        text("Context")
+            .size(theme.typography.label)
+            .color(theme.palette.text_secondary),
+    );
 
-                ui.label(RichText::new("Workspaces").color(self.theme.palette.text_secondary));
-                for (label, tab) in [
-                    ("Recent", MainTab::Open),
-                    ("Favorites", MainTab::Open),
-                    ("Local Repos", MainTab::Open),
-                    ("Remote Repos", MainTab::Clone),
-                ] {
-                    ui.add_space(4.0);
-                    let response = menu::menu_item_sized(
-                        ui,
-                        &self.theme,
-                        ("sidebar-nav", label),
-                        label,
-                        active_tab == tab,
-                        Vec2::new(ui.available_width(), ui.spacing().interact_size.y.max(28.0)),
-                        Sense::click(),
-                    );
-
-                    if response.clicked() {
-                        selection = Some(NavigationSelection {
-                            tab,
-                            trigger: NavigationTrigger::Click,
-                        });
-                    }
-                }
-
-                ui.add_space(12.0);
-                ui.label(RichText::new("Actions").color(self.theme.palette.text_secondary));
-                for (action, tab) in [
-                    ("Clone", MainTab::Clone),
-                    ("Open", MainTab::Open),
-                    ("New Branch", MainTab::Branches),
-                    ("Sync", MainTab::Stage),
-                ] {
-                    let response = menu::menu_item_sized(
-                        ui,
-                        &self.theme,
-                        ("sidebar-action", action),
-                        RichText::new(action).strong(),
-                        active_tab == tab,
-                        Vec2::new(ui.available_width(), ui.spacing().interact_size.y.max(28.0)),
-                        Sense::click(),
-                    );
-
-                    if response.clicked() {
-                        selection = Some(NavigationSelection {
-                            tab,
-                            trigger: NavigationTrigger::Click,
-                        });
-                    }
-                }
-
-                // Context section - Active repository info
-                ui.add_space(12.0);
-                ui.label(RichText::new("Context").color(self.theme.palette.text_secondary));
-                ui.add_space(4.0);
-
-                if let Some(repo) = repo {
-                    ui.label(
-                        RichText::new("Active repository")
-                            .color(self.theme.palette.text_secondary)
-                            .small(),
-                    );
-                    ui.label(
-                        RichText::new(&repo.name)
-                            .color(self.theme.palette.text_primary)
-                            .strong(),
-                    );
-                    ui.label(
-                        RichText::new(&repo.path)
-                            .color(self.theme.palette.text_secondary)
-                            .small()
-                            .italics(),
-                    );
-
-                    ui.add_space(8.0);
-                    if ui
-                        .small_button("Open in file manager")
-                        .on_hover_text("Open repository folder")
-                        .clicked()
-                    {
-                        if let Err(err) = open::that(&repo.path) {
-                            tracing::warn!("Failed to open repo path: {err}");
-                        }
-                    }
-                    if ui
-                        .small_button("Copy path")
-                        .on_hover_text("Copy repository path to clipboard")
-                        .clicked()
-                    {
-                        ui.output_mut(|o| o.copied_text = repo.path.clone());
-                    }
-                } else {
-                    ui.label(
-                        RichText::new("No repository selected")
-                            .color(self.theme.palette.text_secondary)
-                            .small()
-                            .italics(),
-                    );
-                }
-            });
-        selection
+    if let Some(repo) = repo {
+        sidebar = sidebar.push(
+            text("Active repository")
+                .size(theme.typography.label)
+                .color(theme.palette.text_secondary),
+        );
+        sidebar = sidebar.push(
+            text(&repo.name)
+                .size(theme.typography.body)
+                .color(theme.palette.text_primary),
+        );
+        sidebar = sidebar.push(
+            text(repo.path())
+                .size(theme.typography.label)
+                .color(theme.palette.text_secondary),
+        );
+        sidebar = sidebar.push(Space::with_height(8));
+        sidebar = sidebar.push(
+            button(text("Ouvrir le dossier").size(12))
+                .on_press(LayoutMessage::OpenFileManager)
+                .padding([2, 8]),
+        );
+        sidebar = sidebar.push(
+            button(text("Copier le chemin").size(12))
+                .on_press(LayoutMessage::CopyPath)
+                .padding([2, 8]),
+        );
+    } else {
+        sidebar = sidebar.push(
+            text("Aucun dépôt sélectionné")
+                .size(theme.typography.label)
+                .color(theme.palette.text_secondary),
+        );
     }
 
-    pub fn tab_bar(
-        &self,
-        ui: &mut Ui,
-        tab_order: &mut Vec<MainTab>,
-        active: &mut MainTab,
-    ) -> TabInteraction {
-        let _scope = PerfScope::new("layout::tab_bar");
-        let mut interaction = TabInteraction::default();
-        let dragging_id = Id::new("main_tab_dragging");
-        let swap_time_id = Id::new("main_tab_swap_time");
-        let mut dragging: Option<usize> = ui
-            .ctx()
-            .data_mut(|data| data.get_persisted(dragging_id))
-            .unwrap_or(None);
-        let mut last_swap_time: f64 = ui
-            .ctx()
-            .data_mut(|data| data.get_persisted(swap_time_id))
-            .unwrap_or(0.0);
-        let swap_throttle_seconds = 0.08;
+    let sidebar_surface = theme.palette.surface;
+    let sidebar_border = theme.palette.surface_highlight;
 
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing.x = 8.0;
+    container(scrollable(sidebar).height(Length::Fill))
+        .width(220)
+        .height(Length::Fill)
+        .style(move |_: &iced::Theme| container::Style {
+            background: Some(sidebar_surface.into()),
+            border: iced::Border {
+                width: 1.0,
+                color: sidebar_border,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .into()
+}
 
-            let (pointer_down, now) = ui.input(|i| (i.pointer.primary_down(), i.time));
-            let mut hover_swap: Option<(usize, usize)> = None;
+/// Construit la barre d'onglets.
+pub fn view_tab_bar<'a>(
+    theme: &'a Theme,
+    tab_order: &'a [MainTab],
+    active: MainTab,
+) -> Element<'a, LayoutMessage> {
+    let mut tabs = row![].spacing(4).padding([0, 8]);
 
-            for (index, tab) in tab_order.iter().copied().enumerate() {
-                let is_active = *active == tab;
-                let label = RichText::new(tab.label())
-                    .color(if is_active {
-                        self.theme.palette.text_primary
-                    } else {
-                        self.theme.palette.text_secondary
-                    })
-                    .strong();
-
-                let response = menu::menu_item_sized(
-                    ui,
-                    &self.theme,
-                    ("tab-bar", tab),
-                    label,
-                    is_active,
-                    Vec2::new(120.0, 32.0),
-                    Sense::click_and_drag(),
-                );
-
-                if is_active {
-                    let rect = response.rect;
-                    let stroke = egui::Stroke::new(2.0, self.theme.palette.accent);
-                    ui.painter()
-                        .line_segment([rect.left_bottom(), rect.right_bottom()], stroke);
-                }
-
-                if response.clicked() {
-                    *active = tab;
-                    interaction.selected = Some((tab, NavigationTrigger::Click));
-                }
-
-                if response.drag_started() {
-                    dragging = Some(index);
-                }
-
-                if let Some(dragging_index) = dragging {
-                    if dragging_index != index && response.hovered() && pointer_down {
-                        hover_swap = Some((dragging_index, index));
-                    }
-                }
-            }
-
-            if let Some((from, to)) = hover_swap {
-                if now - last_swap_time < swap_throttle_seconds {
-                    return;
-                }
-                tab_order.swap(from, to);
-                dragging = Some(to);
-                interaction.reordered = Some((from, to));
-                interaction.selected = Some((tab_order[to], NavigationTrigger::DragAndDrop));
-                *active = tab_order[to];
-                last_swap_time = now;
-            }
-
-            if !pointer_down {
-                dragging = None;
-            }
-        });
-
-        ui.ctx()
-            .data_mut(|data| data.insert_persisted(dragging_id, dragging));
-        ui.ctx()
-            .data_mut(|data| data.insert_persisted(swap_time_id, last_swap_time));
-
-        ui.add_space(4.0);
-        ui.separator();
-
-        interaction
+    for tab in tab_order {
+        tabs = tabs.push(menu::tab_button(
+            theme,
+            tab.label(),
+            active == *tab,
+            LayoutMessage::TabSelected(*tab),
+        ));
     }
 
-    pub fn tab_content(
-        &self,
-        ui: &mut Ui,
-        tab: MainTab,
-        clone_panel: &mut ClonePanel,
-        recent_list: &mut RecentList,
-        config: &AppConfig,
-        repo_overview: &mut RepoOverviewPanel,
-        stage_panel: &mut StagePanel,
-        history_panel: &mut crate::ui::history::HistoryPanel,
-        branch_panel: &mut BranchPanel,
-        auth_panel: &mut AuthPanel,
-        settings_panel: &mut SettingsPanel,
-        notifications: &mut NotificationCenter,
-        repo: Option<&RepoContext>,
-        auth_manager: &AuthManager,
-        dev_gallery_panel: Option<&mut dev_gallery::DevGalleryPanel>,
-    ) -> Option<String> {
-        ui.add_space(8.0);
-        match tab {
-            MainTab::Clone => {
-                clone_panel.ui(ui, auth_manager, notifications);
-                None
-            }
-            MainTab::Open => recent_list.ui(ui, config),
-            MainTab::RepoOverview => {
-                repo_overview.ui(ui, repo, auth_manager);
-                None
-            }
-            MainTab::Stage => {
-                stage_panel.ui(ui, repo);
-                None
-            }
-            MainTab::History => {
-                history_panel.ui(ui, repo);
-                None
-            }
-            MainTab::Branches => {
-                branch_panel.ui(ui, repo);
-                None
-            }
-            MainTab::Auth => {
-                auth_panel.ui(ui);
-                None
-            }
-            MainTab::Settings => {
-                settings_panel.ui(ui, notifications);
-                None
-            }
-            MainTab::DevGallery => {
-                if let Some(panel) = dev_gallery_panel {
-                    panel.ui(ui);
-                } else {
-                    ui.label("Dev gallery is only available in debug builds.");
-                }
-                None
-            }
-        }
-    }
+    column![
+        container(tabs).width(Length::Fill),
+        horizontal_rule(1),
+    ]
+    .into()
 }

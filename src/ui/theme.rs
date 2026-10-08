@@ -1,73 +1,75 @@
-use std::sync::Arc;
+//! Système de thèmes Catppuccin pour GitSpace avec Iced.
+//!
+//! Fournit les palettes Latte, Frappé, Macchiato et Mocha en tant que
+//! thèmes custom Iced, avec les tokens de typographie et d'espacement.
 
-use egui::{Color32, TextStyle};
+use iced::Color;
 
 use crate::config::ThemeMode;
 
-/// Shared reference-counted theme for efficient passing between components.
-pub type SharedTheme = Arc<Theme>;
-
+/// Palette de couleurs Catppuccin.
 #[derive(Debug, Clone)]
 pub struct Palette {
-    pub background: Color32,
-    pub surface: Color32,
-    pub surface_highlight: Color32,
-    pub text_primary: Color32,
-    pub text_secondary: Color32,
-    pub accent: Color32,
-    pub accent_weak: Color32,
+    pub background: Color,
+    pub surface: Color,
+    pub surface_highlight: Color,
+    pub text_primary: Color,
+    pub text_secondary: Color,
+    pub accent: Color,
+    pub accent_weak: Color,
 }
 
 impl Palette {
     pub fn latte() -> Self {
         Self {
-            background: Color32::from_rgb(0xef, 0xf1, 0xf5),
-            surface: Color32::from_rgb(0xe6, 0xe9, 0xef),
-            surface_highlight: Color32::from_rgb(0xcc, 0xd0, 0xda),
-            text_primary: Color32::from_rgb(0x4c, 0x4f, 0x69),
-            text_secondary: Color32::from_rgb(0x5c, 0x5f, 0x77),
-            accent: Color32::from_rgb(0x1e, 0x66, 0xf5),
-            accent_weak: Color32::from_rgb(0x20, 0x9f, 0xb5),
+            background: color_from_rgb(0xef, 0xf1, 0xf5),
+            surface: color_from_rgb(0xe6, 0xe9, 0xef),
+            surface_highlight: color_from_rgb(0xcc, 0xd0, 0xda),
+            text_primary: color_from_rgb(0x4c, 0x4f, 0x69),
+            text_secondary: color_from_rgb(0x5c, 0x5f, 0x77),
+            accent: color_from_rgb(0x1e, 0x66, 0xf5),
+            accent_weak: color_from_rgb(0x20, 0x9f, 0xb5),
         }
     }
 
     pub fn frappe() -> Self {
         Self {
-            background: Color32::from_rgb(0x23, 0x26, 0x34),
-            surface: Color32::from_rgb(0x29, 0x2c, 0x3c),
-            surface_highlight: Color32::from_rgb(0x41, 0x45, 0x59),
-            text_primary: Color32::from_rgb(0xc6, 0xd0, 0xf5),
-            text_secondary: Color32::from_rgb(0xb5, 0xbf, 0xe2),
-            accent: Color32::from_rgb(0x8c, 0xaa, 0xee),
-            accent_weak: Color32::from_rgb(0x85, 0xc1, 0xdc),
+            background: color_from_rgb(0x23, 0x26, 0x34),
+            surface: color_from_rgb(0x29, 0x2c, 0x3c),
+            surface_highlight: color_from_rgb(0x41, 0x45, 0x59),
+            text_primary: color_from_rgb(0xc6, 0xd0, 0xf5),
+            text_secondary: color_from_rgb(0xb5, 0xbf, 0xe2),
+            accent: color_from_rgb(0x8c, 0xaa, 0xee),
+            accent_weak: color_from_rgb(0x85, 0xc1, 0xdc),
         }
     }
 
     pub fn macchiato() -> Self {
         Self {
-            background: Color32::from_rgb(0x18, 0x19, 0x26),
-            surface: Color32::from_rgb(0x1e, 0x20, 0x30),
-            surface_highlight: Color32::from_rgb(0x36, 0x3a, 0x4f),
-            text_primary: Color32::from_rgb(0xca, 0xd3, 0xf5),
-            text_secondary: Color32::from_rgb(0xb8, 0xc0, 0xe0),
-            accent: Color32::from_rgb(0x8a, 0xad, 0xf4),
-            accent_weak: Color32::from_rgb(0x7d, 0xc4, 0xe4),
+            background: color_from_rgb(0x18, 0x19, 0x26),
+            surface: color_from_rgb(0x1e, 0x20, 0x30),
+            surface_highlight: color_from_rgb(0x36, 0x3a, 0x4f),
+            text_primary: color_from_rgb(0xca, 0xd3, 0xf5),
+            text_secondary: color_from_rgb(0xb8, 0xc0, 0xe0),
+            accent: color_from_rgb(0x8a, 0xad, 0xf4),
+            accent_weak: color_from_rgb(0x7d, 0xc4, 0xe4),
         }
     }
 
     pub fn mocha() -> Self {
         Self {
-            background: Color32::from_rgb(0x11, 0x11, 0x1b),
-            surface: Color32::from_rgb(0x18, 0x18, 0x25),
-            surface_highlight: Color32::from_rgb(0x31, 0x32, 0x44),
-            text_primary: Color32::from_rgb(0xcd, 0xd6, 0xf4),
-            text_secondary: Color32::from_rgb(0xba, 0xc2, 0xde),
-            accent: Color32::from_rgb(0x89, 0xb4, 0xfa),
-            accent_weak: Color32::from_rgb(0x74, 0xc7, 0xec),
+            background: color_from_rgb(0x11, 0x11, 0x1b),
+            surface: color_from_rgb(0x18, 0x18, 0x25),
+            surface_highlight: color_from_rgb(0x31, 0x32, 0x44),
+            text_primary: color_from_rgb(0xcd, 0xd6, 0xf4),
+            text_secondary: color_from_rgb(0xba, 0xc2, 0xde),
+            accent: color_from_rgb(0x89, 0xb4, 0xfa),
+            accent_weak: color_from_rgb(0x74, 0xc7, 0xec),
         }
     }
 }
 
+/// Tokens de typographie.
 #[derive(Debug, Clone)]
 pub struct Typography {
     pub heading: f32,
@@ -87,6 +89,7 @@ impl Default for Typography {
     }
 }
 
+/// Tokens d'espacement.
 #[derive(Debug, Clone, Copy)]
 pub struct Spacing {
     pub xs: f32,
@@ -106,12 +109,12 @@ impl Default for Spacing {
     }
 }
 
+/// Thème GitSpace complet avec palette, typographie et espacement.
 #[derive(Debug, Clone)]
 pub struct Theme {
     pub palette: Palette,
     pub typography: Typography,
     pub spacing: Spacing,
-    is_dark: bool,
 }
 
 impl Theme {
@@ -120,7 +123,6 @@ impl Theme {
             palette: Palette::latte(),
             typography: Typography::default(),
             spacing: Spacing::default(),
-            is_dark: false,
         }
     }
 
@@ -129,7 +131,6 @@ impl Theme {
             palette: Palette::frappe(),
             typography: Typography::default(),
             spacing: Spacing::default(),
-            is_dark: true,
         }
     }
 
@@ -138,7 +139,6 @@ impl Theme {
             palette: Palette::macchiato(),
             typography: Typography::default(),
             spacing: Spacing::default(),
-            is_dark: true,
         }
     }
 
@@ -147,7 +147,6 @@ impl Theme {
             palette: Palette::mocha(),
             typography: Typography::default(),
             spacing: Spacing::default(),
-            is_dark: true,
         }
     }
 
@@ -160,65 +159,29 @@ impl Theme {
         }
     }
 
-    pub fn apply(&self, ctx: &egui::Context) {
-        let mut visuals = if self.is_dark {
-            egui::Visuals::dark()
-        } else {
-            egui::Visuals::light()
+    /// Convertit le thème GitSpace en thème Iced natif.
+    pub fn to_iced_theme(&self) -> iced::Theme {
+        let iced_palette = iced::theme::Palette {
+            background: self.palette.background,
+            text: self.palette.text_primary,
+            primary: self.palette.accent,
+            success: color_from_rgb(0xa6, 0xe3, 0xa1),
+            danger: color_from_rgb(0xf3, 0x8b, 0xa8),
         };
-        visuals.dark_mode = self.is_dark;
-        visuals.override_text_color = Some(self.palette.text_primary);
-        visuals.widgets.noninteractive.bg_fill = self.palette.background;
-        visuals.widgets.noninteractive.fg_stroke.color = self.palette.text_secondary;
-        visuals.widgets.inactive.bg_fill = self.palette.surface;
-        visuals.widgets.inactive.fg_stroke.color = self.palette.text_primary;
-        visuals.widgets.hovered.bg_fill = self.palette.surface_highlight;
-        visuals.widgets.hovered.fg_stroke.color = self.palette.text_primary;
-        visuals.faint_bg_color = self.palette.surface_highlight;
-        visuals.extreme_bg_color = self.palette.surface;
-        visuals.code_bg_color = self.palette.surface_highlight;
-        visuals.window_fill = self.palette.background;
-        visuals.panel_fill = self.palette.background;
-        visuals.selection.bg_fill = self.palette.accent;
-        visuals.selection.stroke.color = self.palette.accent_weak;
-        visuals.hyperlink_color = self.palette.accent;
-
-        ctx.set_visuals(visuals);
-
-        let mut style = (*ctx.style()).clone();
-        style.text_styles = [
-            (
-                TextStyle::Heading,
-                egui::FontId::proportional(self.typography.heading),
-            ),
-            (
-                TextStyle::Name("Title".into()),
-                egui::FontId::proportional(self.typography.title),
-            ),
-            (
-                TextStyle::Body,
-                egui::FontId::proportional(self.typography.body),
-            ),
-            (
-                TextStyle::Button,
-                egui::FontId::proportional(self.typography.body),
-            ),
-            (
-                TextStyle::Small,
-                egui::FontId::proportional(self.typography.label),
-            ),
-            (
-                TextStyle::Monospace,
-                egui::FontId::monospace(self.typography.body),
-            ),
-        ]
-        .into();
-
-        ctx.set_style(style);
+        iced::Theme::custom_with_fn(
+            "Catppuccin".to_string(),
+            iced_palette,
+            |palette| iced::theme::palette::Extended::generate(palette),
+        )
     }
+}
 
-    /// Creates a shared (Arc-wrapped) theme from a theme mode.
-    pub fn shared_from_mode(mode: ThemeMode) -> SharedTheme {
-        Arc::new(Self::from_mode(mode))
-    }
+/// Convertit des composantes RGB (0-255) en `iced::Color`.
+fn color_from_rgb(r: u8, g: u8, b: u8) -> Color {
+    Color::from_rgb8(r, g, b)
+}
+
+/// Applique une opacité alpha à une couleur Iced.
+pub fn with_alpha(color: Color, alpha: f32) -> Color {
+    Color { a: alpha.clamp(0.0, 1.0), ..color }
 }

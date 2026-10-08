@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 use git2::{Diff, DiffFormat, DiffOptions, Oid, Repository, Tree};
 
+use crate::git::repo_cache::with_cached_repo;
+
 /// Maximum patch size in bytes before truncation (64 KB)
 const MAX_PATCH_SIZE: usize = 64 * 1024;
 
@@ -160,102 +162,113 @@ fn head_tree(repo: &Repository) -> Result<Option<Tree<'_>>, git2::Error> {
 }
 
 /// Get full diff for all files in a commit (prefer commit_diff_summaries + commit_diff_file for lazy loading)
-#[allow(dead_code)]
+// Utilise le cache thread-local au lieu d'ouvrir le dépôt à chaque appel
 pub fn commit_diff(repo_path: &str, oid: &str) -> Result<Vec<FileDiff>, git2::Error> {
-    let repo = Repository::open(repo_path)?;
     let oid = Oid::from_str(oid)?;
-    let commit = repo.find_commit(oid)?;
-    let tree = commit.tree()?;
+    with_cached_repo(repo_path, |repo| {
+        let commit = repo.find_commit(oid)?;
+        let tree = commit.tree()?;
 
-    let parent_tree = if let Ok(parent) = commit.parent(0) {
-        Some(parent.tree()?)
-    } else {
-        None
-    };
+        let parent_tree = if let Ok(parent) = commit.parent(0) {
+            Some(parent.tree()?)
+        } else {
+            None
+        };
 
-    let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)?;
+        let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)?;
 
-    collect_diff_files(diff)
+        collect_diff_files(diff)
+    })
 }
 
 /// Get only summaries for a commit (for lazy loading - no patch content)
+// Résumés de diff pour un commit — lecture seule, utilise le cache
 pub fn commit_diff_summaries(repo_path: &str, oid: &str) -> Result<Vec<FileDiffSummary>, git2::Error> {
-    let repo = Repository::open(repo_path)?;
     let oid = Oid::from_str(oid)?;
-    let commit = repo.find_commit(oid)?;
-    let tree = commit.tree()?;
+    with_cached_repo(repo_path, |repo| {
+        let commit = repo.find_commit(oid)?;
+        let tree = commit.tree()?;
 
-    let parent_tree = if let Ok(parent) = commit.parent(0) {
-        Some(parent.tree()?)
-    } else {
-        None
-    };
+        let parent_tree = if let Ok(parent) = commit.parent(0) {
+            Some(parent.tree()?)
+        } else {
+            None
+        };
 
-    let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)?;
-    collect_diff_summaries(&diff)
+        let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)?;
+        collect_diff_summaries(&diff)
+    })
 }
 
 /// Get the diff for a single file in a commit (for lazy loading)
+// Diff d'un seul fichier dans un commit — chargement paresseux via le cache
 pub fn commit_diff_file(repo_path: &str, oid: &str, file_path: &str) -> Result<Option<FileDiff>, git2::Error> {
-    let repo = Repository::open(repo_path)?;
     let oid = Oid::from_str(oid)?;
-    let commit = repo.find_commit(oid)?;
-    let tree = commit.tree()?;
+    with_cached_repo(repo_path, |repo| {
+        let commit = repo.find_commit(oid)?;
+        let tree = commit.tree()?;
 
-    let parent_tree = if let Ok(parent) = commit.parent(0) {
-        Some(parent.tree()?)
-    } else {
-        None
-    };
+        let parent_tree = if let Ok(parent) = commit.parent(0) {
+            Some(parent.tree()?)
+        } else {
+            None
+        };
 
-    let mut options = DiffOptions::new();
-    options.pathspec(file_path);
+        let mut options = DiffOptions::new();
+        options.pathspec(file_path);
 
-    let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), Some(&mut options))?;
-    Ok(collect_diff_files(diff)?.into_iter().next())
+        let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), Some(&mut options))?;
+        Ok(collect_diff_files(diff)?.into_iter().next())
+    })
 }
 
+// Diff de l'arbre de travail — comparaison index/répertoire de travail
 pub fn working_tree_diff(repo_path: &str) -> Result<Vec<FileDiff>, git2::Error> {
-    let repo = Repository::open(repo_path)?;
-    let mut index = repo.index()?;
-    index.read(true)?;
-    let mut options = DiffOptions::new();
-    options.include_untracked(true);
-    let diff = repo.diff_index_to_workdir(Some(&index), Some(&mut options))?;
+    with_cached_repo(repo_path, |repo| {
+        let mut index = repo.index()?;
+        index.read(true)?;
+        let mut options = DiffOptions::new();
+        options.include_untracked(true);
+        let diff = repo.diff_index_to_workdir(Some(&index), Some(&mut options))?;
 
-    collect_diff_files(diff)
+        collect_diff_files(diff)
+    })
 }
 
+// Diff des fichiers indexés (staged) — comparaison HEAD/index
 pub fn staged_diff(repo_path: &str) -> Result<Vec<FileDiff>, git2::Error> {
-    let repo = Repository::open(repo_path)?;
-    let mut index = repo.index()?;
-    index.read(true)?;
-    let base_tree = head_tree(&repo)?;
-    let diff = repo.diff_tree_to_index(base_tree.as_ref(), Some(&index), None)?;
+    with_cached_repo(repo_path, |repo| {
+        let mut index = repo.index()?;
+        index.read(true)?;
+        let base_tree = head_tree(repo)?;
+        let diff = repo.diff_tree_to_index(base_tree.as_ref(), Some(&index), None)?;
 
-    collect_diff_files(diff)
+        collect_diff_files(diff)
+    })
 }
 
+// Diff d'un fichier unique, indexé ou non — utilise le cache
 pub fn diff_file(
     repo_path: &str,
     path: &str,
     staged: bool,
 ) -> Result<Option<FileDiff>, git2::Error> {
-    let repo = Repository::open(repo_path)?;
-    let mut options = DiffOptions::new();
-    options.pathspec(path).context_lines(3);
+    with_cached_repo(repo_path, |repo| {
+        let mut options = DiffOptions::new();
+        options.pathspec(path).context_lines(3);
 
-    let diff = if staged {
-        let mut index = repo.index()?;
-        index.read(true)?;
-        let base_tree = head_tree(&repo)?;
-        repo.diff_tree_to_index(base_tree.as_ref(), Some(&index), Some(&mut options))?
-    } else {
-        let mut index = repo.index()?;
-        index.read(true)?;
-        options.include_untracked(true);
-        repo.diff_index_to_workdir(Some(&index), Some(&mut options))?
-    };
+        let diff = if staged {
+            let mut index = repo.index()?;
+            index.read(true)?;
+            let base_tree = head_tree(repo)?;
+            repo.diff_tree_to_index(base_tree.as_ref(), Some(&index), Some(&mut options))?
+        } else {
+            let mut index = repo.index()?;
+            index.read(true)?;
+            options.include_untracked(true);
+            repo.diff_index_to_workdir(Some(&index), Some(&mut options))?
+        };
 
-    Ok(collect_diff_files(diff)?.into_iter().next())
+        Ok(collect_diff_files(diff)?.into_iter().next())
+    })
 }

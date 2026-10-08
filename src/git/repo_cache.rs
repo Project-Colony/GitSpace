@@ -217,15 +217,32 @@ impl<'a> RepoHandle<'a> {
     }
 }
 
-// Note: Global cache is not possible because git2::Repository is not thread-safe.
-// The RepoCache should be used per-thread or with proper synchronization.
-// Use thread_local! for a thread-local cache if needed:
-//
-// thread_local! {
-//     static LOCAL_CACHE: RefCell<RepoCache> = RefCell::new(RepoCache::new());
-// }
-//
-// For now, users should create their own RepoCache instance.
+// Cache thread-local : chaque thread (UI et spawn_blocking) possede son propre cache.
+// Cela evite les problemes de Send/Sync avec git2::Repository.
+use std::cell::RefCell;
+
+thread_local! {
+    static LOCAL_CACHE: RefCell<RepoCache> = RefCell::new(RepoCache::new());
+}
+
+/// Ouvre un depot en utilisant le cache thread-local.
+/// Appelle la closure `f` avec une reference au `Repository`.
+pub fn with_cached_repo<P, F, R>(path: P, f: F) -> Result<R, git2::Error>
+where
+    P: AsRef<Path>,
+    F: FnOnce(&Repository) -> Result<R, git2::Error>,
+{
+    LOCAL_CACHE.with(|cache| {
+        cache.borrow().with_repo(path, f)
+    })
+}
+
+/// Invalide l'entree du cache thread-local pour le chemin donne.
+pub fn invalidate_cached(path: &Path) {
+    LOCAL_CACHE.with(|cache| {
+        cache.borrow().invalidate(path);
+    });
+}
 
 #[cfg(test)]
 mod tests {

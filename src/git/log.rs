@@ -1,4 +1,6 @@
 use git2::{BranchType, Repository, Time};
+// Utilise le cache thread-local pour éviter de réouvrir le dépôt à chaque appel
+use crate::git::repo_cache::with_cached_repo;
 
 #[derive(Debug, Clone, Default)]
 pub struct CommitFilter {
@@ -26,19 +28,21 @@ pub struct CommitInfo {
 }
 
 pub fn list_local_branches(repo_path: &str) -> Result<Vec<String>, git2::Error> {
-    let repo = Repository::open(repo_path)?;
-    let mut branches = Vec::new();
+    // Lecture seule des branches locales via le cache
+    with_cached_repo(repo_path, |repo| {
+        let mut branches = Vec::new();
 
-    for branch in repo.branches(Some(BranchType::Local))? {
-        let (branch, _) = branch?;
-        if let Some(name) = branch.name()? {
-            branches.push(name.to_string());
+        for branch in repo.branches(Some(BranchType::Local))? {
+            let (branch, _) = branch?;
+            if let Some(name) = branch.name()? {
+                branches.push(name.to_string());
+            }
         }
-    }
 
-    branches.sort();
-    branches.dedup();
-    Ok(branches)
+        branches.sort();
+        branches.dedup();
+        Ok(branches)
+    })
 }
 
 pub fn read_commit_log(
@@ -47,115 +51,119 @@ pub fn read_commit_log(
     limit: usize,
     include_stats: bool,
 ) -> Result<Vec<CommitInfo>, git2::Error> {
-    let repo = Repository::open(repo_path)?;
-    let mut revwalk = repo.revwalk()?;
-    revwalk.set_sorting(git2::Sort::TIME | git2::Sort::TOPOLOGICAL)?;
+    // Parcours du journal de commits en lecture seule via le cache
+    with_cached_repo(repo_path, |repo| {
+        let mut revwalk = repo.revwalk()?;
+        revwalk.set_sorting(git2::Sort::TIME | git2::Sort::TOPOLOGICAL)?;
 
-    if let Some(branch) = &filter.branch {
-        let reference_name = format!("refs/heads/{branch}");
-        if let Ok(reference) = repo.find_reference(&reference_name) {
-            if let Some(oid) = reference.target() {
-                revwalk.push(oid)?;
+        if let Some(branch) = &filter.branch {
+            let reference_name = format!("refs/heads/{branch}");
+            if let Ok(reference) = repo.find_reference(&reference_name) {
+                if let Some(oid) = reference.target() {
+                    revwalk.push(oid)?;
+                }
             }
-        }
-    } else {
-        revwalk.push_head()?;
-    }
-
-    let mut commits = Vec::with_capacity(limit.min(256));
-
-    for oid_result in revwalk.take(limit) {
-        let oid = oid_result?;
-        let commit = repo.find_commit(oid)?;
-
-        if let Some(author_filter) = &filter.author {
-            let author_text = format!(
-                "{} {}",
-                commit.author().name().unwrap_or_default(),
-                commit.author().email().unwrap_or_default()
-            )
-            .to_lowercase();
-            if !author_text.contains(&author_filter.to_lowercase()) {
-                continue;
-            }
-        }
-
-        if let Some(search) = &filter.search {
-            let search_lower = search.to_lowercase();
-            let message = commit.message().unwrap_or_default().to_lowercase();
-            let summary = commit.summary().unwrap_or_default().to_lowercase();
-            if !message.contains(&search_lower) && !summary.contains(&search_lower) {
-                continue;
-            }
-        }
-
-        let timestamp = commit.time().seconds();
-        if let Some(since) = filter.since {
-            if timestamp < since {
-                continue;
-            }
-        }
-
-        if let Some(until) = filter.until {
-            if timestamp > until {
-                continue;
-            }
-        }
-
-        let parents = commit
-            .parents()
-            .map(|p| p.id().to_string())
-            .collect::<Vec<_>>();
-
-        let (files_changed, additions, deletions) = if include_stats {
-            let tree = commit.tree()?;
-            let parent_tree = commit
-                .parent(0)
-                .ok()
-                .map(|parent| parent.tree())
-                .transpose()?;
-            let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)?;
-            let stats = diff.stats()?;
-            (
-                Some(stats.files_changed()),
-                Some(stats.insertions()),
-                Some(stats.deletions()),
-            )
         } else {
-            (None, None, None)
-        };
+            revwalk.push_head()?;
+        }
 
-        let id = oid.to_string();
-        let short_id = id.chars().take(8).collect();
-        commits.push(CommitInfo {
-            id,
-            short_id,
-            summary: commit.summary().unwrap_or_default().to_string(),
-            message: commit.message().unwrap_or_default().to_string(),
-            author: commit.author().name().unwrap_or("Unknown").to_string(),
-            email: commit.author().email().map(|s| s.to_string()),
-            time: commit.time(),
-            parents,
-            files_changed,
-            additions,
-            deletions,
-        });
-    }
+        let mut commits = Vec::with_capacity(limit.min(256));
 
-    Ok(commits)
+        for oid_result in revwalk.take(limit) {
+            let oid = oid_result?;
+            let commit = repo.find_commit(oid)?;
+
+            if let Some(author_filter) = &filter.author {
+                let author_text = format!(
+                    "{} {}",
+                    commit.author().name().unwrap_or_default(),
+                    commit.author().email().unwrap_or_default()
+                )
+                .to_lowercase();
+                if !author_text.contains(&author_filter.to_lowercase()) {
+                    continue;
+                }
+            }
+
+            if let Some(search) = &filter.search {
+                let search_lower = search.to_lowercase();
+                let message = commit.message().unwrap_or_default().to_lowercase();
+                let summary = commit.summary().unwrap_or_default().to_lowercase();
+                if !message.contains(&search_lower) && !summary.contains(&search_lower) {
+                    continue;
+                }
+            }
+
+            let timestamp = commit.time().seconds();
+            if let Some(since) = filter.since {
+                if timestamp < since {
+                    continue;
+                }
+            }
+
+            if let Some(until) = filter.until {
+                if timestamp > until {
+                    continue;
+                }
+            }
+
+            let parents = commit
+                .parents()
+                .map(|p| p.id().to_string())
+                .collect::<Vec<_>>();
+
+            let (files_changed, additions, deletions) = if include_stats {
+                let tree = commit.tree()?;
+                let parent_tree = commit
+                    .parent(0)
+                    .ok()
+                    .map(|parent| parent.tree())
+                    .transpose()?;
+                let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)?;
+                let stats = diff.stats()?;
+                (
+                    Some(stats.files_changed()),
+                    Some(stats.insertions()),
+                    Some(stats.deletions()),
+                )
+            } else {
+                (None, None, None)
+            };
+
+            let id = oid.to_string();
+            let short_id = id.chars().take(8).collect();
+            commits.push(CommitInfo {
+                id,
+                short_id,
+                summary: commit.summary().unwrap_or_default().to_string(),
+                message: commit.message().unwrap_or_default().to_string(),
+                author: commit.author().name().unwrap_or("Unknown").to_string(),
+                email: commit.author().email().map(|s| s.to_string()),
+                time: commit.time(),
+                parents,
+                files_changed,
+                additions,
+                deletions,
+            });
+        }
+
+        Ok(commits)
+    })
 }
 
 pub fn latest_commit_for_branch(
     repo_path: &str,
     branch_name: &str,
 ) -> Result<Option<CommitInfo>, git2::Error> {
-    let repo = Repository::open(repo_path)?;
-    let oid = resolve_branch_oid(&repo, branch_name)?;
-    let Some(oid) = oid else {
-        return Ok(None);
-    };
-    let commit = repo.find_commit(oid)?;
-    Ok(Some(commit_info_from_commit(&commit)))
+    // Récupération du dernier commit d'une branche via le cache
+    with_cached_repo(repo_path, |repo| {
+        let oid = resolve_branch_oid(repo, branch_name)?;
+        let Some(oid) = oid else {
+            return Ok(None);
+        };
+        let commit = repo.find_commit(oid)?;
+        Ok(Some(commit_info_from_commit(&commit)))
+    })
 }
 
 pub fn commits_between_refs(
@@ -164,27 +172,29 @@ pub fn commits_between_refs(
     to_ref: &str,
     limit: usize,
 ) -> Result<Vec<CommitInfo>, git2::Error> {
-    let repo = Repository::open(repo_path)?;
-    let Some(to_oid) = resolve_ref_oid(&repo, to_ref)? else {
-        return Ok(Vec::new());
-    };
-    let from_oid = resolve_ref_oid(&repo, from_ref)?;
+    // Comparaison de commits entre deux références via le cache
+    with_cached_repo(repo_path, |repo| {
+        let Some(to_oid) = resolve_ref_oid(repo, to_ref)? else {
+            return Ok(Vec::new());
+        };
+        let from_oid = resolve_ref_oid(repo, from_ref)?;
 
-    let mut revwalk = repo.revwalk()?;
-    revwalk.set_sorting(git2::Sort::TIME | git2::Sort::TOPOLOGICAL)?;
-    revwalk.push(to_oid)?;
-    if let Some(from_oid) = from_oid {
-        revwalk.hide(from_oid)?;
-    }
+        let mut revwalk = repo.revwalk()?;
+        revwalk.set_sorting(git2::Sort::TIME | git2::Sort::TOPOLOGICAL)?;
+        revwalk.push(to_oid)?;
+        if let Some(from_oid) = from_oid {
+            revwalk.hide(from_oid)?;
+        }
 
-    let mut commits = Vec::with_capacity(limit.min(64));
-    for oid_result in revwalk.take(limit) {
-        let oid = oid_result?;
-        let commit = repo.find_commit(oid)?;
-        commits.push(commit_info_from_commit(&commit));
-    }
+        let mut commits = Vec::with_capacity(limit.min(64));
+        for oid_result in revwalk.take(limit) {
+            let oid = oid_result?;
+            let commit = repo.find_commit(oid)?;
+            commits.push(commit_info_from_commit(&commit));
+        }
 
-    Ok(commits)
+        Ok(commits)
+    })
 }
 
 fn resolve_branch_oid(

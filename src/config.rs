@@ -94,9 +94,45 @@ impl Default for ReleaseChannel {
     }
 }
 
+/// Libelle pour un canal de release (utilise par le pick_list).
+impl std::fmt::Display for ReleaseChannel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let label = match self {
+            ReleaseChannel::Stable => "Stable",
+            ReleaseChannel::Preview => "Preview",
+        };
+        write!(f, "{label}")
+    }
+}
+
 impl Default for MotionIntensity {
     fn default() -> Self {
         Self::Medium
+    }
+}
+
+/// Libelle pour une intensite de mouvement (utilise par le pick_list).
+impl std::fmt::Display for MotionIntensity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let label = match self {
+            MotionIntensity::Low => "Faible",
+            MotionIntensity::Medium => "Moyenne",
+            MotionIntensity::High => "Elevee",
+        };
+        write!(f, "{label}")
+    }
+}
+
+/// Libelle pour un mode de theme (utilise par le pick_list).
+impl std::fmt::Display for ThemeMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let label = match self {
+            ThemeMode::Latte => "Latte",
+            ThemeMode::Frappe => "Frappe",
+            ThemeMode::Macchiato => "Macchiato",
+            ThemeMode::Mocha => "Mocha",
+        };
+        write!(f, "{label}")
     }
 }
 
@@ -284,6 +320,7 @@ fn default_control_height() -> f32 {
     28.0
 }
 
+#[allow(dead_code)]
 pub const MIN_BRANCH_BOX_HEIGHT: f32 = 72.0;
 
 fn default_branch_box_height() -> f32 {
@@ -357,14 +394,6 @@ impl Preferences {
         self.default_clone_path = expanded;
     }
 
-    pub fn default_clone_path_mut(&mut self) -> &mut String {
-        &mut self.default_clone_path
-    }
-
-    pub fn keybindings_mut(&mut self) -> &mut Vec<Keybinding> {
-        &mut self.keybindings
-    }
-
     pub fn network_mut(&mut self) -> &mut NetworkOptions {
         &mut self.network
     }
@@ -413,10 +442,12 @@ impl Preferences {
         self.control_height = height.clamp(20.0, 48.0);
     }
 
+    #[allow(dead_code)]
     pub fn branch_box_height(&self) -> f32 {
         self.branch_box_height
     }
 
+    #[allow(dead_code)]
     pub fn set_branch_box_height(&mut self, height: f32) {
         self.branch_box_height = height.max(MIN_BRANCH_BOX_HEIGHT);
     }

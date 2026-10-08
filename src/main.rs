@@ -2,7 +2,6 @@
 
 mod auth;
 mod config;
-mod dotnet;
 mod error;
 mod git;
 mod logging;
@@ -10,24 +9,31 @@ mod ui;
 mod update;
 
 use ui::app::GitSpaceApp;
+use ui::fonts;
 
 fn main() {
     logging::init_tracing();
     log_dev_feature_flags();
 
-    let native_options = eframe::NativeOptions {
-        renderer: eframe::Renderer::Glow,
-        ..Default::default()
-    };
+    let result = iced::application("GitSpace", GitSpaceApp::update, GitSpaceApp::view)
+        .subscription(GitSpaceApp::subscription)
+        .theme(GitSpaceApp::theme)
+        .font(fonts::FONT_REGULAR)
+        .font(fonts::FONT_MEDIUM)
+        .font(fonts::FONT_SEMIBOLD)
+        .font(fonts::FONT_BOLD)
+        .font(fonts::FONT_ITALIC)
+        .font(fonts::FONT_BOLD_ITALIC)
+        .font(fonts::FONT_MONO_REGULAR)
+        .font(fonts::FONT_MONO_BOLD)
+        .default_font(fonts::DEFAULT_FONT)
+        .window_size((1280.0, 800.0))
+        .run_with(GitSpaceApp::new);
 
-    if let Err(err) = eframe::run_native(
-        "GitSpace",
-        native_options,
-        Box::new(|_cc| Box::new(GitSpaceApp::new())),
-    ) {
-        tracing::error!(target: "gitspace::main", error = %err, "failed to start GitSpace UI");
-        eprintln!("Error: Failed to start GitSpace UI: {err}");
-        eprintln!("Please check that your display server is running and accessible.");
+    if let Err(err) = result {
+        tracing::error!(target: "gitspace::main", error = %err, "echec du lancement de l'interface GitSpace");
+        eprintln!("Erreur: Impossible de lancer GitSpace: {err}");
+        eprintln!("Verifiez que votre serveur d'affichage est lance et accessible.");
         std::process::exit(1);
     }
 }

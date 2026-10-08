@@ -6,7 +6,7 @@ use std::time::Duration;
 use base64::Engine;
 use ed25519_dalek::{Signature as Ed25519Signature, VerifyingKey};
 use reqwest::Proxy;
-use reqwest::blocking::Client;
+use reqwest::Client;
 use rsa::RsaPublicKey;
 use rsa::pkcs1v15::Signature as RsaSignature;
 use rsa::pkcs1v15::VerifyingKey as RsaVerifyingKey;
@@ -114,7 +114,7 @@ struct GitHubRelease {
 
 pub type UpdateResult = Result<Option<ReleaseInfo>, UpdateError>;
 
-pub fn check_for_updates(
+pub async fn check_for_updates(
     channel: ReleaseChannel,
     feed_override: Option<&str>,
     network: &NetworkOptions,
@@ -122,16 +122,17 @@ pub fn check_for_updates(
     let url = feed_override.unwrap_or(DEFAULT_RELEASE_FEED);
     ensure_https_policy(url, network)?;
 
-    let client = build_client(network)?;
+    let client = build_client(network).await?;
 
     let response = client
         .get(url)
         .send()
+        .await
         .map_err(UpdateError::from)?
         .error_for_status()
         .map_err(UpdateError::from)?;
 
-    let releases: Vec<GitHubRelease> = response.json().map_err(|err| {
+    let releases: Vec<GitHubRelease> = response.json().await.map_err(|err| {
         UpdateError::InvalidResponse(format!("Failed to parse release feed: {err}"))
     })?;
 
@@ -151,7 +152,7 @@ pub fn check_for_updates(
         return Ok(None);
     }
 
-    let assets = collect_assets(&client, release, network)?;
+    let assets = collect_assets(&client, release, network).await?;
 
     Ok(Some(ReleaseInfo {
         version: normalized_tag.to_string(),
@@ -163,26 +164,28 @@ pub fn check_for_updates(
 }
 
 #[allow(dead_code)]
-pub fn download_verified_asset(
+pub async fn download_verified_asset(
     network: &NetworkOptions,
     asset: &ReleaseAsset,
     destination: &Path,
 ) -> Result<(), UpdateError> {
     ensure_https_policy(&asset.download_url, network)?;
-    let client = build_client(network)?;
+    let client = build_client(network).await?;
 
     let backup = backup_existing(destination)?;
 
     let bytes = client
         .get(&asset.download_url)
         .send()
+        .await
         .map_err(UpdateError::from)?
         .error_for_status()
         .map_err(UpdateError::from)?
         .bytes()
+        .await
         .map_err(UpdateError::from)?;
 
-    if let Err(err) = ensure_asset_verification(&bytes, asset, &client, network) {
+    if let Err(err) = ensure_asset_verification(&bytes, asset, &client, network).await {
         rollback_from_backup(destination, backup);
         return Err(err);
     }
@@ -200,7 +203,7 @@ pub fn download_verified_asset(
 }
 
 #[allow(dead_code)]
-fn ensure_asset_verification(
+async fn ensure_asset_verification(
     bytes: &[u8],
     asset: &ReleaseAsset,
     client: &Client,
@@ -225,10 +228,12 @@ fn ensure_asset_verification(
         let signature = client
             .get(signature_url)
             .send()
+            .await
             .map_err(UpdateError::from)?
             .error_for_status()
             .map_err(UpdateError::from)?
             .bytes()
+            .await
             .map_err(UpdateError::from)?;
 
         if signature.is_empty() {
@@ -316,7 +321,7 @@ fn compute_sha256(bytes: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-fn collect_assets(
+async fn collect_assets(
     client: &Client,
     release: &GitHubRelease,
     network: &NetworkOptions,
@@ -327,7 +332,7 @@ fn collect_assets(
 
     for asset in &release.assets {
         if let Some(target) = asset.name.strip_suffix(".sha256") {
-            let checksum = fetch_checksum(client, &asset.browser_download_url, network)?;
+            let checksum = fetch_checksum(client, &asset.browser_download_url, network).await?;
             checksums.insert(target.to_string(), checksum);
         } else if let Some(target) = asset.name.strip_suffix(".sig") {
             signatures.insert(target.to_string(), asset.browser_download_url.clone());
@@ -451,7 +456,7 @@ fn detect_algorithm(
     }
 }
 
-fn fetch_checksum(
+async fn fetch_checksum(
     client: &Client,
     url: &str,
     network: &NetworkOptions,
@@ -460,10 +465,12 @@ fn fetch_checksum(
     let body = client
         .get(url)
         .send()
+        .await
         .map_err(UpdateError::from)?
         .error_for_status()
         .map_err(UpdateError::from)?
         .text()
+        .await
         .map_err(UpdateError::from)?;
 
     let parsed = body
@@ -489,7 +496,7 @@ fn fetch_checksum(
     Ok(parsed.to_lowercase())
 }
 
-fn build_client(network: &NetworkOptions) -> Result<Client, UpdateError> {
+async fn build_client(network: &NetworkOptions) -> Result<Client, UpdateError> {
     let mut builder = Client::builder()
         .user_agent("GitSpace-Updater/0.1")
         .timeout(Duration::from_secs(network.network_timeout_secs.max(1)));
@@ -606,8 +613,8 @@ hwIDAQAB
         assert!(matches!(err, UpdateError::Verification(_)));
     }
 
-    #[test]
-    fn rejects_missing_signature_metadata() {
+    #[tokio::test]
+    async fn rejects_missing_signature_metadata() {
         let asset = ReleaseAsset {
             name: "test.zip".to_string(),
             download_url: "https://example.com/test.zip".to_string(),
@@ -615,9 +622,10 @@ hwIDAQAB
             signature_url: Some("https://example.com/test.sig".to_string()),
             signature: None,
         };
-        let client = Client::builder().build().expect("client");
+        let client = reqwest::Client::builder().build().expect("client");
         let network = NetworkOptions::default();
         let err = ensure_asset_verification(b"payload", &asset, &client, &network)
+            .await
             .expect_err("metadata missing");
         assert!(matches!(err, UpdateError::Verification(_)));
     }
