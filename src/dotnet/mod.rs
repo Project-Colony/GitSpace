@@ -3,10 +3,10 @@
 use crate::error::AppError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Debug, Serialize)]
 pub struct DotnetRequest {
@@ -143,10 +143,7 @@ impl DotnetClient {
         })
     }
 
-    pub fn dialog_open(
-        &self,
-        payload: DialogOpenRequest,
-    ) -> Result<DialogOpenResponse, AppError> {
+    pub fn dialog_open(&self, payload: DialogOpenRequest) -> Result<DialogOpenResponse, AppError> {
         let request = DotnetRequest {
             id: next_request_id(),
             command: "dialog.open".to_string(),
@@ -217,9 +214,9 @@ fn map_dotnet_error(error: &DotnetError) -> AppError {
 
 fn response_payload(response: DotnetResponse, context: &str) -> Result<Value, AppError> {
     match response.status.as_str() {
-        "ok" => response.payload.ok_or_else(|| {
-            AppError::Unknown(format!("Missing {context}"))
-        }),
+        "ok" => response
+            .payload
+            .ok_or_else(|| AppError::Unknown(format!("Missing {context}"))),
         "error" => Err(response
             .error
             .as_ref()

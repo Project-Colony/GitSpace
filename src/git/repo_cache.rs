@@ -163,7 +163,7 @@ impl RepoCache {
     /// Invalidates a cached repository entry.
     pub fn invalidate<P: AsRef<Path>>(&self, path: P) {
         let path = path.as_ref().to_path_buf();
-        let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path);
+        let canonical = std::fs::canonicalize(&path).unwrap_or(path);
         let mut cache = self.cache.write();
         cache.remove(&canonical);
     }

@@ -4,12 +4,12 @@ use chrono::Utc;
 use eframe::egui::{self, RichText, Sense, Ui};
 
 use crate::git::branch::{
-    BranchEntry, BranchKind, archive_branch, checkout_branch, create_branch,
-    create_tracking_branch, delete_branch, list_branches, rename_branch,
+    archive_branch, checkout_branch, create_branch, create_tracking_branch, delete_branch,
+    list_branches, rename_branch, BranchEntry, BranchKind,
 };
-use crate::git::compare::{BranchComparison, DiffSummary, compare_branch_with_head};
-use crate::git::log::{CommitInfo, commits_between_refs, latest_commit_for_branch};
-use crate::git::merge::{MergeOutcome, MergeStrategy, detect_conflicts, merge_branch};
+use crate::git::compare::{compare_branch_with_head, BranchComparison, DiffSummary};
+use crate::git::log::{commits_between_refs, latest_commit_for_branch, CommitInfo};
+use crate::git::merge::{detect_conflicts, merge_branch, MergeOutcome, MergeStrategy};
 use crate::ui::{context::RepoContext, theme::SharedTheme};
 
 const STALE_DAYS: i64 = 30;
@@ -181,7 +181,10 @@ impl BranchPanel {
     fn creation_bar(&mut self, ui: &mut Ui, repo: &RepoContext) {
         egui::Frame::none()
             .fill(self.theme.palette.surface)
-            .stroke(egui::Stroke::new(1.0, self.theme.palette.surface_highlight))
+            .stroke(egui::Stroke::new(
+                1.0_f32,
+                self.theme.palette.surface_highlight,
+            ))
             .rounding(6.0)
             .inner_margin(egui::Margin::same(8.0))
             .show(ui, |ui| {
@@ -501,8 +504,7 @@ impl BranchPanel {
             if let Some(commit) = &comparison.commit {
                 ui.add_space(4.0);
                 ui.label(
-                    RichText::new(commit.summary.clone())
-                        .color(self.theme.palette.text_primary),
+                    RichText::new(commit.summary.clone()).color(self.theme.palette.text_primary),
                 );
                 ui.label(
                     RichText::new(format!("by {}", commit.author))
@@ -525,10 +527,7 @@ impl BranchPanel {
 
         // Actions section
         ui.add_space(12.0);
-        ui.label(
-            RichText::new("Actions")
-                .color(self.theme.palette.text_secondary),
-        );
+        ui.label(RichText::new("Actions").color(self.theme.palette.text_secondary));
         ui.add_space(4.0);
 
         // Pin/Unpin
@@ -545,14 +544,12 @@ impl BranchPanel {
             }
 
             // Checkout & Track (remote only)
-            if branch.kind == BranchKind::Remote {
-                if ui.button("Checkout & Track").clicked() {
-                    self.run_branch_action(repo, || {
-                        let local_name = create_tracking_branch(&repo.path, &branch.name)?;
-                        checkout_branch(&repo.path, &local_name)?;
-                        Ok(())
-                    });
-                }
+            if branch.kind == BranchKind::Remote && ui.button("Checkout & Track").clicked() {
+                self.run_branch_action(repo, || {
+                    let local_name = create_tracking_branch(&repo.path, &branch.name)?;
+                    checkout_branch(&repo.path, &local_name)?;
+                    Ok(())
+                });
             }
         });
 
@@ -582,11 +579,9 @@ impl BranchPanel {
 
             ui.horizontal(|ui| {
                 // Delete (not HEAD)
-                if !branch.is_head {
-                    if ui.button("Delete").clicked() {
-                        self.run_branch_action(repo, || delete_branch(&repo.path, &branch.name));
-                        self.selected_branch = None;
-                    }
+                if !branch.is_head && ui.button("Delete").clicked() {
+                    self.run_branch_action(repo, || delete_branch(&repo.path, &branch.name));
+                    self.selected_branch = None;
                 }
 
                 // Archive

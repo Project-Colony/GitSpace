@@ -92,6 +92,7 @@ impl PreferencesPanel {
         self.preferences = preferences;
     }
 
+    #[allow(dead_code)] // the egui shell drives `open` through `toggle` only
     pub fn is_open(&self) -> bool {
         self.open
     }
@@ -100,6 +101,7 @@ impl PreferencesPanel {
         self.open = !self.open;
     }
 
+    #[allow(dead_code)]
     pub fn close(&mut self) {
         self.open = false;
     }
@@ -200,7 +202,9 @@ impl PreferencesPanel {
                             PreferencesCategory::General => self.general_content(ui, notifications),
                             PreferencesCategory::Appearance => self.appearance_content(ui),
                             PreferencesCategory::Accessibility => self.accessibility_content(ui),
-                            PreferencesCategory::GitSpace => self.gitspace_content(ui, notifications),
+                            PreferencesCategory::GitSpace => {
+                                self.gitspace_content(ui, notifications)
+                            }
                         }
 
                         ui.add_space(16.0);
@@ -224,7 +228,8 @@ impl PreferencesPanel {
             egui::Color32::TRANSPARENT
         };
 
-        ui.painter().rect_filled(rect, Rounding::same(6.0), bg_color);
+        ui.painter()
+            .rect_filled(rect, Rounding::same(6.0), bg_color);
 
         let text_color = if is_selected {
             self.theme.palette.accent
@@ -254,15 +259,9 @@ impl PreferencesPanel {
         );
 
         if is_selected {
-            let indicator_rect = Rect::from_min_size(
-                rect.min,
-                Vec2::new(3.0, item_height),
-            );
-            ui.painter().rect_filled(
-                indicator_rect,
-                Rounding::ZERO,
-                self.theme.palette.accent,
-            );
+            let indicator_rect = Rect::from_min_size(rect.min, Vec2::new(3.0, item_height));
+            ui.painter()
+                .rect_filled(indicator_rect, Rounding::ZERO, self.theme.palette.accent);
         }
 
         if response.clicked() {
@@ -275,7 +274,7 @@ impl PreferencesPanel {
     // ========================
     // Général (General) section
     // ========================
-    fn general_content(&mut self, ui: &mut Ui, notifications: &mut NotificationCenter) {
+    fn general_content(&mut self, ui: &mut Ui, _notifications: &mut NotificationCenter) {
         ui.heading(RichText::new("Général").color(self.theme.palette.text_primary));
         ui.label(
             RichText::new("Paramètres généraux de l'application")
@@ -284,7 +283,11 @@ impl PreferencesPanel {
         ui.add_space(16.0);
 
         // Privacy subsection
-        self.section_header(ui, "Confidentialité", "Contrôlez le stockage des tokens et la sécurité");
+        self.section_header(
+            ui,
+            "Confidentialité",
+            "Contrôlez le stockage des tokens et la sécurité",
+        );
         ui.add_space(8.0);
 
         let mut encrypted_tokens = self.preferences.allow_encrypted_tokens();
@@ -296,14 +299,19 @@ impl PreferencesPanel {
             "GitSpace utilise le trousseau du système par défaut. Activez cette option pour utiliser un fichier chiffré local si l'accès au trousseau échoue.",
         );
         if response.changed() {
-            self.preferences.set_allow_encrypted_tokens(encrypted_tokens);
+            self.preferences
+                .set_allow_encrypted_tokens(encrypted_tokens);
             self.mark_changed();
         }
 
         ui.add_space(20.0);
 
         // Logging subsection
-        self.section_header(ui, "Journalisation", "Configurez le nombre de fichiers de log conservés");
+        self.section_header(
+            ui,
+            "Journalisation",
+            "Configurez le nombre de fichiers de log conservés",
+        );
         ui.add_space(8.0);
 
         let mut retention_files = self.logging.retention_files() as u32;
@@ -322,7 +330,11 @@ impl PreferencesPanel {
         ui.add_space(20.0);
 
         // Import/Export subsection
-        self.section_header(ui, "Import / Export", "Transférez vos préférences entre machines au format JSON");
+        self.section_header(
+            ui,
+            "Import / Export",
+            "Transférez vos préférences entre machines au format JSON",
+        );
         ui.add_space(8.0);
 
         ui.horizontal(|ui| {
@@ -390,48 +402,54 @@ impl PreferencesPanel {
         ui.add_space(16.0);
 
         // Theme subsection
-        self.section_header(ui, "Thème", "Choisissez un thème Catppuccin pour l'interface");
+        self.section_header(
+            ui,
+            "Thème",
+            "Choisissez un thème Catppuccin pour l'interface",
+        );
         ui.add_space(8.0);
 
         let icon_id = ui.make_persistent_id("prefs-theme-icon");
-        ComboBox::from_label(
-            RichText::new("Thème").color(self.theme.palette.text_secondary),
-        )
-        .selected_text(mode_label(self.preferences.theme_mode()))
-        .icon(menu::combo_icon(Arc::clone(&self.theme), icon_id))
-        .show_ui(ui, |ui| {
-            menu::with_menu_popup_motion(ui, "prefs-theme-menu", |ui| {
-                let current_mode = self.preferences.theme_mode();
-                let mut selected_mode = current_mode;
-                for mode in [
-                    ThemeMode::Latte,
-                    ThemeMode::Frappe,
-                    ThemeMode::Macchiato,
-                    ThemeMode::Mocha,
-                ] {
-                    if menu::menu_item(
-                        ui,
-                        &self.theme,
-                        ("prefs-theme-item", mode_label(mode)),
-                        mode_label(mode),
-                        selected_mode == mode,
-                    )
-                    .clicked()
-                    {
-                        selected_mode = mode;
+        ComboBox::from_label(RichText::new("Thème").color(self.theme.palette.text_secondary))
+            .selected_text(mode_label(self.preferences.theme_mode()))
+            .icon(menu::combo_icon(Arc::clone(&self.theme), icon_id))
+            .show_ui(ui, |ui| {
+                menu::with_menu_popup_motion(ui, "prefs-theme-menu", |ui| {
+                    let current_mode = self.preferences.theme_mode();
+                    let mut selected_mode = current_mode;
+                    for mode in [
+                        ThemeMode::Latte,
+                        ThemeMode::Frappe,
+                        ThemeMode::Macchiato,
+                        ThemeMode::Mocha,
+                    ] {
+                        if menu::menu_item(
+                            ui,
+                            &self.theme,
+                            ("prefs-theme-item", mode_label(mode)),
+                            mode_label(mode),
+                            selected_mode == mode,
+                        )
+                        .clicked()
+                        {
+                            selected_mode = mode;
+                        }
                     }
-                }
-                if selected_mode != current_mode {
-                    self.preferences.set_theme_mode(selected_mode);
-                    self.pending_preferences = Some(self.preferences.clone());
-                }
+                    if selected_mode != current_mode {
+                        self.preferences.set_theme_mode(selected_mode);
+                        self.pending_preferences = Some(self.preferences.clone());
+                    }
+                });
             });
-        });
 
         ui.add_space(16.0);
 
         // Control height subsection
-        self.section_header(ui, "Taille des contrôles", "Ajustez la hauteur des éléments de l'interface");
+        self.section_header(
+            ui,
+            "Taille des contrôles",
+            "Ajustez la hauteur des éléments de l'interface",
+        );
         ui.add_space(8.0);
 
         let mut control_height = self.preferences.control_height();
@@ -455,7 +473,11 @@ impl PreferencesPanel {
         ui.add_space(16.0);
 
         // Motion subsection
-        self.section_header(ui, "Animations", "Contrôlez l'intensité et les préférences d'animation");
+        self.section_header(
+            ui,
+            "Animations",
+            "Contrôlez l'intensité et les préférences d'animation",
+        );
         ui.add_space(8.0);
 
         let icon_id = ui.make_persistent_id("prefs-motion-intensity-icon");
@@ -529,14 +551,17 @@ impl PreferencesPanel {
         ui.add_space(16.0);
 
         // Repositories subsection
-        self.section_header(ui, "Dépôts", "Contrôlez les paramètres par défaut pour les clones");
+        self.section_header(
+            ui,
+            "Dépôts",
+            "Contrôlez les paramètres par défaut pour les clones",
+        );
         ui.add_space(8.0);
 
         let control_height = ui.spacing().interact_size.y;
         ui.horizontal(|ui| {
             ui.label(
-                RichText::new("Destination par défaut")
-                    .color(self.theme.palette.text_secondary),
+                RichText::new("Destination par défaut").color(self.theme.palette.text_secondary),
             );
             ui.add_sized(
                 [280.0, control_height],
@@ -546,7 +571,8 @@ impl PreferencesPanel {
 
             if ui.button("Choisir").clicked() {
                 if let Some(path) = FileDialog::new().pick_folder() {
-                    self.preferences.set_default_clone_path(path.display().to_string());
+                    self.preferences
+                        .set_default_clone_path(path.display().to_string());
                     self.pending_preferences = Some(self.preferences.clone());
                 }
             }
@@ -564,14 +590,12 @@ impl PreferencesPanel {
                 match DotnetClient::helper().dialog_open(request) {
                     Ok(response) => {
                         if response.cancelled || response.selected_paths.is_empty() {
-                            self.native_dialog_status =
-                                Some("Dialogue natif annulé.".to_string());
+                            self.native_dialog_status = Some("Dialogue natif annulé.".to_string());
                         } else {
                             let selected = &response.selected_paths[0];
                             self.preferences.set_default_clone_path(selected.clone());
                             self.pending_preferences = Some(self.preferences.clone());
-                            self.native_dialog_status =
-                                Some(format!("Sélectionné: {}", selected));
+                            self.native_dialog_status = Some(format!("Sélectionné: {}", selected));
                         }
                     }
                     Err(err) => {
@@ -579,8 +603,7 @@ impl PreferencesPanel {
                             "Helper natif échoué",
                             err.user_message(),
                         ));
-                        self.native_dialog_status =
-                            Some(format!("Helper natif échoué: {}", err));
+                        self.native_dialog_status = Some(format!("Helper natif échoué: {}", err));
                     }
                 }
             }
@@ -602,8 +625,7 @@ impl PreferencesPanel {
             ui.label(RichText::new("Proxy HTTP").color(self.theme.palette.text_secondary));
             ui.add_sized(
                 [200.0, control_height],
-                TextEdit::singleline(&mut network.http_proxy)
-                    .hint_text("http://proxy:8080"),
+                TextEdit::singleline(&mut network.http_proxy).hint_text("http://proxy:8080"),
             );
         });
 
@@ -612,8 +634,7 @@ impl PreferencesPanel {
             ui.label(RichText::new("Proxy HTTPS").color(self.theme.palette.text_secondary));
             ui.add_sized(
                 [200.0, control_height],
-                TextEdit::singleline(&mut network.https_proxy)
-                    .hint_text("https://proxy:8443"),
+                TextEdit::singleline(&mut network.https_proxy).hint_text("https://proxy:8443"),
             );
         });
 
@@ -654,7 +675,10 @@ impl PreferencesPanel {
 
         ui.add_space(8.0);
         let mut auto_fetch_enabled = self.preferences.auto_fetch_enabled();
-        let response = ui.checkbox(&mut auto_fetch_enabled, "Récupération automatique des remotes");
+        let response = ui.checkbox(
+            &mut auto_fetch_enabled,
+            "Récupération automatique des remotes",
+        );
         if response.changed() {
             self.preferences.set_auto_fetch_enabled(auto_fetch_enabled);
             self.pending_preferences = Some(self.preferences.clone());
@@ -706,7 +730,8 @@ impl PreferencesPanel {
                             selected_interval = current_interval;
                         }
                         if selected_interval != current_interval {
-                            self.preferences.set_auto_fetch_interval_minutes(selected_interval);
+                            self.preferences
+                                .set_auto_fetch_interval_minutes(selected_interval);
                             self.pending_preferences = Some(self.preferences.clone());
                         }
                     });
@@ -717,8 +742,7 @@ impl PreferencesPanel {
                 let mut interval_error = None;
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new("Intervalle (min)")
-                            .color(self.theme.palette.text_secondary),
+                        RichText::new("Intervalle (min)").color(self.theme.palette.text_secondary),
                     );
                     let response = ui.add_sized(
                         [90.0, control_height],
@@ -730,10 +754,12 @@ impl PreferencesPanel {
                                 self.preferences.set_auto_fetch_interval_minutes(value);
                             }
                             Ok(_) => {
-                                interval_error = Some("L'intervalle doit être d'au moins 1 minute.".to_string());
+                                interval_error =
+                                    Some("L'intervalle doit être d'au moins 1 minute.".to_string());
                             }
                             Err(_) => {
-                                interval_error = Some("Entrez un nombre entier de minutes.".to_string());
+                                interval_error =
+                                    Some("Entrez un nombre entier de minutes.".to_string());
                             }
                         }
                     }
@@ -747,7 +773,11 @@ impl PreferencesPanel {
         ui.add_space(20.0);
 
         // Keybindings subsection
-        self.section_header(ui, "Raccourcis clavier", "Associez vos raccourcis favoris aux actions fréquentes");
+        self.section_header(
+            ui,
+            "Raccourcis clavier",
+            "Associez vos raccourcis favoris aux actions fréquentes",
+        );
         ui.add_space(8.0);
 
         let mut remove_index: Option<usize> = None;
@@ -774,18 +804,27 @@ impl PreferencesPanel {
         }
 
         if ui.button("Ajouter un raccourci").clicked() {
-            self.preferences.keybindings_mut().push(Keybinding::default());
+            self.preferences
+                .keybindings_mut()
+                .push(Keybinding::default());
             self.pending_preferences = Some(self.preferences.clone());
         }
 
         ui.add_space(20.0);
 
         // Updates subsection
-        self.section_header(ui, "Mises à jour", "Contrôlez la vérification des nouvelles versions");
+        self.section_header(
+            ui,
+            "Mises à jour",
+            "Contrôlez la vérification des nouvelles versions",
+        );
         ui.add_space(8.0);
 
         let mut auto_check = self.preferences.auto_check_updates();
-        let response = ui.checkbox(&mut auto_check, "Vérifier automatiquement les mises à jour au lancement");
+        let response = ui.checkbox(
+            &mut auto_check,
+            "Vérifier automatiquement les mises à jour au lancement",
+        );
         if response.changed() {
             self.preferences.set_auto_check_updates(auto_check);
             self.pending_preferences = Some(self.preferences.clone());
@@ -830,8 +869,7 @@ impl PreferencesPanel {
             .to_string();
         ui.horizontal(|ui| {
             ui.label(
-                RichText::new("Feed URL personnalisé")
-                    .color(self.theme.palette.text_secondary),
+                RichText::new("Feed URL personnalisé").color(self.theme.palette.text_secondary),
             );
             ui.add_sized(
                 [280.0, control_height],
@@ -839,7 +877,8 @@ impl PreferencesPanel {
                     .hint_text("https://example.com/feed.json"),
             );
         });
-        self.preferences.set_update_feed_override(Some(update_feed_override));
+        self.preferences
+            .set_update_feed_override(Some(update_feed_override));
         ui.label(
             RichText::new("Pour pré-release / feed interne.")
                 .color(self.theme.palette.text_secondary),

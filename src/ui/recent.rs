@@ -75,7 +75,7 @@ impl RecentList {
                     let button = ui.add_sized(
                         [520.0, 34.0],
                         egui::Button::new(
-                            RichText::new(format!("{}", name))
+                            RichText::new(name.to_string())
                                 .color(self.theme.palette.text_primary)
                                 .strong(),
                         )

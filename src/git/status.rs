@@ -61,9 +61,7 @@ pub fn read_repo_status<P: AsRef<Path>>(path: P) -> Result<RepoStatus, git2::Err
 }
 
 #[allow(dead_code)]
-pub fn read_working_tree_status<P: AsRef<Path>>(
-    path: P,
-) -> Result<WorkingTreeStatus, git2::Error> {
+pub fn read_working_tree_status<P: AsRef<Path>>(path: P) -> Result<WorkingTreeStatus, git2::Error> {
     let repo = Repository::open(path)?;
     let mut options = StatusOptions::new();
     options
@@ -101,10 +99,7 @@ pub fn read_working_tree_status<P: AsRef<Path>>(
         }
 
         if status.intersects(
-            Status::WT_MODIFIED
-                | Status::WT_DELETED
-                | Status::WT_TYPECHANGE
-                | Status::WT_RENAMED,
+            Status::WT_MODIFIED | Status::WT_DELETED | Status::WT_TYPECHANGE | Status::WT_RENAMED,
         ) {
             unstaged.insert(path.to_string());
         }

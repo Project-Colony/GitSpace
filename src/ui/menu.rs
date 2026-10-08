@@ -6,7 +6,7 @@ use eframe::egui::{
 
 use std::time::Duration;
 
-use crate::ui::animation::{AnimationIntent, motion_settings};
+use crate::ui::animation::{motion_settings, AnimationIntent};
 use crate::ui::perf::PerfScope;
 use crate::ui::theme::{SharedTheme, Theme};
 
@@ -187,7 +187,7 @@ pub fn combo_icon(
         ui.painter().add(egui::Shape::convex_polygon(
             points,
             icon_color,
-            egui::Stroke::new(1.0, icon_color),
+            egui::Stroke::new(1.0_f32, icon_color),
         ));
     }
 }

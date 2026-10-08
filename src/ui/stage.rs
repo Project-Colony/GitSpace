@@ -7,7 +7,7 @@ use git2::{Repository, Signature, Status, StatusOptions, StatusShow};
 
 use crate::git::branch::restore_file_from_branch;
 use crate::git::diff::{diff_file, staged_diff, working_tree_diff};
-use crate::git::stash::{StashEntry, apply_stash, create_stash, drop_stash, list_stashes};
+use crate::git::stash::{apply_stash, create_stash, drop_stash, list_stashes, StashEntry};
 use crate::git::status::read_repo_status;
 use crate::ui::{context::RepoContext, menu, theme::SharedTheme};
 
@@ -242,7 +242,10 @@ impl StagePanel {
     fn render_diff(&mut self, ui: &mut Ui) {
         egui::Frame::none()
             .fill(self.theme.palette.surface)
-            .stroke(egui::Stroke::new(1.0, self.theme.palette.surface_highlight))
+            .stroke(egui::Stroke::new(
+                1.0_f32,
+                self.theme.palette.surface_highlight,
+            ))
             .inner_margin(egui::Margin::same(8.0))
             .rounding(6.0)
             .show(ui, |ui| {
@@ -289,7 +292,10 @@ impl StagePanel {
     fn render_commit_editor(&mut self, ui: &mut Ui) {
         egui::Frame::none()
             .fill(self.theme.palette.surface)
-            .stroke(egui::Stroke::new(1.0, self.theme.palette.surface_highlight))
+            .stroke(egui::Stroke::new(
+                1.0_f32,
+                self.theme.palette.surface_highlight,
+            ))
             .inner_margin(egui::Margin::same(10.0))
             .rounding(6.0)
             .show(ui, |ui| {
@@ -339,7 +345,10 @@ impl StagePanel {
     fn render_stash_controls(&mut self, ui: &mut Ui, repo: &RepoContext) {
         egui::Frame::none()
             .fill(self.theme.palette.surface)
-            .stroke(egui::Stroke::new(1.0, self.theme.palette.surface_highlight))
+            .stroke(egui::Stroke::new(
+                1.0_f32,
+                self.theme.palette.surface_highlight,
+            ))
             .inner_margin(egui::Margin::same(10.0))
             .rounding(6.0)
             .show(ui, |ui| {
@@ -404,10 +413,8 @@ impl StagePanel {
                                     self.needs_refresh = true;
                                 }
                                 Err(err) => {
-                                    self.error = Some(format!(
-                                        "Failed to apply stash #{}: {err}",
-                                        index
-                                    ))
+                                    self.error =
+                                        Some(format!("Failed to apply stash #{}: {err}", index))
                                 }
                             }
                         }
@@ -418,10 +425,8 @@ impl StagePanel {
                                     self.needs_refresh = true;
                                 }
                                 Err(err) => {
-                                    self.error = Some(format!(
-                                        "Failed to drop stash #{}: {err}",
-                                        index
-                                    ))
+                                    self.error =
+                                        Some(format!("Failed to drop stash #{}: {err}", index))
                                 }
                             }
                         }

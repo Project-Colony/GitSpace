@@ -42,7 +42,10 @@ fn ipc_handshake_ping_ok() {
         .payload
         .expect("ping response should include payload");
     assert!(
-        payload.get("version").and_then(|value| value.as_str()).is_some(),
+        payload
+            .get("version")
+            .and_then(|value| value.as_str())
+            .is_some(),
         "ping payload should include version string"
     );
 }

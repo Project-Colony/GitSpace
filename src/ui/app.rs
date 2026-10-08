@@ -12,6 +12,7 @@ use crate::ui::{
     branches::BranchPanel,
     clone::ClonePanel,
     context::RepoContext,
+    dev_gallery::DevGalleryPanel,
     fonts,
     history::HistoryPanel,
     layout::{MainTab, ShellLayout},
@@ -21,7 +22,6 @@ use crate::ui::{
     repo_overview::RepoOverviewPanel,
     settings::SettingsPanel,
     stage::StagePanel,
-    dev_gallery::DevGalleryPanel,
     theme::{SharedTheme, Theme},
 };
 use crate::update;
@@ -56,7 +56,7 @@ impl GitSpaceApp {
     pub fn new() -> Self {
         let config = AppConfig::load();
         let preferences = config.preferences().clone();
-        let logging = config.logging().clone();
+        let logging = *config.logging();
         let default_clone_path = preferences.default_clone_path().to_string();
         let theme = Theme::shared_from_mode(preferences.theme_mode());
         let auth_manager =
@@ -78,7 +78,10 @@ impl GitSpaceApp {
                 preferences.network().clone(),
             ),
             history_panel: HistoryPanel::new(Arc::clone(&theme)),
-            branches_panel: BranchPanel::new(Arc::clone(&theme), preferences.pinned_branches().to_vec()),
+            branches_panel: BranchPanel::new(
+                Arc::clone(&theme),
+                preferences.pinned_branches().to_vec(),
+            ),
             stage_panel: StagePanel::new(Arc::clone(&theme)),
             config,
             current_repo,
@@ -149,7 +152,8 @@ impl eframe::App for GitSpaceApp {
             }
 
             egui::CentralPanel::default().show(ctx, |ui| {
-                let _tab_interaction = layout.tab_bar(ui, &mut self.tab_order, &mut self.active_tab);
+                let _tab_interaction =
+                    layout.tab_bar(ui, &mut self.tab_order, &mut self.active_tab);
                 let available_height = ui.available_height();
                 egui::ScrollArea::vertical()
                     .id_source("main_tab_content")
@@ -270,8 +274,10 @@ impl GitSpaceApp {
         let mut selected = None;
 
         ctx.input_mut(|input| {
-            let mut command = Modifiers::default();
-            command.command = true;
+            let command = Modifiers {
+                command: true,
+                ..Default::default()
+            };
 
             let keys = [
                 Key::Num1,
@@ -461,7 +467,10 @@ impl GitSpaceApp {
             return;
         }
 
-        let context = match self.repo_overview.auto_fetch_context(repo, &self.auth_manager) {
+        let context = match self
+            .repo_overview
+            .auto_fetch_context(repo, &self.auth_manager)
+        {
             Ok(context) => context,
             Err(err) => {
                 self.repo_overview
@@ -502,15 +511,12 @@ impl GitSpaceApp {
                         self.repo_overview.reload_repo_state(current_repo);
                     }
                 }
-                self.repo_overview.set_action_status(Some(format!(
-                    "Auto-fetched {}",
-                    outcome.remote_name
-                )));
+                self.repo_overview
+                    .set_action_status(Some(format!("Auto-fetched {}", outcome.remote_name)));
             }
             Err(err) => {
-                self.repo_overview.set_action_status(Some(format!(
-                    "Auto-fetch failed: {err}"
-                )));
+                self.repo_overview
+                    .set_action_status(Some(format!("Auto-fetch failed: {err}")));
                 self.notifications.push(Notification::error(
                     "Auto-fetch failed",
                     format!("{} ({})", err, outcome.remote_name),

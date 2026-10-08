@@ -56,12 +56,8 @@ impl AppError {
             Self::Validation(_) => {
                 "The provided input is not valid. Please double-check and try again.".to_string()
             }
-            Self::Config(_) => {
-                "Configuration error. Please check your settings.".to_string()
-            }
-            Self::Auth(_) => {
-                "Authentication failed. Please verify your credentials.".to_string()
-            }
+            Self::Config(_) => "Configuration error. Please check your settings.".to_string(),
+            Self::Auth(_) => "Authentication failed. Please verify your credentials.".to_string(),
             Self::Unknown(_) => "An unexpected error occurred.".to_string(),
         }
     }
@@ -214,7 +210,10 @@ mod tests {
         assert!(matches!(AppError::git("test"), AppError::Git(_)));
         assert!(matches!(AppError::network("test"), AppError::Network(_)));
         assert!(matches!(AppError::io("test"), AppError::Io(_)));
-        assert!(matches!(AppError::validation("test"), AppError::Validation(_)));
+        assert!(matches!(
+            AppError::validation("test"),
+            AppError::Validation(_)
+        ));
         assert!(matches!(AppError::config("test"), AppError::Config(_)));
         assert!(matches!(AppError::auth("test"), AppError::Auth(_)));
     }

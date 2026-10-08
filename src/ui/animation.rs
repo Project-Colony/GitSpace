@@ -287,9 +287,7 @@ const MOTION_SETTINGS_KEY: &str = "motion_settings";
 
 pub fn store_motion_settings(ctx: &egui::Context, preferences: &Preferences) {
     // Use cached profile (only loads from dotnet once at startup)
-    let profile = DOTNET_ANIMATION_PROFILE
-        .get_or_init(load_dotnet_animation_profile)
-        .clone()
+    let profile = (*DOTNET_ANIMATION_PROFILE.get_or_init(load_dotnet_animation_profile))
         .unwrap_or_else(AnimationProfile::default_profile);
     let motion = MotionSettings::with_profile(
         preferences.reduced_motion(),

@@ -104,14 +104,8 @@ impl DevGalleryPanel {
                     });
                     ui.add_space(6.0);
                     ui.checkbox(&mut self.toggled, "Enable feature");
-                    ui.checkbox(
-                        &mut self.notifications_enabled,
-                        "Allow notifications",
-                    );
-                    ui.add(
-                        egui::Slider::new(&mut self.slider_value, 0.0..=1.0)
-                            .text("Intensity"),
-                    );
+                    ui.checkbox(&mut self.notifications_enabled, "Allow notifications");
+                    ui.add(egui::Slider::new(&mut self.slider_value, 0.0..=1.0).text("Intensity"));
                 });
 
                 ui.add_space(12.0);
@@ -121,15 +115,17 @@ impl DevGalleryPanel {
                     ui.horizontal(|ui| {
                         ui.label("Text input");
                         ui.add(
-                            egui::TextEdit::singleline(&mut self.text_input)
-                                .desired_width(220.0),
+                            egui::TextEdit::singleline(&mut self.text_input).desired_width(220.0),
                         );
                     });
                     ui.add_space(6.0);
                     let combo_id = ui.make_persistent_id("dev-gallery-combo");
                     egui::ComboBox::from_id_source(combo_id)
                         .selected_text(COMBO_OPTIONS[self.combo_choice])
-                        .icon(menu::combo_icon(Arc::clone(&self.theme), combo_id.with("icon")))
+                        .icon(menu::combo_icon(
+                            Arc::clone(&self.theme),
+                            combo_id.with("icon"),
+                        ))
                         .show_ui(ui, |ui| {
                             for (index, label) in COMBO_OPTIONS.iter().enumerate() {
                                 ui.selectable_value(&mut self.combo_choice, index, *label);

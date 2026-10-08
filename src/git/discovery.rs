@@ -62,12 +62,7 @@ pub fn list_submodules<P: AsRef<Path>>(repo_path: P) -> Result<Vec<SubmoduleEntr
         let name = submodule
             .name()
             .map(str::to_string)
-            .unwrap_or_else(|| {
-                submodule
-                    .path()
-                    .to_string_lossy()
-                    .to_string()
-            });
+            .unwrap_or_else(|| submodule.path().to_string_lossy().to_string());
         let path = submodule.path().to_string_lossy().to_string();
         let url = submodule.url().map(str::to_string);
         entries.push(SubmoduleEntry { name, path, url });

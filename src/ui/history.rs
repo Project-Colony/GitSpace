@@ -5,8 +5,8 @@ use chrono::{Datelike, NaiveDate, TimeZone, Utc};
 use eframe::egui::{self, Align, Layout, Pos2, RichText, Sense, Ui};
 
 use crate::git::{
-    diff::{FileDiff, FileDiffSummary, commit_diff_file, commit_diff_summaries},
-    log::{CommitFilter, CommitInfo, list_local_branches, read_commit_log},
+    diff::{commit_diff_file, commit_diff_summaries, FileDiff, FileDiffSummary},
+    log::{list_local_branches, read_commit_log, CommitFilter, CommitInfo},
 };
 use crate::ui::{context::RepoContext, menu, theme::SharedTheme};
 
@@ -131,7 +131,10 @@ impl HistoryPanel {
 
         egui::Frame::none()
             .fill(self.theme.palette.surface)
-            .stroke(egui::Stroke::new(1.0, self.theme.palette.surface_highlight))
+            .stroke(egui::Stroke::new(
+                1.0_f32,
+                self.theme.palette.surface_highlight,
+            ))
             .rounding(8.0)
             .inner_margin(egui::Margin::same(10.0))
             .show(ui, |ui| {
@@ -239,7 +242,7 @@ impl HistoryPanel {
                         palette.background
                     };
 
-                    let stroke = egui::Stroke::new(2.0, palette.surface_highlight);
+                    let stroke = egui::Stroke::new(2.0_f32, palette.surface_highlight);
                     let frame = egui::Frame::none()
                         .fill(bg_color)
                         .stroke(stroke)
@@ -270,7 +273,7 @@ impl HistoryPanel {
                                     });
                                     ui.add(
                                         egui::Label::new(
-                                            RichText::new(format!("{}", commit.author))
+                                            RichText::new(commit.author.to_string())
                                                 .color(palette.text_secondary),
                                         )
                                         .wrap(true),
@@ -316,21 +319,25 @@ impl HistoryPanel {
         if index > 0 {
             painter.line_segment(
                 [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
-                egui::Stroke::new(2.0, palette.surface_highlight),
+                egui::Stroke::new(2.0_f32, palette.surface_highlight),
             );
         }
 
         if index + 1 < self.commits.len() {
             painter.line_segment(
                 [Pos2::new(x, rect.center().y), Pos2::new(x, rect.bottom())],
-                egui::Stroke::new(2.0, palette.surface_highlight),
+                egui::Stroke::new(2.0_f32, palette.surface_highlight),
             );
         }
 
         let radius = if is_merge { 8.0 } else { 6.5 };
         painter.circle_filled(center, radius, palette.accent);
         if is_merge {
-            painter.circle_stroke(center, radius + 4.0, egui::Stroke::new(1.5, palette.accent));
+            painter.circle_stroke(
+                center,
+                radius + 4.0,
+                egui::Stroke::new(1.5_f32, palette.accent),
+            );
         }
     }
 
@@ -346,11 +353,9 @@ impl HistoryPanel {
                 );
                 let full_message = commit.message.trim();
                 let summary_trimmed = commit.summary.trim();
-                let message_body = if full_message.starts_with(summary_trimmed) {
-                    full_message[summary_trimmed.len()..].trim_start()
-                } else {
-                    full_message
-                };
+                let message_body = full_message
+                    .strip_prefix(summary_trimmed)
+                    .map_or(full_message, str::trim_start);
                 if !message_body.is_empty() {
                     ui.add(
                         egui::Label::new(
@@ -533,29 +538,36 @@ impl HistoryPanel {
             return; // Already loaded
         }
 
-        if let (Some(repo), Some(commit)) = (self.last_repo.as_ref(), self.selected_commit.as_ref()) {
+        if let (Some(repo), Some(commit)) = (self.last_repo.as_ref(), self.selected_commit.as_ref())
+        {
             match commit_diff_file(repo, commit, file_path) {
                 Ok(Some(diff)) => {
                     self.loaded_patches.insert(file_path.to_string(), diff);
                 }
                 Ok(None) => {
                     // File not found in diff, insert empty placeholder
-                    self.loaded_patches.insert(file_path.to_string(), FileDiff {
-                        path: file_path.to_string(),
-                        additions: 0,
-                        deletions: 0,
-                        patch: String::from("(no changes)"),
-                        truncated: false,
-                    });
+                    self.loaded_patches.insert(
+                        file_path.to_string(),
+                        FileDiff {
+                            path: file_path.to_string(),
+                            additions: 0,
+                            deletions: 0,
+                            patch: String::from("(no changes)"),
+                            truncated: false,
+                        },
+                    );
                 }
                 Err(err) => {
-                    self.loaded_patches.insert(file_path.to_string(), FileDiff {
-                        path: file_path.to_string(),
-                        additions: 0,
-                        deletions: 0,
-                        patch: format!("Error loading diff: {err}"),
-                        truncated: false,
-                    });
+                    self.loaded_patches.insert(
+                        file_path.to_string(),
+                        FileDiff {
+                            path: file_path.to_string(),
+                            additions: 0,
+                            deletions: 0,
+                            patch: format!("Error loading diff: {err}"),
+                            truncated: false,
+                        },
+                    );
                 }
             }
         }
