@@ -385,19 +385,17 @@ fn worktrees_and_submodules_are_listed() {
     let submodule_path = repo.path().parent().unwrap().join("vendor/submodule");
     fs::create_dir_all(&submodule_path).expect("create submodule path");
 
+    // Forward slashes: a backslash starts an escape in git config values.
+    let submodule_url = sub_repo_dir.path().to_string_lossy().replace('\\', "/");
     let gitmodules = format!(
-        "[submodule \"vendor/submodule\"]\n\tpath = vendor/submodule\n\turl = {}\n",
-        sub_repo_dir.path().to_str().expect("submodule url")
+        "[submodule \"vendor/submodule\"]\n\tpath = vendor/submodule\n\turl = {submodule_url}\n",
     );
     write_commit(&repo, ".gitmodules", &gitmodules, "add submodule");
 
     let submodules = list_submodules(repo.path().parent().unwrap()).expect("list submodules");
     assert_eq!(submodules.len(), 1);
     assert_eq!(submodules[0].path, "vendor/submodule");
-    assert_eq!(
-        submodules[0].url.as_deref(),
-        Some(sub_repo_dir.path().to_str().expect("submodule url"))
-    );
+    assert_eq!(submodules[0].url.as_deref(), Some(submodule_url.as_str()));
 
     let worktree_parent = tempfile::tempdir().expect("worktree dir");
     let worktree_dir = worktree_parent.path().join("worktree");
@@ -406,6 +404,9 @@ fn worktrees_and_submodules_are_listed() {
         .expect("create worktree");
 
     let worktrees = list_worktrees(repo.path().parent().unwrap()).expect("list worktrees");
-    let worktree_path = worktree_dir.to_string_lossy().to_string();
-    assert!(worktrees.iter().any(|path| path == &worktree_path));
+    // libgit2 stores the resolved path (/private/var on macOS, forward slashes on Windows).
+    let expected = fs::canonicalize(&worktree_dir).expect("canonical worktree path");
+    assert!(worktrees
+        .iter()
+        .any(|path| fs::canonicalize(path).ok().as_ref() == Some(&expected)));
 }
