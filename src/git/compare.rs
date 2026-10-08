@@ -1,4 +1,6 @@
 use git2::{Diff, DiffOptions, Oid, Repository};
+// Utilise le cache thread-local pour éviter de réouvrir le dépôt à chaque appel
+use crate::git::repo_cache::with_cached_repo;
 
 #[derive(Debug, Clone)]
 pub struct BranchComparison {
@@ -25,21 +27,23 @@ pub fn compare_branch_with_head(
     repo_path: &str,
     branch_name: &str,
 ) -> Result<BranchComparison, git2::Error> {
-    let repo = Repository::open(repo_path)?;
-    let branch_commit = branch_commit(&repo, branch_name)?;
-    let diff = match branch_commit
-        .as_ref()
-        .and_then(|commit| Oid::from_str(&commit.id).ok())
-    {
-        Some(oid) => {
-            diff_summary_between(&repo, Some(oid), repo.head().ok().and_then(|h| h.target()))?
-        }
-        None => None,
-    };
+    // Lecture seule de la comparaison — utilise le cache thread-local
+    with_cached_repo(repo_path, |repo| {
+        let branch_commit = branch_commit(repo, branch_name)?;
+        let diff = match branch_commit
+            .as_ref()
+            .and_then(|commit| Oid::from_str(&commit.id).ok())
+        {
+            Some(oid) => {
+                diff_summary_between(repo, Some(oid), repo.head().ok().and_then(|h| h.target()))?
+            }
+            None => None,
+        };
 
-    Ok(BranchComparison {
-        commit: branch_commit,
-        diff,
+        Ok(BranchComparison {
+            commit: branch_commit,
+            diff,
+        })
     })
 }
 

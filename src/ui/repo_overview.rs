@@ -1,29 +1,24 @@
-use std::process::Command;
+// Panneau de vue d'ensemble du dépôt — migration Iced 0.13
+// Affiche le statut, les remotes, les actions rapides et le contexte d'auto-fetch.
 
-use eframe::egui::{self, Align, Layout, Margin, RichText, Ui};
+use std::process::Command as ProcessCommand;
+
+use iced::widget::{button, container, horizontal_rule, text, Column, Row};
+use iced::{Element, Length, Task};
+
+use crate::ui::theme::Theme;
 
 use crate::auth::AuthManager;
-use crate::config::{MIN_BRANCH_BOX_HEIGHT, NetworkOptions};
-use crate::git::{
-    remote::{PullOutcome, RemoteInfo, fetch_remote, list_remotes, pull_branch, push_branch},
-    status::{RepoStatus, read_repo_status},
+use crate::config::NetworkOptions;
+use crate::git::remote::{
+    PullOutcome, RemoteInfo, fetch_remote, list_remotes, pull_branch, push_branch,
 };
-use crate::ui::{animation::motion_settings, context::RepoContext, perf::PerfScope, theme::SharedTheme};
+use crate::git::status::{RepoStatus, read_repo_status};
+use crate::ui::context::RepoContext;
 
-pub struct RepoOverviewPanel {
-    theme: SharedTheme,
-    status: Option<RepoStatus>,
-    remotes: Vec<RemoteInfo>,
-    last_repo: Option<String>,
-    error: Option<String>,
-    action_status: Option<String>,
-    branch_box_height: f32,
-    pending_branch_box_height: Option<f32>,
-    resize_delta_accumulator: f32,
-    last_resize_update: Option<f64>,
-    network: NetworkOptions,
-}
+// ── Structures auxiliaires ─────────────────────────────────────────────────
 
+/// Contexte nécessaire pour l'auto-fetch en arrière-plan.
 #[derive(Debug, Clone)]
 pub struct AutoFetchContext {
     pub repo_path: String,
@@ -32,96 +27,363 @@ pub struct AutoFetchContext {
     pub network: NetworkOptions,
 }
 
+/// Sélection résolue d'un remote et d'une branche.
+#[derive(Debug, Clone)]
+struct RemoteSelection {
+    remote_name: String,
+    branch: Option<String>,
+}
+
+// ── Messages du panneau ────────────────────────────────────────────────────
+
+/// Messages émis par le panneau de vue d'ensemble.
+#[derive(Debug, Clone)]
+pub enum Message {
+    /// Lancer un fetch.
+    Fetch,
+    /// Lancer un pull.
+    Pull,
+    /// Lancer un push.
+    Push,
+    /// Ouvrir un terminal dans le dépôt.
+    OpenTerminal,
+    /// Ouvrir l'explorateur de fichiers dans le dépôt.
+    OpenFileExplorer,
+    /// Résultat d'un fetch (succès ou erreur).
+    FetchResult(Result<String, String>),
+    /// Résultat d'un pull (succès ou erreur).
+    PullResult(Result<String, String>),
+    /// Résultat d'un push (succès ou erreur).
+    PushResult(Result<String, String>),
+}
+
+// ── Panneau principal ──────────────────────────────────────────────────────
+
+pub struct RepoOverviewPanel {
+    status: Option<RepoStatus>,
+    remotes: Vec<RemoteInfo>,
+    last_repo: Option<String>,
+    error: Option<String>,
+    action_status: Option<String>,
+    network: NetworkOptions,
+}
+
 impl RepoOverviewPanel {
-    pub fn new(theme: SharedTheme, branch_box_height: f32, network: NetworkOptions) -> Self {
+    /// Crée un nouveau panneau de vue d'ensemble.
+    pub fn new(network: NetworkOptions) -> Self {
         Self {
-            theme,
             status: None,
             remotes: Vec::new(),
             last_repo: None,
             error: None,
             action_status: None,
-            branch_box_height,
-            pending_branch_box_height: None,
-            resize_delta_accumulator: 0.0,
-            last_resize_update: None,
             network,
         }
     }
 
-    pub fn set_theme(&mut self, theme: SharedTheme) {
-        self.theme = theme;
-    }
-
-    pub fn set_branch_box_height(&mut self, height: f32) {
-        self.branch_box_height = height.max(MIN_BRANCH_BOX_HEIGHT);
-    }
-
+    /// Met à jour les préférences réseau.
     pub fn set_network_preferences(&mut self, network: NetworkOptions) {
         self.network = network;
     }
 
-    pub fn take_branch_box_height_change(&mut self) -> Option<f32> {
-        self.pending_branch_box_height.take()
-    }
-
+    /// Définit un message de statut d'action.
     pub fn set_action_status<S: Into<String>>(&mut self, status: Option<S>) {
         self.action_status = status.map(Into::into);
     }
 
-    pub fn ui(&mut self, ui: &mut Ui, repo: Option<&RepoContext>, auth: &AuthManager) {
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            ui.heading(RichText::new("Repository overview").color(self.theme.palette.text_primary));
-            if let Some(status) = &self.action_status {
-                ui.add_space(12.0);
-                ui.label(RichText::new(status).color(self.theme.palette.text_secondary));
+    /// Traite un message et retourne une commande Iced.
+    pub fn update(
+        &mut self,
+        message: Message,
+        repo: Option<&RepoContext>,
+        auth: &AuthManager,
+    ) -> Task<Message> {
+        match message {
+            Message::Fetch => {
+                if let Some(repo) = repo {
+                    let result = self.do_fetch(repo, auth);
+                    if result.is_ok() {
+                        self.reload_repo_state(repo);
+                    }
+                    self.action_status = Some(match result {
+                        Ok(msg) => msg,
+                        Err(err) => format!("Fetch failed: {err}"),
+                    });
+                }
             }
-        });
-
-        if let Some(repo) = repo {
-            self.refresh(repo);
-            if let Some(error) = &self.error {
-                ui.colored_label(self.theme.palette.accent, error);
+            Message::Pull => {
+                if let Some(repo) = repo {
+                    let result = self.do_pull(repo, auth);
+                    if result.is_ok() {
+                        self.reload_repo_state(repo);
+                    }
+                    self.action_status = Some(match result {
+                        Ok(msg) => msg,
+                        Err(err) => format!("Pull failed: {err}"),
+                    });
+                }
             }
-
-            ui.add_space(6.0);
-            self.summary(ui, repo);
-            ui.add_space(8.0);
-            self.branch_section(ui);
-            ui.add_space(8.0);
-            self.remotes_section(ui);
-            ui.add_space(8.0);
-            self.actions(ui, repo, auth);
-        } else {
-            ui.label(
-                RichText::new("Select or clone a repository to see its Git status, remotes, and quick actions.")
-                    .color(self.theme.palette.text_secondary),
-            );
+            Message::Push => {
+                if let Some(repo) = repo {
+                    let result = self.do_push(repo, auth);
+                    if result.is_ok() {
+                        self.reload_repo_state(repo);
+                    }
+                    self.action_status = Some(match result {
+                        Ok(msg) => msg,
+                        Err(err) => format!("Push failed: {err}"),
+                    });
+                }
+            }
+            Message::OpenTerminal => {
+                if let Some(repo) = repo {
+                    match self.open_terminal(repo) {
+                        Ok(msg) => self.action_status = Some(msg),
+                        Err(err) => self.action_status = Some(format!("Terminal failed: {err}")),
+                    }
+                }
+            }
+            Message::OpenFileExplorer => {
+                if let Some(repo) = repo {
+                    match self.open_file_explorer(repo) {
+                        Ok(msg) => self.action_status = Some(msg),
+                        Err(err) => {
+                            self.action_status = Some(format!("File explorer failed: {err}"))
+                        }
+                    }
+                }
+            }
+            // Résultats asynchrones (pour usage futur si les opérations deviennent async)
+            Message::FetchResult(result) => {
+                self.action_status = Some(match result {
+                    Ok(msg) => msg,
+                    Err(err) => format!("Fetch failed: {err}"),
+                });
+            }
+            Message::PullResult(result) => {
+                self.action_status = Some(match result {
+                    Ok(msg) => msg,
+                    Err(err) => format!("Pull failed: {err}"),
+                });
+            }
+            Message::PushResult(result) => {
+                self.action_status = Some(match result {
+                    Ok(msg) => msg,
+                    Err(err) => format!("Push failed: {err}"),
+                });
+            }
         }
+
+        Task::none()
     }
 
-    fn refresh(&mut self, repo: &RepoContext) {
-        if self.last_repo.as_deref() == Some(&repo.path) {
-            return;
+    /// Construit la vue du panneau.
+    pub fn view<'a>(
+        &'a self,
+        _theme: &'a Theme,
+        repo: Option<&'a RepoContext>,
+    ) -> Element<'a, Message> {
+        let mut content = Column::new()
+            .spacing(8)
+            .padding(10)
+            .width(Length::Fill);
+
+        // ── En-tête + statut d'action ───────────────────────────────────
+        let mut header = Row::new().spacing(12);
+        header = header.push(text("Repository overview").size(20));
+        if let Some(action_status) = &self.action_status {
+            header = header.push(text(action_status.clone()).size(13));
+        }
+        content = content.push(header);
+
+        // Vérifier si un dépôt est ouvert
+        let repo = match repo {
+            Some(r) => r,
+            None => {
+                content = content.push(
+                    text("Select or clone a repository to see its Git status, remotes, and quick actions.")
+                        .size(13),
+                );
+                return container(content)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into();
+            }
+        };
+
+        // Afficher les erreurs éventuelles
+        if let Some(error) = &self.error {
+            content = content.push(text(error.clone()).size(13));
         }
 
+        // ── Résumé : nom + chemin ───────────────────────────────────────
+        content = content.push(self.build_summary(repo));
+        content = content.push(horizontal_rule(1));
+
+        // ── Section branche ─────────────────────────────────────────────
+        content = content.push(self.build_branch_section());
+        content = content.push(horizontal_rule(1));
+
+        // ── Section remotes ─────────────────────────────────────────────
+        content = content.push(self.build_remotes_section());
+        content = content.push(horizontal_rule(1));
+
+        // ── Actions rapides ─────────────────────────────────────────────
+        content = content.push(self.build_quick_actions());
+
+        container(content)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    }
+
+    // ── Construction des sous-vues ─────────────────────────────────────
+
+    /// Résumé du dépôt : nom et chemin.
+    fn build_summary<'a>(&'a self, repo: &'a RepoContext) -> Element<'a, Message> {
+        let col = Column::new()
+            .spacing(2)
+            .push(text(&repo.name).size(18))
+            .push(text(repo.path()).size(12));
+        col.into()
+    }
+
+    /// Section de la branche courante avec upstream et ahead/behind.
+    fn build_branch_section(&self) -> Element<'_, Message> {
+        let status = self.status.clone().unwrap_or_default();
+        let branch = status
+            .branch
+            .unwrap_or_else(|| "(detached)".to_string());
+        let upstream = status
+            .upstream
+            .unwrap_or_else(|| "No upstream".to_string());
+        let ahead = status.ahead.unwrap_or(0);
+        let behind = status.behind.unwrap_or(0);
+
+        let mut col = Column::new().spacing(4).padding(8);
+
+        col = col.push(text("Branch").size(16));
+
+        // Informations de la branche
+        let branch_info = Column::new()
+            .spacing(2)
+            .push(text(branch).size(14))
+            .push(text(format!("Upstream: {upstream}")).size(12));
+
+        // Statistiques ahead/behind
+        let stats = Row::new()
+            .spacing(12)
+            .push(text(format!("Ahead: {ahead}")).size(13))
+            .push(text(format!("Behind: {behind}")).size(13));
+
+        let branch_row = Row::new()
+            .spacing(16)
+            .width(Length::Fill)
+            .push(branch_info)
+            .push(stats);
+
+        col = col.push(
+            container(branch_row)
+                .width(Length::Fill)
+                .padding(10),
+        );
+
+        col.into()
+    }
+
+    /// Section listant les remotes configurés.
+    fn build_remotes_section(&self) -> Element<'_, Message> {
+        let mut col = Column::new().spacing(4);
+
+        col = col.push(text("Remotes").size(16));
+
+        if self.remotes.is_empty() {
+            col = col.push(
+                text("No remotes configured for this repository.").size(12),
+            );
+            return col.into();
+        }
+
+        for remote in &self.remotes {
+            let card = container(
+                Row::new()
+                    .spacing(8)
+                    .push(text(&remote.name).size(13))
+                    .push(text(&remote.url).size(12)),
+            )
+            .width(Length::Fill)
+            .padding(8);
+
+            col = col.push(card);
+        }
+
+        col.into()
+    }
+
+    /// Ligne de boutons d'actions rapides.
+    fn build_quick_actions(&self) -> Element<'_, Message> {
+        let mut col = Column::new().spacing(4);
+
+        col = col.push(text("Quick actions").size(16));
+
+        let actions_row = Row::new()
+            .spacing(8)
+            .push(
+                button(text("Fetch").size(13))
+                    .on_press(Message::Fetch)
+                    .padding(6),
+            )
+            .push(
+                button(text("Pull").size(13))
+                    .on_press(Message::Pull)
+                    .padding(6),
+            )
+            .push(
+                button(text("Push").size(13))
+                    .on_press(Message::Push)
+                    .padding(6),
+            )
+            .push(
+                button(text("Open terminal").size(13))
+                    .on_press(Message::OpenTerminal)
+                    .padding(6),
+            )
+            .push(
+                button(text("Open file explorer").size(13))
+                    .on_press(Message::OpenFileExplorer)
+                    .padding(6),
+            );
+
+        col = col.push(actions_row);
+        col.into()
+    }
+
+    // ── Rafraîchissement de l'état ─────────────────────────────────────
+
+    /// Rafraîchit l'état du dépôt si le chemin a changé.
+    pub fn refresh(&mut self, repo: &RepoContext) {
+        if self.last_repo.as_deref() == Some(repo.path()) {
+            return;
+        }
         self.action_status = None;
         self.reload_repo_state(repo);
     }
 
+    /// Recharge complètement l'état du dépôt (statut + remotes).
     pub fn reload_repo_state(&mut self, repo: &RepoContext) {
-        self.last_repo = Some(repo.path.clone());
+        self.last_repo = Some(repo.path().to_string());
         self.status = None;
         self.remotes.clear();
         self.error = None;
 
-        match read_repo_status(&repo.path) {
+        match read_repo_status(repo.path()) {
             Ok(status) => self.status = Some(status),
-            Err(err) => self.error = Some(format!("Failed to read repository status: {err}")),
+            Err(err) => {
+                self.error = Some(format!("Failed to read repository status: {err}"));
+            }
         }
 
-        match list_remotes(&repo.path) {
+        match list_remotes(repo.path()) {
             Ok(remotes) => self.remotes = remotes,
             Err(err) => {
                 self.error
@@ -130,262 +392,47 @@ impl RepoOverviewPanel {
         }
     }
 
-    fn summary(&self, ui: &mut Ui, repo: &RepoContext) {
-        ui.vertical(|ui| {
-            ui.label(
-                RichText::new(&repo.name)
-                    .color(self.theme.palette.text_primary)
-                    .strong()
-                    .size(self.theme.typography.title),
-            );
-            ui.label(
-                RichText::new(&repo.path)
-                    .color(self.theme.palette.text_secondary)
-                    .italics(),
-            );
-        });
-    }
+    // ── Contexte d'auto-fetch ──────────────────────────────────────────
 
-    fn branch_section(&mut self, ui: &mut Ui) {
-        let _scope = PerfScope::new("repo_overview::branch_section");
-        let status = self.status.clone().unwrap_or_default();
-        let branch = status.branch.unwrap_or_else(|| "(detached)".to_string());
-        let upstream = status.upstream.unwrap_or_else(|| "No upstream".to_string());
-        let ahead = status.ahead.unwrap_or(0);
-        let behind = status.behind.unwrap_or(0);
-
-        let motion = motion_settings(ui.ctx());
-        let shadow = motion
-            .effects()
-            .soft_shadow
-            .to_egui_shadow(self.theme.palette.text_primary);
-        let branch_height = self.branch_box_height.max(MIN_BRANCH_BOX_HEIGHT);
-        let grip_height = 6.0;
-        let frame = egui::Frame::none()
-            .fill(self.theme.palette.surface)
-            .stroke(egui::Stroke::new(1.0, self.theme.palette.surface_highlight))
-            .rounding(8.0)
-            .shadow(shadow)
-            .inner_margin(Margin {
-                left: 10.0,
-                right: 10.0,
-                top: 4.0,
-                bottom: 4.0,
-            });
-
-        ui.add_space(4.0);
-        ui.heading(RichText::new("Branch").color(self.theme.palette.text_primary));
-        ui.add_space(4.0);
-        let total_height = branch_height + grip_height;
-        let (rect, _) = ui.allocate_exact_size(
-            egui::vec2(ui.available_width(), total_height),
-            egui::Sense::hover(),
-        );
-        let frame_rect =
-            egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), branch_height));
-        let grip_rect = egui::Rect::from_min_size(
-            egui::pos2(rect.left(), rect.top() + branch_height),
-            egui::vec2(rect.width(), grip_height),
-        );
-
-        let mut content_ui = ui.child_ui(frame_rect, Layout::top_down(Align::Min));
-        frame.show(&mut content_ui, |ui| {
-            ui.with_layout(Layout::left_to_right(Align::TOP), |ui| {
-                ui.vertical(|ui| {
-                    ui.label(
-                        RichText::new(branch)
-                            .color(self.theme.palette.text_primary)
-                            .strong(),
-                    );
-                    ui.label(
-                        RichText::new(format!("Upstream: {upstream}"))
-                            .color(self.theme.palette.text_secondary),
-                    );
-                });
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    self.stat_chip(ui, "Ahead", ahead);
-                    self.stat_chip(ui, "Behind", behind);
-                });
-            });
-        });
-
-        let grip_id = ui.make_persistent_id("branch_box_resize_grip");
-        let grip_response = ui.interact(grip_rect, grip_id, egui::Sense::click_and_drag());
-        if grip_response.hovered() || grip_response.dragged() {
-            ui.output_mut(|output| output.cursor_icon = egui::CursorIcon::ResizeVertical);
-        }
-
-        if grip_response.dragged() {
-            let (delta, now) = ui.input(|input| (input.pointer.delta().y, input.time));
-            self.resize_delta_accumulator += delta;
-            let should_apply = self
-                .last_resize_update
-                .map_or(true, |last| (now - last) >= 0.016);
-            if should_apply && self.resize_delta_accumulator.abs() > f32::EPSILON {
-                self.branch_box_height = (self.branch_box_height + self.resize_delta_accumulator)
-                    .max(MIN_BRANCH_BOX_HEIGHT);
-                self.resize_delta_accumulator = 0.0;
-                self.last_resize_update = Some(now);
-            }
-        }
-
-        if grip_response.drag_stopped() {
-            if self.resize_delta_accumulator.abs() > f32::EPSILON {
-                self.branch_box_height = (self.branch_box_height + self.resize_delta_accumulator)
-                    .max(MIN_BRANCH_BOX_HEIGHT);
-                self.resize_delta_accumulator = 0.0;
-            }
-            self.pending_branch_box_height = Some(self.branch_box_height);
-            self.last_resize_update = None;
-        }
-
-        let painter = ui.painter();
-        painter.rect_filled(grip_rect, 0.0, self.theme.palette.surface);
-        let grip_center = grip_rect.center();
-        let grip_line = egui::Stroke::new(1.0, self.theme.palette.surface_highlight);
-        painter.line_segment(
-            [
-                egui::pos2(grip_rect.left() + 12.0, grip_center.y),
-                egui::pos2(grip_rect.right() - 12.0, grip_center.y),
-            ],
-            grip_line,
-        );
-    }
-
-    fn stat_chip(&self, ui: &mut Ui, label: &str, value: usize) {
-        let chip_height = ui.spacing().interact_size.y + 8.0;
-        let rect = ui
-            .allocate_exact_size(egui::vec2(90.0, chip_height), egui::Sense::hover())
-            .0;
-        let painter = ui.painter();
-        painter.rect_filled(rect, 10.0, self.theme.palette.surface_highlight);
-        painter.text(
-            rect.left_top() + egui::vec2(10.0, 4.0),
-            egui::Align2::LEFT_TOP,
-            label,
-            egui::FontId::proportional(self.theme.typography.label),
-            self.theme.palette.text_secondary,
-        );
-        painter.text(
-            rect.left_bottom() + egui::vec2(10.0, -4.0),
-            egui::Align2::LEFT_BOTTOM,
-            value.to_string(),
-            egui::FontId::proportional(self.theme.typography.title),
-            self.theme.palette.text_primary,
-        );
-    }
-
-    fn remotes_section(&self, ui: &mut Ui) {
-        let motion = motion_settings(ui.ctx());
-        ui.heading(RichText::new("Remotes").color(self.theme.palette.text_primary));
-        ui.add_space(4.0);
-
-        if self.remotes.is_empty() {
-            ui.label(
-                RichText::new("No remotes configured for this repository.")
-                    .color(self.theme.palette.text_secondary),
-            );
-            return;
-        }
-
-        for remote in &self.remotes {
-            let shadow = motion
-                .effects()
-                .soft_shadow
-                .to_egui_shadow(self.theme.palette.text_primary);
-            let frame = egui::Frame::none()
-                .fill(self.theme.palette.surface)
-                .stroke(egui::Stroke::new(1.0, self.theme.palette.surface_highlight))
-                .shadow(shadow)
-                .rounding(6.0)
-                .inner_margin(Margin::same(10.0));
-
-            frame.show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(&remote.name)
-                            .color(self.theme.palette.text_primary)
-                            .strong(),
-                    );
-                    ui.label(RichText::new(&remote.url).color(self.theme.palette.text_secondary));
-                });
-            });
-            ui.add_space(6.0);
-        }
-    }
-
-    fn actions(&mut self, ui: &mut Ui, repo: &RepoContext, auth: &AuthManager) {
-        ui.heading(RichText::new("Quick actions").color(self.theme.palette.text_primary));
-        ui.add_space(4.0);
-
-        ui.horizontal_wrapped(|ui| {
-            let control_height = ui.spacing().interact_size.y;
-            for (label, action) in [
-                ("Fetch", ActionKind::Fetch),
-                ("Pull", ActionKind::Pull),
-                ("Push", ActionKind::Push),
-                ("Open terminal", ActionKind::Terminal),
-                ("Open file explorer", ActionKind::FileExplorer),
-            ] {
-                let response = ui.add_sized([150.0, control_height], egui::Button::new(label));
-                if response.clicked() {
-                    let result = match action {
-                        ActionKind::Fetch => self.fetch(repo, auth),
-                        ActionKind::Pull => self.pull(repo, auth),
-                        ActionKind::Push => self.push(repo, auth),
-                        ActionKind::Terminal => self.open_terminal(repo),
-                        ActionKind::FileExplorer => self.open_file_explorer(repo),
-                    };
-
-                    if result.is_ok()
-                        && matches!(action, ActionKind::Fetch | ActionKind::Pull | ActionKind::Push)
-                    {
-                        self.reload_repo_state(repo);
-                    }
-
-                    self.action_status = Some(match result {
-                        Ok(msg) => msg,
-                        Err(err) => format!("{label} failed: {err}"),
-                    });
-                }
-            }
-        });
-    }
-
+    /// Construit le contexte pour l'auto-fetch en arrière-plan.
     pub fn auto_fetch_context(
         &mut self,
         repo: &RepoContext,
         auth: &AuthManager,
     ) -> Result<AutoFetchContext, String> {
-        if self.last_repo.as_deref() != Some(&repo.path) {
+        if self.last_repo.as_deref() != Some(repo.path()) {
             self.reload_repo_state(repo);
         }
         let selection = self.resolve_remote_selection()?;
         let token = self.resolve_remote_token(auth, &selection.remote_name);
         Ok(AutoFetchContext {
-            repo_path: repo.path.clone(),
+            repo_path: repo.path().to_string(),
             remote_name: selection.remote_name,
             token,
             network: self.network.clone(),
         })
     }
 
-    fn fetch(&self, repo: &RepoContext, auth: &AuthManager) -> Result<String, String> {
+    // ── Opérations git ─────────────────────────────────────────────────
+
+    /// Effectue un fetch sur le remote résolu.
+    fn do_fetch(&self, repo: &RepoContext, auth: &AuthManager) -> Result<String, String> {
         let selection = self.resolve_remote_selection()?;
         let token = self.resolve_remote_token(auth, &selection.remote_name);
-        fetch_remote(&repo.path, &selection.remote_name, &self.network, token)
+        fetch_remote(repo.path(), &selection.remote_name, &self.network, token)
             .map_err(|err| err.to_string())?;
         Ok(format!("Fetched {}", selection.remote_name))
     }
 
-    fn pull(&self, repo: &RepoContext, auth: &AuthManager) -> Result<String, String> {
+    /// Effectue un pull sur la branche courante.
+    fn do_pull(&self, repo: &RepoContext, auth: &AuthManager) -> Result<String, String> {
         let selection = self.resolve_remote_selection()?;
         let branch = selection
             .branch
             .ok_or_else(|| "No branch checked out for pull.".to_string())?;
         let token = self.resolve_remote_token(auth, &selection.remote_name);
         let outcome = pull_branch(
-            &repo.path,
+            repo.path(),
             &selection.remote_name,
             &branch,
             &self.network,
@@ -394,19 +441,22 @@ impl RepoOverviewPanel {
         .map_err(|err| err.to_string())?;
         let message = match outcome {
             PullOutcome::UpToDate => "Already up to date.".to_string(),
-            PullOutcome::FastForward => format!("Pulled {} from {}", branch, selection.remote_name),
+            PullOutcome::FastForward => {
+                format!("Pulled {} from {}", branch, selection.remote_name)
+            }
         };
         Ok(message)
     }
 
-    fn push(&self, repo: &RepoContext, auth: &AuthManager) -> Result<String, String> {
+    /// Effectue un push de la branche courante.
+    fn do_push(&self, repo: &RepoContext, auth: &AuthManager) -> Result<String, String> {
         let selection = self.resolve_remote_selection()?;
         let branch = selection
             .branch
             .ok_or_else(|| "No branch checked out for push.".to_string())?;
         let token = self.resolve_remote_token(auth, &selection.remote_name);
         push_branch(
-            &repo.path,
+            repo.path(),
             &selection.remote_name,
             &branch,
             &self.network,
@@ -416,19 +466,20 @@ impl RepoOverviewPanel {
         Ok(format!("Pushed {} to {}", branch, selection.remote_name))
     }
 
+    /// Résout le remote et la branche à utiliser pour les opérations réseau.
     fn resolve_remote_selection(&self) -> Result<RemoteSelection, String> {
         let status = self.status.clone().unwrap_or_default();
         let upstream = status
             .upstream
             .as_deref()
-            .and_then(|name| split_upstream(name));
+            .and_then(split_upstream);
         let (remote_name, upstream_branch) = if let Some((remote, branch)) = upstream {
             (remote.to_string(), Some(branch.to_string()))
         } else {
             let remote = self
                 .remotes
                 .first()
-                .map(|remote| remote.name.clone())
+                .map(|r| r.name.clone())
                 .ok_or_else(|| "No remotes configured for this repository.".to_string())?;
             (remote, None)
         };
@@ -437,11 +488,12 @@ impl RepoOverviewPanel {
         Ok(RemoteSelection { remote_name, branch })
     }
 
+    /// Résout le token d'authentification pour un remote donné.
     fn resolve_remote_token(&self, auth: &AuthManager, remote_name: &str) -> Option<String> {
         let remote = self
             .remotes
             .iter()
-            .find(|remote| remote.name == remote_name)?;
+            .find(|r| r.name == remote_name)?;
         if remote.url == "(no url)" {
             return None;
         }
@@ -449,11 +501,14 @@ impl RepoOverviewPanel {
             .or_else(|| auth.resolve_for_host(&remote.url))
     }
 
+    // ── Actions système ────────────────────────────────────────────────
+
+    /// Ouvre un terminal dans le répertoire du dépôt.
     fn open_terminal(&self, repo: &RepoContext) -> Result<String, String> {
         #[cfg(target_os = "windows")]
         {
-            Command::new("cmd")
-                .args(["/K", "cd", "/d", &repo.path])
+            ProcessCommand::new("cmd")
+                .args(["/K", "cd", "/d", repo.path()])
                 .spawn()
                 .map_err(|err| err.to_string())?;
             return Ok("Terminal opened".to_string());
@@ -461,8 +516,8 @@ impl RepoOverviewPanel {
 
         #[cfg(target_os = "macos")]
         {
-            Command::new("open")
-                .args(["-a", "Terminal", &repo.path])
+            ProcessCommand::new("open")
+                .args(["-a", "Terminal", repo.path()])
                 .spawn()
                 .map_err(|err| err.to_string())?;
             return Ok("Terminal opened".to_string());
@@ -470,17 +525,17 @@ impl RepoOverviewPanel {
 
         #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
         {
-            let xterm_command = format!("cd '{}' && exec bash", repo.path);
+            let xterm_command = format!("cd '{}' && exec bash", repo.path());
             let candidates: Vec<(&str, Vec<String>)> = vec![
                 ("x-terminal-emulator", Vec::new()),
                 (
                     "gnome-terminal",
-                    vec!["--working-directory".into(), repo.path.clone()],
+                    vec!["--working-directory".into(), repo.path().to_string()],
                 ),
-                ("konsole", vec!["--workdir".into(), repo.path.clone()]),
+                ("konsole", vec!["--workdir".into(), repo.path().to_string()]),
                 (
                     "xfce4-terminal",
-                    vec!["--working-directory".into(), repo.path.clone()],
+                    vec!["--working-directory".into(), repo.path().to_string()],
                 ),
                 (
                     "xterm",
@@ -488,19 +543,19 @@ impl RepoOverviewPanel {
                 ),
                 (
                     "alacritty",
-                    vec!["--working-directory".into(), repo.path.clone()],
+                    vec!["--working-directory".into(), repo.path().to_string()],
                 ),
-                ("kitty", vec!["--directory".into(), repo.path.clone()]),
+                ("kitty", vec!["--directory".into(), repo.path().to_string()]),
                 (
                     "wezterm",
-                    vec!["start".into(), "--cwd".into(), repo.path.clone()],
+                    vec!["start".into(), "--cwd".into(), repo.path().to_string()],
                 ),
             ];
 
             for (terminal, args) in candidates {
-                let mut command = Command::new(terminal);
+                let mut command = ProcessCommand::new(terminal);
                 command.args(args);
-                command.current_dir(&repo.path);
+                command.current_dir(repo.path());
                 if command.spawn().is_ok() {
                     return Ok("Terminal opened".to_string());
                 }
@@ -510,25 +565,26 @@ impl RepoOverviewPanel {
         }
     }
 
+    /// Ouvre l'explorateur de fichiers dans le répertoire du dépôt.
     fn open_file_explorer(&self, repo: &RepoContext) -> Result<String, String> {
         #[cfg(target_os = "windows")]
         let mut command = {
-            let mut cmd = Command::new("explorer");
-            cmd.arg(&repo.path);
+            let mut cmd = ProcessCommand::new("explorer");
+            cmd.arg(repo.path());
             cmd
         };
 
         #[cfg(target_os = "macos")]
         let mut command = {
-            let mut cmd = Command::new("open");
-            cmd.arg(&repo.path);
+            let mut cmd = ProcessCommand::new("open");
+            cmd.arg(repo.path());
             cmd
         };
 
         #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
         let mut command = {
-            let mut cmd = Command::new("xdg-open");
-            cmd.arg(&repo.path);
+            let mut cmd = ProcessCommand::new("xdg-open");
+            cmd.arg(repo.path());
             cmd
         };
 
@@ -537,20 +593,9 @@ impl RepoOverviewPanel {
     }
 }
 
-enum ActionKind {
-    Fetch,
-    Pull,
-    Push,
-    Terminal,
-    FileExplorer,
-}
+// ── Fonctions utilitaires ──────────────────────────────────────────────────
 
-#[derive(Debug, Clone)]
-struct RemoteSelection {
-    remote_name: String,
-    branch: Option<String>,
-}
-
+/// Sépare un upstream "remote/branch" en ses deux composants.
 fn split_upstream(upstream: &str) -> Option<(&str, &str)> {
     let mut parts = upstream.splitn(2, '/');
     let remote = parts.next()?;

@@ -76,6 +76,7 @@ impl OAuthProvider {
     }
 
     /// Creates GitLab OAuth configuration for a self-hosted instance.
+    #[allow(dead_code)]
     pub fn gitlab_self_hosted(client_id: &str, base_url: &str) -> Self {
         let base = base_url.trim_end_matches('/');
         Self {
@@ -465,6 +466,7 @@ fn create_error_response(error: &str) -> String {
 }
 
 /// Extracts the host from a URL.
+#[allow(dead_code)]
 fn extract_host_from_url(url: &str) -> Option<String> {
     url::Url::parse(url).ok()?.host_str().map(|h| h.to_string())
 }

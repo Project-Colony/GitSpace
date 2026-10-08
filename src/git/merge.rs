@@ -2,7 +2,8 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use git2::Repository;
+// Utilise le cache thread-local pour les opérations en lecture seule
+use crate::git::repo_cache::with_cached_repo;
 
 /// Default timeout for git operations (5 minutes).
 const GIT_OPERATION_TIMEOUT: Duration = Duration::from_secs(300);
@@ -65,26 +66,28 @@ pub fn merge_branch<P: AsRef<Path>>(
 }
 
 pub fn detect_conflicts<P: AsRef<Path>>(repo_path: P) -> Result<Vec<String>, git2::Error> {
-    let repo = Repository::open(repo_path)?;
-    let mut conflicts = Vec::new();
-    if let Ok(index) = repo.index() {
-        if index.has_conflicts() {
-            for conflict in index.conflicts()? {
-                if let Ok(conflict) = conflict {
-                    if let Some(name) = conflict
-                        .our
-                        .as_ref()
-                        .or(conflict.their.as_ref())
-                        .or(conflict.ancestor.as_ref())
-                        .and_then(|entry| std::str::from_utf8(&entry.path).ok())
-                    {
-                        conflicts.push(name.to_string());
+    // Détection des conflits en lecture seule — utilise le cache thread-local
+    with_cached_repo(repo_path, |repo| {
+        let mut conflicts = Vec::new();
+        if let Ok(index) = repo.index() {
+            if index.has_conflicts() {
+                for conflict in index.conflicts()? {
+                    if let Ok(conflict) = conflict {
+                        if let Some(name) = conflict
+                            .our
+                            .as_ref()
+                            .or(conflict.their.as_ref())
+                            .or(conflict.ancestor.as_ref())
+                            .and_then(|entry| std::str::from_utf8(&entry.path).ok())
+                        {
+                            conflicts.push(name.to_string());
+                        }
                     }
                 }
             }
         }
-    }
-    Ok(conflicts)
+        Ok(conflicts)
+    })
 }
 
 trait EmptyStringExt {

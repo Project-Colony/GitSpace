@@ -1,25 +1,32 @@
+//! Panneau de clonage de dépôts distants via GitHub ou GitLab.
+//!
+//! Ce module gère la recherche de dépôts distants, la sélection et le clonage
+//! vers un répertoire local. Les fonctions réseau sont exécutées de manière
+//! asynchrone via des tâches Iced.
+
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::Arc;
-use std::sync::mpsc::{self, Receiver};
 
-use eframe::egui::{self, Align, ComboBox, Layout, RichText, Sense, TextEdit, Ui};
-use poll_promise::Promise;
+use iced::widget::{button, column, container, pick_list, progress_bar, row, text, text_input, Space};
+use iced::{Alignment, Element, Length, Task};
 use reqwest::StatusCode;
-use reqwest::blocking::Client;
+use reqwest::Client;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, USER_AGENT};
 use serde::Deserialize;
 use url::Url;
 
 use crate::auth::AuthManager;
 use crate::config::NetworkOptions;
-use crate::error::{AppError, logs_directory};
+use crate::error::AppError;
 use crate::git::clone::{CloneProgress, CloneRequest, clone_repository};
-use crate::ui::menu;
-use crate::ui::notifications::{Notification, NotificationAction, NotificationCenter};
-use crate::ui::theme::SharedTheme;
+use crate::ui::theme::Theme;
 
+// ---------------------------------------------------------------------------
+// Fournisseur distant (GitHub, GitLab)
+// ---------------------------------------------------------------------------
+
+/// Représente un fournisseur de dépôts distants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Provider {
     GitHub,
@@ -27,6 +34,7 @@ pub enum Provider {
 }
 
 impl Provider {
+    /// Libellé lisible du fournisseur.
     fn label(&self) -> &'static str {
         match self {
             Provider::GitHub => "GitHub",
@@ -34,6 +42,7 @@ impl Provider {
         }
     }
 
+    /// Hôte principal du fournisseur.
     fn host(&self) -> &'static str {
         match self {
             Provider::GitHub => "github.com",
@@ -41,6 +50,7 @@ impl Provider {
         }
     }
 
+    /// Icône Nerd Font du fournisseur.
     fn icon(&self) -> char {
         match self {
             Provider::GitHub => '\u{f408}',
@@ -48,47 +58,125 @@ impl Provider {
         }
     }
 
+    /// Icône suivie du libellé, pour l'affichage.
     fn icon_label(&self) -> String {
         format!("{} {}", self.icon(), self.label())
     }
 }
 
+/// Nécessaire pour le widget `pick_list` d'Iced.
+impl std::fmt::Display for Provider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Dépôt distant
+// ---------------------------------------------------------------------------
+
+/// Un dépôt trouvé via la recherche distante.
 #[derive(Debug, Clone)]
 pub struct RemoteRepo {
     pub name: String,
     pub url: String,
 }
 
-enum CloneEvent {
-    Progress(CloneProgress),
+/// Nécessaire pour le widget `pick_list` — affiche le nom du dépôt.
+impl std::fmt::Display for RemoteRepo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.name)
+    }
 }
 
+/// Comparaison par nom pour la sélection dans `pick_list`.
+impl PartialEq for RemoteRepo {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.url == other.url
+    }
+}
+
+impl Eq for RemoteRepo {}
+
+// ---------------------------------------------------------------------------
+// Messages Iced
+// ---------------------------------------------------------------------------
+
+/// Messages émis par le panneau de clonage.
+#[derive(Debug, Clone)]
+pub enum Message {
+    /// Le fournisseur sélectionné a changé.
+    ProviderSelected(Provider),
+    /// Le texte de recherche a changé.
+    QueryChanged(String),
+    /// L'URL du dépôt a changé.
+    UrlChanged(String),
+    /// Le chemin de destination a changé.
+    DestinationChanged(String),
+    /// Lancer la recherche de dépôts.
+    Search,
+    /// Résultat de la recherche asynchrone.
+    SearchResult(Result<Vec<RemoteRepo>, AppError>),
+    /// Un dépôt a été sélectionné dans la liste.
+    SelectRepo(usize),
+    /// Ouvrir le sélecteur de dossier natif.
+    ChooseDestination,
+    /// Résultat du sélecteur de dossier.
+    ChooseDestinationResult(Option<String>),
+    /// Démarrer le clonage.
+    StartClone,
+    /// Progression du clonage (réservé pour usage futur).
+    CloneProgress(CloneProgress),
+    /// Résultat du clonage asynchrone.
+    CloneResult(Result<(), AppError>),
+    /// Relancer le dernier clonage échoué.
+    RetryClone,
+    /// Recherche différée après un délai de saisie.
+    DebouncedSearch(u32),
+}
+
+// ---------------------------------------------------------------------------
+// Panneau de clonage
+// ---------------------------------------------------------------------------
+
+/// Panneau principal de clonage de dépôts.
 pub struct ClonePanel {
-    theme: SharedTheme,
+    /// Fournisseur actuellement sélectionné.
     provider: Provider,
+    /// Requête de recherche saisie par l'utilisateur.
     repo_query: String,
+    /// URL du dépôt à cloner.
     repo_url: String,
+    /// Chemin de destination pour le clonage.
     destination: String,
+    /// Répertoire de base pour construire les destinations suggérées.
     base_destination: PathBuf,
+    /// Résultats de la dernière recherche.
     search_results: Vec<RemoteRepo>,
+    /// Index du dépôt sélectionné dans `search_results`.
     selected_repo: Option<usize>,
-    search_promise: Option<Promise<Result<Vec<RemoteRepo>, AppError>>>,
+    /// Message d'état de la recherche affiché à l'utilisateur.
     search_status: Option<String>,
-    clone_promise: Option<Promise<Result<(), AppError>>>,
-    progress_rx: Option<Receiver<CloneEvent>>,
+    /// Progression actuelle du clonage.
     progress: Option<CloneProgress>,
+    /// Message d'état du clonage affiché à l'utilisateur.
     clone_status: Option<String>,
+    /// Indique si un clonage est en cours.
     cloning: bool,
+    /// Destination active pendant le clonage.
     active_destination: Option<PathBuf>,
-    last_cloned_repo: Option<PathBuf>,
+    /// Dernière requête de clonage (pour le retry).
     last_request: Option<CloneRequest>,
+    /// Options réseau courantes.
     network: NetworkOptions,
+    /// Compteur de version pour le anti-rebond de la recherche.
+    search_debounce: u32,
 }
 
 impl ClonePanel {
-    pub fn new(theme: SharedTheme, destination: String, network: NetworkOptions) -> Self {
+    /// Crée un nouveau panneau de clonage avec la destination et les options réseau.
+    pub fn new(destination: String, network: NetworkOptions) -> Self {
         Self {
-            theme,
             provider: Provider::GitHub,
             repo_query: String::new(),
             repo_url: String::new(),
@@ -96,178 +184,248 @@ impl ClonePanel {
             destination,
             search_results: Vec::new(),
             selected_repo: None,
-            search_promise: None,
             search_status: None,
-            clone_promise: None,
-            progress_rx: None,
             progress: None,
             clone_status: None,
             cloning: false,
             active_destination: None,
-            last_cloned_repo: None,
             last_request: None,
             network,
+            search_debounce: 0,
         }
     }
 
-    pub fn set_theme(&mut self, theme: SharedTheme) {
-        self.theme = theme;
-    }
-
+    /// Met à jour le chemin de destination par défaut.
     pub fn set_default_destination<S: Into<String>>(&mut self, destination: S) {
         self.destination = destination.into();
         self.base_destination = PathBuf::from(self.destination.clone());
     }
 
+    /// Met à jour les préférences réseau.
     pub fn set_network_preferences(&mut self, network: NetworkOptions) {
         self.network = network;
     }
 
-    pub fn ui(&mut self, ui: &mut Ui, auth: &AuthManager, notifications: &mut NotificationCenter) {
-        self.poll_search(notifications);
-        self.poll_clone_progress();
-        self.poll_clone_result(notifications);
-
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            ui.heading(RichText::new("Clone a repository").color(self.theme.palette.text_primary));
-            if let Some(status) = &self.clone_status {
-                ui.add_space(12.0);
-                ui.label(RichText::new(status).color(self.theme.palette.text_secondary));
+    /// Traite un message et renvoie une tâche Iced plus un éventuel chemin cloné.
+    ///
+    /// Le `Option<PathBuf>` signale au parent qu'un dépôt a été cloné avec succès.
+    pub fn update(
+        &mut self,
+        message: Message,
+        auth: &AuthManager,
+    ) -> (Task<Message>, Option<PathBuf>) {
+        match message {
+            Message::ProviderSelected(provider) => {
+                self.provider = provider;
+                self.search_results.clear();
+                self.selected_repo = None;
+                (Task::none(), None)
             }
-        });
-        ui.label(
-            RichText::new(
-                "Choose a provider, search remotely, or paste a URL to clone into a local path.",
-            )
-            .color(self.theme.palette.text_secondary),
-        );
-        ui.add_space(12.0);
 
-        self.provider_cards(ui);
-        ui.add_space(8.0);
-        ui.separator();
-        ui.add_space(8.0);
-
-        self.search_section(ui, auth);
-        ui.add_space(12.0);
-        self.destination_section(ui);
-        ui.add_space(12.0);
-        self.action_bar(ui, auth);
-        self.progress_section(ui);
-    }
-
-    fn provider_cards(&mut self, ui: &mut Ui) {
-        ui.horizontal(|ui| {
-            for provider in [Provider::GitHub, Provider::GitLab] {
-                let is_active = self.provider == provider;
-                let (rect, response) =
-                    ui.allocate_exact_size(egui::vec2(140.0, 80.0), Sense::click());
-                if response.hovered() {
-                    ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
-                }
-                let fill = if is_active {
-                    self.theme.palette.surface_highlight
-                } else {
-                    self.theme.palette.surface
-                };
-                let stroke = egui::Stroke::new(1.0, self.theme.palette.accent_weak);
-                let painter = ui.painter();
-                painter.rect(rect, 8.0, fill, stroke);
-
-                painter.text(
-                    rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    provider.icon_label(),
-                    egui::FontId::proportional(self.theme.typography.title),
-                    self.theme.palette.text_primary,
+            Message::QueryChanged(query) => {
+                self.repo_query = query;
+                self.search_status = None;
+                // Incrémenter le compteur et programmer une recherche différée (250 ms)
+                self.search_debounce += 1;
+                let version = self.search_debounce;
+                let task = Task::perform(
+                    async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                        version
+                    },
+                    Message::DebouncedSearch,
                 );
-
-                if response.clicked() {
-                    self.provider = provider;
-                    self.search_results.clear();
-                    self.selected_repo = None;
-                }
+                (task, None)
             }
-        });
-    }
 
-    fn search_section(&mut self, ui: &mut Ui, auth: &AuthManager) {
-        ui.vertical(|ui| {
-            ui.heading(
-                RichText::new("Remote repository search").color(self.theme.palette.text_primary),
-            );
-            let search_help = format!(
-                "Search {} or {} without leaving the app. Select a result to fill the clone URL.",
-                format!("{} GitHub", Provider::GitHub.icon()),
-                format!("{} GitLab", Provider::GitLab.icon()),
-            );
-            ui.label(RichText::new(search_help).color(self.theme.palette.text_secondary));
-            ui.add_space(6.0);
+            Message::UrlChanged(url) => {
+                self.repo_url = url;
+                (Task::none(), None)
+            }
 
-            ui.horizontal(|ui| {
-                let query_edit = ui.add_sized(
-                    [320.0, 28.0],
-                    TextEdit::singleline(&mut self.repo_query).hint_text("Search repositories"),
+            Message::DestinationChanged(dest) => {
+                self.destination = dest;
+                (Task::none(), None)
+            }
+
+            Message::Search => {
+                let query = self.repo_query.trim().to_string();
+                if query.len() < 2 {
+                    return (Task::none(), None);
+                }
+                let provider = self.provider;
+                let token = self.resolve_search_token(auth);
+                let network = self.network.clone();
+                self.search_status = Some("Recherche en cours...".into());
+
+                let task = Task::perform(
+                    async move {
+                        search_repositories(provider, &query, token.as_deref(), network).await
+                    },
+                    |result| Message::SearchResult(result),
                 );
+                (task, None)
+            }
 
-                if query_edit.changed() {
-                    self.search_status = None;
-                }
-
-                let search_enabled = self.repo_query.trim().len() >= 2 && !self.cloning;
-                let button = ui.add_enabled(search_enabled, egui::Button::new("Search"));
-                if button.clicked() {
-                    self.start_search(auth);
-                }
-
-                if let Some(status) = &self.search_status {
-                    ui.add_space(8.0);
-                    ui.label(RichText::new(status).color(self.theme.palette.text_secondary));
-                }
-            });
-
-            ui.add_space(8.0);
-            let icon_id = ui.make_persistent_id("clone-results-icon");
-            ComboBox::from_label("Results")
-                .selected_text(
-                    self.selected_repo
-                        .and_then(|idx| self.search_results.get(idx))
-                        .map(|repo| repo.name.clone())
-                        .unwrap_or_else(|| "Select a repository".to_string()),
-                )
-                .icon(menu::combo_icon(Arc::clone(&self.theme), icon_id))
-                .show_ui(ui, |ui| {
-                    menu::with_menu_popup_motion(ui, "clone-results-menu", |ui| {
-                        for idx in 0..self.search_results.len() {
-                            let repo = self.search_results[idx].clone();
-                            if menu::menu_item(
-                                ui,
-                                &self.theme,
-                                ("clone-result", idx),
-                                &repo.name,
-                                self.selected_repo == Some(idx),
-                            )
-                            .clicked()
-                            {
-                                self.selected_repo = Some(idx);
-                                self.update_selection(&repo);
-                            }
+            Message::SearchResult(result) => {
+                match result {
+                    Ok(results) => {
+                        let count = results.len();
+                        self.search_results = results;
+                        self.search_status = Some(format!("{count} résultat(s)"));
+                        // Sélectionner automatiquement le premier résultat
+                        if let Some(repo) = self.search_results.first().cloned() {
+                            self.selected_repo = Some(0);
+                            self.update_selection(&repo);
                         }
-                    });
-                });
+                    }
+                    Err(err) => {
+                        self.search_status = Some(err.user_message());
+                    }
+                }
+                (Task::none(), None)
+            }
 
-            ui.add_space(10.0);
-            ui.label(RichText::new("Repository URL").color(self.theme.palette.text_primary));
-            ui.add_sized(
-                [520.0, 28.0],
-                TextEdit::singleline(&mut self.repo_url).hint_text(
-                    "https://github.com/owner/repo.git or git@gitlab.com:owner/repo.git",
-                ),
-            );
-        });
+            Message::SelectRepo(index) => {
+                if let Some(repo) = self.search_results.get(index).cloned() {
+                    self.selected_repo = Some(index);
+                    self.update_selection(&repo);
+                }
+                (Task::none(), None)
+            }
+
+            Message::ChooseDestination => {
+                let current = self.destination.clone();
+                let task = Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            rfd::FileDialog::new()
+                                .set_directory(&current)
+                                .pick_folder()
+                                .map(|p| p.display().to_string())
+                        })
+                        .await
+                    },
+                    |join_result| match join_result {
+                        Ok(result) => Message::ChooseDestinationResult(result),
+                        Err(_) => Message::ChooseDestinationResult(None),
+                    },
+                );
+                (task, None)
+            }
+
+            Message::ChooseDestinationResult(path) => {
+                if let Some(folder) = path {
+                    self.base_destination = PathBuf::from(&folder);
+                    self.destination = folder;
+                }
+                (Task::none(), None)
+            }
+
+            Message::StartClone => {
+                let url = self.repo_url.trim().to_string();
+                let destination = PathBuf::from(self.destination.trim());
+                let token = auth.resolve_for_url(&url);
+                let request = CloneRequest {
+                    url,
+                    destination,
+                    token,
+                    network: self.network.clone(),
+                };
+                let task = self.begin_clone(request);
+                (task, None)
+            }
+
+            Message::CloneProgress(progress) => {
+                self.progress = Some(progress);
+                (Task::none(), None)
+            }
+
+            Message::CloneResult(result) => {
+                self.cloning = false;
+                match result {
+                    Ok(()) => {
+                        self.clone_status =
+                            Some("Clonage terminé avec succès".into());
+                        let cloned_path = self.active_destination.take();
+                        (Task::none(), cloned_path)
+                    }
+                    Err(err) => {
+                        self.clone_status = Some(err.user_message());
+                        self.active_destination = None;
+                        (Task::none(), None)
+                    }
+                }
+            }
+
+            Message::RetryClone => {
+                if self.cloning {
+                    return (Task::none(), None);
+                }
+                if let Some(request) = self.last_request.clone() {
+                    let task = self.begin_clone(request);
+                    (task, None)
+                } else {
+                    (Task::none(), None)
+                }
+            }
+
+            Message::DebouncedSearch(version) => {
+                // Ignorer si une frappe plus récente a incrémenté le compteur
+                if version != self.search_debounce {
+                    return (Task::none(), None);
+                }
+                // Même logique que Message::Search
+                let query = self.repo_query.trim().to_string();
+                if query.len() < 2 {
+                    return (Task::none(), None);
+                }
+                let provider = self.provider;
+                let token = self.resolve_search_token(auth);
+                let network = self.network.clone();
+                self.search_status = Some("Recherche en cours...".into());
+
+                let task = Task::perform(
+                    async move {
+                        search_repositories(provider, &query, token.as_deref(), network).await
+                    },
+                    |result| Message::SearchResult(result),
+                );
+                (task, None)
+            }
+        }
     }
 
+    /// Lance le clonage en arrière-plan et renvoie la tâche Iced correspondante.
+    fn begin_clone(&mut self, request: CloneRequest) -> Task<Message> {
+        self.last_request = Some(request.clone());
+        self.active_destination = Some(request.destination.clone());
+        self.progress = None;
+        self.clone_status = Some("Démarrage du clonage...".into());
+        self.cloning = true;
+
+        // Le clonage est bloquant — on le lance dans un thread dédié.
+        // La progression en temps réel n'est pas disponible dans cette version ;
+        // le résultat final est renvoyé une fois le clonage terminé.
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    clone_repository(request, |_progress| {
+                        // Progression ignorée pour l'instant — pas de canal temps réel.
+                    })
+                })
+                .await
+            },
+            |join_result| match join_result {
+                Ok(result) => Message::CloneResult(result),
+                Err(err) => Message::CloneResult(Err(AppError::Network(
+                    format!("Tâche de clonage interrompue : {err}"),
+                ))),
+            },
+        )
+    }
+
+    /// Met à jour l'URL et la destination d'après le dépôt sélectionné.
     fn update_selection(&mut self, repo: &RemoteRepo) {
         self.repo_url = repo.url.clone();
         if let Some(destination) = self.suggested_destination(&repo.url) {
@@ -275,6 +433,7 @@ impl ClonePanel {
         }
     }
 
+    /// Propose un chemin de destination basé sur le nom du dépôt extrait de l'URL.
     fn suggested_destination(&self, repo_url: &str) -> Option<String> {
         let repo_name = repo_name_from_url(repo_url)?;
         let base = if self.base_destination.as_os_str().is_empty() {
@@ -282,222 +441,313 @@ impl ClonePanel {
         } else {
             self.base_destination.clone()
         };
-
         Some(base.join(repo_name).display().to_string())
     }
 
-    fn destination_section(&mut self, ui: &mut Ui) {
-        ui.heading(RichText::new("Local path").color(self.theme.palette.text_primary));
-        ui.horizontal(|ui| {
-            ui.add_sized(
-                [400.0, 28.0],
-                TextEdit::singleline(&mut self.destination).hint_text("Where should we clone to?"),
-            );
-            if ui.button("Choose").clicked() {
-                if let Some(folder) = rfd::FileDialog::new()
-                    .set_directory(&self.destination)
-                    .pick_folder()
-                {
-                    self.destination = folder.display().to_string();
-                    self.base_destination = folder;
-                }
-            }
-        });
-    }
-
-    fn action_bar(&mut self, ui: &mut Ui, auth: &AuthManager) {
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let can_clone = !self.repo_url.trim().is_empty()
-                && !self.destination.trim().is_empty()
-                && !self.cloning;
-            if ui
-                .add_enabled(can_clone, egui::Button::new("Clone repository"))
-                .clicked()
-            {
-                self.start_clone(auth);
-            }
-        });
-    }
-
-    fn progress_section(&mut self, ui: &mut Ui) {
-        if let Some(progress) = &self.progress {
-            let ratio = if progress.total_objects == 0 {
-                0.0
-            } else {
-                progress.received_objects as f32 / progress.total_objects as f32
-            };
-            ui.add_space(10.0);
-            ui.label(RichText::new("Clone progress").color(self.theme.palette.text_primary));
-            ui.add(egui::ProgressBar::new(ratio).text(format!(
-                "Objects {}/{} ({:.1} KB)",
-                progress.received_objects,
-                progress.total_objects,
-                progress.received_bytes as f32 / 1024.0
-            )));
-            ui.label(
-                RichText::new(format!(
-                    "Indexed {} of {} deltas",
-                    progress.indexed_deltas, progress.total_deltas
-                ))
-                .color(self.theme.palette.text_secondary),
-            );
-        }
-    }
-
-    fn start_search(&mut self, auth: &AuthManager) {
-        let query = self.repo_query.trim().to_string();
-        if query.len() < 2 {
-            return;
-        }
-        let provider = self.provider;
-        let token = self.resolve_search_token(auth);
-        let network = self.network.clone();
-        self.search_status = Some("Searching...".to_string());
-        self.search_promise = Some(Promise::spawn_thread("search_repos", move || {
-            search_repositories(provider, &query, token.as_deref(), network)
-        }));
-    }
-
-    fn start_clone(&mut self, auth: &AuthManager) {
-        let url = self.repo_url.trim().to_string();
-        let destination = PathBuf::from(self.destination.trim());
-        let token = auth.resolve_for_url(&url);
-
-        let request = CloneRequest {
-            url,
-            destination,
-            token,
-            network: self.network.clone(),
-        };
-        self.begin_clone(request);
-    }
-
-    pub fn retry_last_clone(&mut self) {
-        if self.cloning {
-            return;
-        }
-        if let Some(request) = self.last_request.clone() {
-            self.begin_clone(request);
-        }
-    }
-
-    fn begin_clone(&mut self, request: CloneRequest) {
-        self.last_request = Some(request.clone());
-        self.active_destination = Some(request.destination.clone());
-
-        let (tx, rx) = mpsc::channel();
-        self.progress_rx = Some(rx);
-        self.progress = None;
-        self.clone_status = Some("Starting clone...".to_string());
-        self.cloning = true;
-
-        self.clone_promise = Some(Promise::spawn_thread("clone_repo", move || {
-            let sender = tx.clone();
-            let result = clone_repository(request, move |progress| {
-                let _ = sender.send(CloneEvent::Progress(progress));
-            });
-            result
-        }));
-    }
-
-    fn provider_host(&self) -> &str {
-        self.provider.host()
-    }
-
+    /// Résout le jeton d'authentification pour la recherche sur le fournisseur actuel.
     fn resolve_search_token(&self, auth: &AuthManager) -> Option<String> {
         match self.provider {
             Provider::GitHub => auth
-                .resolve_for_host(self.provider_host())
+                .resolve_for_host(self.provider.host())
                 .or_else(|| auth.resolve_for_host("api.github.com")),
-            Provider::GitLab => auth.resolve_for_host(self.provider_host()),
+            Provider::GitLab => auth.resolve_for_host(self.provider.host()),
         }
     }
 
-    fn poll_search(&mut self, notifications: &mut NotificationCenter) {
-        if let Some(promise) = &self.search_promise {
-            if let Some(result) = promise.ready() {
-                let result = result.clone();
-                self.search_promise = None;
-                match result {
-                    Ok(results) => {
-                        self.search_results = results.clone();
-                        self.search_status =
-                            Some(format!("{} result(s)", self.search_results.len()));
-                        if let Some(repo) = self.search_results.first().cloned() {
-                            self.selected_repo = Some(0);
-                            self.update_selection(&repo);
-                        }
+    // -----------------------------------------------------------------------
+    // Vue Iced
+    // -----------------------------------------------------------------------
+
+    /// Construit l'arbre de widgets du panneau de clonage.
+    pub fn view<'a>(&'a self, theme: &'a Theme) -> Element<'a, Message> {
+        let title = text("Cloner un dépôt")
+            .size(theme.typography.title)
+            .color(theme.palette.text_primary);
+
+        let subtitle = text(
+            "Choisissez un fournisseur, recherchez un dépôt distant, \
+             ou collez une URL pour cloner vers un chemin local.",
+        )
+        .size(theme.typography.body)
+        .color(theme.palette.text_secondary);
+
+        // --- Cartes de fournisseur ---
+        let provider_row = self.view_provider_cards(theme);
+
+        // --- Section de recherche ---
+        let search_section = self.view_search_section(theme);
+
+        // --- URL du dépôt ---
+        let url_section = self.view_url_section(theme);
+
+        // --- Section de destination ---
+        let destination_section = self.view_destination_section(theme);
+
+        // --- Barre d'actions ---
+        let action_bar = self.view_action_bar(theme);
+
+        // --- Progression ---
+        let progress_section = self.view_progress_section(theme);
+
+        // --- Statut du clonage ---
+        let status_section: Element<'a, Message> = if let Some(status) = &self.clone_status {
+            text(status.as_str())
+                .size(theme.typography.body)
+                .color(theme.palette.text_secondary)
+                .into()
+        } else {
+            Space::new(0, 0).into()
+        };
+
+        let content = column![
+            title,
+            subtitle,
+            Space::with_height(12),
+            provider_row,
+            Space::with_height(8),
+            search_section,
+            Space::with_height(12),
+            url_section,
+            Space::with_height(12),
+            destination_section,
+            Space::with_height(12),
+            action_bar,
+            progress_section,
+            status_section,
+        ]
+        .spacing(4)
+        .width(Length::Fill);
+
+        container(content)
+            .padding(16)
+            .width(Length::Fill)
+            .into()
+    }
+
+    /// Affiche les cartes de sélection du fournisseur (GitHub / GitLab).
+    fn view_provider_cards<'a>(&self, theme: &'a Theme) -> Element<'a, Message> {
+        let cards: Vec<Element<'a, Message>> = [Provider::GitHub, Provider::GitLab]
+            .iter()
+            .map(|&provider| {
+                let is_active = self.provider == provider;
+                let bg = if is_active {
+                    theme.palette.surface_highlight
+                } else {
+                    theme.palette.surface
+                };
+                let label = text(provider.icon_label())
+                    .size(theme.typography.title)
+                    .color(theme.palette.text_primary);
+
+                button(
+                    container(label)
+                        .center_x(Length::Fill)
+                        .center_y(Length::Fill)
+                        .width(140)
+                        .height(80),
+                )
+                .style(move |_theme, status| {
+                    let mut appearance = button::Style {
+                        background: Some(iced::Background::Color(bg)),
+                        border: iced::Border {
+                            color: if is_active {
+                                theme.palette.accent
+                            } else {
+                                theme.palette.accent_weak
+                            },
+                            width: 1.0,
+                            radius: 8.0.into(),
+                        },
+                        text_color: theme.palette.text_primary,
+                        ..button::Style::default()
+                    };
+                    if matches!(status, button::Status::Hovered) {
+                        appearance.background =
+                            Some(iced::Background::Color(theme.palette.surface_highlight));
                     }
-                    Err(err) => {
-                        let log_path = logs_directory();
-                        self.search_status = Some(err.user_message());
-                        let mut notification =
-                            Notification::error("Search failed", err.user_message())
-                                .with_log_path(log_path.clone())
-                                .with_action(NotificationAction::CopyLogPath(log_path));
-                        notification.detail = Some(err.detail().to_string());
-                        notifications.push(notification);
-                    }
-                }
+                    appearance
+                })
+                .on_press(Message::ProviderSelected(provider))
+                .width(140)
+                .height(80)
+                .into()
+            })
+            .collect();
+
+        row(cards).spacing(12).into()
+    }
+
+    /// Affiche la section de recherche : champ texte + bouton + liste de résultats.
+    fn view_search_section<'a>(&'a self, theme: &'a Theme) -> Element<'a, Message> {
+        let heading = text("Recherche de dépôts distants")
+            .size(theme.typography.title)
+            .color(theme.palette.text_primary);
+
+        let help_text = text(format!(
+            "Recherchez sur {} GitHub ou {} GitLab sans quitter l'application.",
+            Provider::GitHub.icon(),
+            Provider::GitLab.icon(),
+        ))
+        .size(theme.typography.body)
+        .color(theme.palette.text_secondary);
+
+        // Champ de recherche
+        let query_input = text_input("Rechercher des dépôts", &self.repo_query)
+            .on_input(Message::QueryChanged)
+            .width(320);
+
+        // Bouton de recherche — désactivé si la requête est trop courte ou si un clonage est en cours
+        let search_enabled = self.repo_query.trim().len() >= 2 && !self.cloning;
+        let search_btn = if search_enabled {
+            button(text("Rechercher")).on_press(Message::Search)
+        } else {
+            button(text("Rechercher"))
+        };
+
+        // Statut de la recherche
+        let status_label: Element<'_, Message> = if let Some(status) = &self.search_status {
+            text(status.as_str())
+                .size(theme.typography.body)
+                .color(theme.palette.text_secondary)
+                .into()
+        } else {
+            Space::new(0, 0).into()
+        };
+
+        let search_row = row![query_input, search_btn, status_label]
+            .spacing(8)
+            .align_y(Alignment::Center);
+
+        // Liste déroulante des résultats — mappe la sélection vers SelectRepo(index)
+        let results_section = self.view_results_pick_list(theme);
+
+        column![heading, help_text, Space::with_height(6), search_row, Space::with_height(8), results_section]
+            .spacing(2)
+            .into()
+    }
+
+    /// Widget pick_list pour les résultats de recherche.
+    ///
+    /// On mappe la sélection vers `SelectRepo(index)` en cherchant l'index par nom.
+    fn view_results_pick_list<'a>(&'a self, _theme: &'a Theme) -> Element<'a, Message> {
+        let selected = self
+            .selected_repo
+            .and_then(|idx| self.search_results.get(idx))
+            .cloned();
+
+        let results = self.search_results.clone();
+
+        pick_list(results, selected, {
+            let search_results = self.search_results.clone();
+            move |repo: RemoteRepo| {
+                // Trouver l'index correspondant au dépôt sélectionné
+                let index = search_results
+                    .iter()
+                    .position(|r| r.name == repo.name && r.url == repo.url)
+                    .unwrap_or(0);
+                Message::SelectRepo(index)
             }
-        }
+        })
+        .placeholder("Sélectionnez un dépôt")
+        .width(520)
+        .into()
     }
 
-    fn poll_clone_progress(&mut self) {
-        if let Some(rx) = &self.progress_rx {
-            for event in rx.try_iter() {
-                match event {
-                    CloneEvent::Progress(progress) => {
-                        self.progress = Some(progress);
-                    }
-                }
+    /// Affiche le champ URL du dépôt.
+    fn view_url_section<'a>(&self, theme: &'a Theme) -> Element<'a, Message> {
+        let label = text("URL du dépôt")
+            .size(theme.typography.body)
+            .color(theme.palette.text_primary);
+
+        let url_input = text_input(
+            "https://github.com/owner/repo.git ou git@gitlab.com:owner/repo.git",
+            &self.repo_url,
+        )
+        .on_input(Message::UrlChanged)
+        .width(520);
+
+        column![label, url_input].spacing(4).into()
+    }
+
+    /// Affiche la section de destination : champ texte + bouton « Choisir ».
+    fn view_destination_section<'a>(&self, theme: &'a Theme) -> Element<'a, Message> {
+        let label = text("Chemin local")
+            .size(theme.typography.title)
+            .color(theme.palette.text_primary);
+
+        let dest_input =
+            text_input("Où cloner le dépôt ?", &self.destination)
+                .on_input(Message::DestinationChanged)
+                .width(400);
+
+        let choose_btn = button(text("Choisir")).on_press(Message::ChooseDestination);
+
+        let dest_row = row![dest_input, choose_btn]
+            .spacing(8)
+            .align_y(Alignment::Center);
+
+        column![label, dest_row].spacing(4).into()
+    }
+
+    /// Affiche le bouton de clonage, aligné à droite.
+    fn view_action_bar<'a>(&self, _theme: &'a Theme) -> Element<'a, Message> {
+        let can_clone =
+            !self.repo_url.trim().is_empty() && !self.destination.trim().is_empty() && !self.cloning;
+
+        let clone_btn = if can_clone {
+            button(text("Cloner le dépôt")).on_press(Message::StartClone)
+        } else {
+            button(text("Cloner le dépôt"))
+        };
+
+        // Alignement à droite via un espace flexible
+        row![Space::with_width(Length::Fill), clone_btn]
+            .width(Length::Fill)
+            .into()
+    }
+
+    /// Affiche la barre de progression si un clonage est en cours.
+    fn view_progress_section<'a>(&self, theme: &'a Theme) -> Element<'a, Message> {
+        match &self.progress {
+            Some(progress) => {
+                let ratio = if progress.total_objects == 0 {
+                    0.0
+                } else {
+                    progress.received_objects as f32 / progress.total_objects as f32
+                };
+
+                let label = text("Progression du clonage")
+                    .size(theme.typography.body)
+                    .color(theme.palette.text_primary);
+
+                let bar = progress_bar(0.0..=1.0, ratio).width(Length::Fill);
+
+                let detail = text(format!(
+                    "Objets {}/{} ({:.1} Ko) — Deltas indexés {}/{}",
+                    progress.received_objects,
+                    progress.total_objects,
+                    progress.received_bytes as f64 / 1024.0,
+                    progress.indexed_deltas,
+                    progress.total_deltas,
+                ))
+                .size(theme.typography.body)
+                .color(theme.palette.text_secondary);
+
+                column![Space::with_height(10), label, bar, detail]
+                    .spacing(4)
+                    .width(Length::Fill)
+                    .into()
             }
+            None => Space::new(0, 0).into(),
         }
-    }
-
-    fn poll_clone_result(&mut self, notifications: &mut NotificationCenter) {
-        if let Some(promise) = &self.clone_promise {
-            if let Some(result) = promise.ready() {
-                let result = result.clone();
-                self.clone_promise = None;
-                self.progress_rx = None;
-                self.cloning = false;
-                match result {
-                    Ok(()) => {
-                        self.clone_status = Some("Clone completed successfully".to_string());
-                        self.last_cloned_repo = self.active_destination.take();
-                        if let Some(repo) = &self.last_cloned_repo {
-                            notifications.push(
-                                Notification::success(
-                                    "Repository cloned",
-                                    format!("Saved to {}", repo.display()),
-                                )
-                                .with_log_path(logs_directory()),
-                            );
-                        }
-                    }
-                    Err(err) => {
-                        let log_path = logs_directory();
-                        self.clone_status = Some(err.user_message());
-                        let mut notification =
-                            Notification::error("Clone failed", err.user_message())
-                                .with_action(NotificationAction::RetryClone)
-                                .with_action(NotificationAction::CopyLogPath(log_path.clone()))
-                                .with_log_path(log_path);
-                        notification.detail = Some(err.detail().to_string());
-                        notifications.push(notification);
-                        self.active_destination = None;
-                    }
-                }
-            }
-        }
-    }
-
-    pub fn take_last_cloned_repo(&mut self) -> Option<PathBuf> {
-        self.last_cloned_repo.take()
     }
 }
 
+// ---------------------------------------------------------------------------
+// Fonctions utilitaires (extraction du nom de dépôt depuis une URL)
+// ---------------------------------------------------------------------------
+
+/// Extrait le nom du dépôt depuis une URL (HTTPS ou SSH).
 fn repo_name_from_url(repo_url: &str) -> Option<String> {
     let trimmed = repo_url.trim().trim_end_matches('/');
     if let Ok(url) = Url::parse(trimmed) {
@@ -529,19 +779,25 @@ fn repo_name_from_url(repo_url: &str) -> Option<String> {
     }
 }
 
-fn search_repositories(
+// ---------------------------------------------------------------------------
+// Fonctions réseau — identiques à l'original
+// ---------------------------------------------------------------------------
+
+/// Lance la recherche sur le fournisseur approprié.
+async fn search_repositories(
     provider: Provider,
     query: &str,
     token: Option<&str>,
     network: NetworkOptions,
 ) -> Result<Vec<RemoteRepo>, AppError> {
     match provider {
-        Provider::GitHub => search_github(query, token, &network),
-        Provider::GitLab => search_gitlab(query, token, &network),
+        Provider::GitHub => search_github(query, token, &network).await,
+        Provider::GitLab => search_gitlab(query, token, &network).await,
     }
 }
 
-fn client_with_headers(
+/// Construit un client HTTP avec les en-têtes nécessaires (auth, proxy, timeout).
+async fn client_with_headers(
     token: Option<&str>,
     token_header: Option<&str>,
     header: Option<(&'static str, &'static str)>,
@@ -596,6 +852,7 @@ fn client_with_headers(
     builder.build().map_err(AppError::from)
 }
 
+/// Vérifie que l'URL respecte la politique HTTPS configurée.
 fn enforce_https_policy(url: &str, network: &NetworkOptions) -> Result<(), AppError> {
     if url.starts_with("https://") && !network.use_https {
         return Err(AppError::Validation(
@@ -611,6 +868,8 @@ fn enforce_https_policy(url: &str, network: &NetworkOptions) -> Result<(), AppEr
 
     Ok(())
 }
+
+// --- Structures de désérialisation GitHub ---
 
 #[derive(Debug, Deserialize)]
 struct GithubRepoOwner {
@@ -629,7 +888,8 @@ struct GithubUserProfile {
     login: String,
 }
 
-fn search_github(
+/// Recherche les dépôts d'un compte GitHub (publics + privés si authentifié).
+async fn search_github(
     query: &str,
     token: Option<&str>,
     network: &NetworkOptions,
@@ -639,24 +899,26 @@ fn search_github(
         return Ok(Vec::new());
     }
 
-    let client = client_with_headers(token, None, None, network)?;
+    let client = client_with_headers(token, None, None, network).await?;
     let mut unique = HashSet::new();
     let mut repositories = Vec::new();
 
     let public_user_url = format!("https://api.github.com/users/{}/repos", account);
     repositories.extend(
         fetch_github_repos(&client, &public_user_url, &[("type", "public")], network)
+            .await
             .unwrap_or_default(),
     );
 
     let public_org_url = format!("https://api.github.com/orgs/{}/repos", account);
     repositories.extend(
         fetch_github_repos(&client, &public_org_url, &[("type", "public")], network)
+            .await
             .unwrap_or_default(),
     );
 
     if token.is_some() {
-        if let Some(login) = fetch_github_login(&client, network)? {
+        if let Some(login) = fetch_github_login(&client, network).await? {
             if login.eq_ignore_ascii_case(account) {
                 let private_repos = fetch_github_repos(
                     &client,
@@ -666,7 +928,8 @@ fn search_github(
                         ("affiliation", "owner,collaborator,organization_member"),
                     ],
                     network,
-                )?;
+                )
+                .await?;
 
                 repositories.extend(
                     private_repos
@@ -689,13 +952,16 @@ fn search_github(
     Ok(results)
 }
 
+// --- Structure de désérialisation GitLab ---
+
 #[derive(Debug, Deserialize)]
 struct GitlabProject {
     name_with_namespace: String,
     http_url_to_repo: String,
 }
 
-fn search_gitlab(
+/// Recherche les projets GitLab correspondant à la requête.
+async fn search_gitlab(
     query: &str,
     token: Option<&str>,
     network: &NetworkOptions,
@@ -707,7 +973,8 @@ fn search_gitlab(
         Some("PRIVATE-TOKEN"),
         Some(("Accept", "application/json")),
         network,
-    )?;
+    )
+    .await?;
 
     let mut all_projects = Vec::new();
     let per_page = 100;
@@ -722,18 +989,23 @@ fn search_gitlab(
                 ("simple", "true"),
             ])
             .send()
+            .await
             .map_err(AppError::from)?;
 
         if !response.status().is_success() {
             if page == 1 {
-                return Err(AppError::from(
-                    response.error_for_status().unwrap_err(),
-                ));
+                // error_for_status() renvoie Err quand le statut n'est pas un succès
+                match response.error_for_status() {
+                    Err(err) => return Err(AppError::from(err)),
+                    Ok(_) => return Err(AppError::Network(
+                        "Réponse inattendue du serveur GitLab".to_string(),
+                    )),
+                }
             }
             break;
         }
 
-        let projects: Vec<GitlabProject> = response.json().map_err(AppError::from)?;
+        let projects: Vec<GitlabProject> = response.json().await.map_err(AppError::from)?;
         let count = projects.len();
         all_projects.extend(projects);
 
@@ -751,24 +1023,27 @@ fn search_gitlab(
         .collect())
 }
 
-fn fetch_github_login(
+/// Récupère le login de l'utilisateur GitHub authentifié.
+async fn fetch_github_login(
     client: &Client,
     network: &NetworkOptions,
 ) -> Result<Option<String>, AppError> {
     let url = "https://api.github.com/user";
     enforce_https_policy(url, network)?;
-    let response = client.get(url).send().map_err(AppError::from)?;
+    let response = client.get(url).send().await.map_err(AppError::from)?;
     if response.status() == StatusCode::UNAUTHORIZED {
         return Ok(None);
     }
     let profile: GithubUserProfile = response
         .error_for_status()?
         .json()
+        .await
         .map_err(AppError::from)?;
     Ok(Some(profile.login))
 }
 
-fn fetch_github_repos(
+/// Récupère les dépôts GitHub depuis une URL paginée.
+async fn fetch_github_repos(
     client: &Client,
     base_url: &str,
     params: &[(&str, &str)],
@@ -788,6 +1063,7 @@ fn fetch_github_repos(
             .get(base_url)
             .query(&query_params)
             .send()
+            .await
             .map_err(AppError::from)?;
 
         if response.status() == StatusCode::NOT_FOUND {
@@ -795,7 +1071,7 @@ fn fetch_github_repos(
         }
 
         let response = response.error_for_status().map_err(AppError::from)?;
-        let mut repos: Vec<GithubRepoItem> = response.json().map_err(AppError::from)?;
+        let mut repos: Vec<GithubRepoItem> = response.json().await.map_err(AppError::from)?;
         let count = repos.len();
         all_repos.append(&mut repos);
 

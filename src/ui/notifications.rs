@@ -1,23 +1,25 @@
-//! Toast notification system with auto-dismiss and limits.
+//! Système de notifications toast avec auto-dismiss et limites.
 
-// Public API methods are designed for future use
 #![allow(dead_code)]
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use eframe::egui::{self, Color32};
+use iced::widget::{button, column, container, row, text, Space};
+use iced::{Alignment, Color, Element, Length};
 
-/// Maximum number of notifications shown at once.
+use crate::ui::theme::Theme;
+
+/// Nombre maximum de notifications affichées simultanément.
 const MAX_NOTIFICATIONS: usize = 5;
 
-/// Default duration before auto-dismiss (seconds).
+/// Durée par défaut avant auto-dismiss (secondes).
 const DEFAULT_DURATION_SECS: u64 = 12;
 
-/// Duration for error notifications (seconds) - longer to give time to read.
+/// Durée pour les erreurs (plus longue pour laisser le temps de lire).
 const ERROR_DURATION_SECS: u64 = 20;
 
-/// Type of notification for styling purposes.
+/// Type de notification pour le style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotificationKind {
     Success,
@@ -25,7 +27,7 @@ pub enum NotificationKind {
     Info,
 }
 
-/// Actions that can be triggered from notification buttons.
+/// Actions déclenchables depuis les boutons de notification.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NotificationAction {
     RetryClone,
@@ -33,7 +35,7 @@ pub enum NotificationAction {
     OpenRelease(String),
 }
 
-/// A toast notification with optional actions.
+/// Une notification toast avec actions optionnelles.
 #[derive(Debug, Clone)]
 pub struct Notification {
     pub title: String,
@@ -48,41 +50,41 @@ pub struct Notification {
 }
 
 impl Notification {
-    /// Creates an error notification with longer display duration.
+    /// Crée une notification d'erreur avec durée plus longue.
     pub fn error<T: Into<String>, D: Into<String>>(title: T, detail: D) -> Self {
         Self::new(title, detail, NotificationKind::Error)
             .with_duration(Duration::from_secs(ERROR_DURATION_SECS))
     }
 
-    /// Creates a success notification.
+    /// Crée une notification de succès.
     pub fn success<T: Into<String>, D: Into<String>>(title: T, detail: D) -> Self {
         Self::new(title, detail, NotificationKind::Success)
     }
 
-    /// Creates an info notification.
+    /// Crée une notification d'information.
     pub fn info<T: Into<String>, D: Into<String>>(title: T, detail: D) -> Self {
         Self::new(title, detail, NotificationKind::Info)
     }
 
-    /// Attaches a log path to the notification.
+    /// Attache un chemin de log à la notification.
     pub fn with_log_path(mut self, path: PathBuf) -> Self {
         self.log_path = Some(path);
         self
     }
 
-    /// Adds an action button to the notification.
+    /// Ajoute un bouton d'action à la notification.
     pub fn with_action(mut self, action: NotificationAction) -> Self {
         self.actions.push(action);
         self
     }
 
-    /// Sets a custom display duration.
+    /// Définit une durée d'affichage personnalisée.
     pub fn with_duration(mut self, duration: Duration) -> Self {
         self.duration = duration;
         self
     }
 
-    /// Sets additional detail text.
+    /// Définit le texte de détail additionnel.
     pub fn with_detail<D: Into<String>>(mut self, detail: D) -> Self {
         self.detail = Some(detail.into());
         self
@@ -102,186 +104,175 @@ impl Notification {
         }
     }
 
-    /// Returns true if the notification should be removed.
+    /// Retourne true si la notification doit être retirée.
     fn is_expired(&self) -> bool {
         self.dismissed || Instant::now().duration_since(self.created_at) >= self.duration
     }
 
-    /// Marks the notification as dismissed.
+    /// Marque la notification comme dismissée.
     fn dismiss(&mut self) {
         self.dismissed = true;
     }
 
-    /// Returns the progress (0.0 to 1.0) through the notification's lifetime.
-    fn progress(&self) -> f32 {
+    /// Retourne la progression (0.0 à 1.0) dans la durée de vie de la notification.
+    pub fn progress(&self) -> f32 {
         let elapsed = Instant::now().duration_since(self.created_at);
         (elapsed.as_secs_f32() / self.duration.as_secs_f32()).clamp(0.0, 1.0)
     }
 }
 
-/// Container for managing and displaying notifications.
+/// Messages du centre de notifications.
+#[derive(Debug, Clone)]
+pub enum Message {
+    Dismiss(usize),
+    ActionClicked(usize, NotificationAction),
+    Tick,
+}
+
+/// Conteneur pour gérer et afficher les notifications.
 #[derive(Default)]
 pub struct NotificationCenter {
     queue: Vec<Notification>,
 }
 
 impl NotificationCenter {
-    /// Creates a new notification center.
+    /// Crée un nouveau centre de notifications.
     pub fn new() -> Self {
         Self { queue: Vec::new() }
     }
 
-    /// Adds a notification to the queue.
-    ///
-    /// If the queue exceeds `MAX_NOTIFICATIONS`, the oldest notifications are removed.
+    /// Ajoute une notification à la file.
     pub fn push(&mut self, notification: Notification) {
         self.queue.push(notification);
-
-        // Remove oldest notifications if over limit
         while self.queue.len() > MAX_NOTIFICATIONS {
             self.queue.remove(0);
         }
     }
 
-    /// Returns the current number of active notifications.
+    /// Retourne le nombre de notifications actives.
     pub fn len(&self) -> usize {
         self.queue.len()
     }
 
-    /// Returns true if there are no notifications.
+    /// Retourne true s'il n'y a aucune notification.
     pub fn is_empty(&self) -> bool {
         self.queue.is_empty()
     }
 
-    /// Dismisses all notifications.
+    /// Dismiss toutes les notifications.
     pub fn dismiss_all(&mut self) {
         self.queue.clear();
     }
 
-    /// Shows all active notifications and returns any triggered actions.
-    pub fn show(&mut self, ctx: &egui::Context) -> Vec<NotificationAction> {
-        // Remove expired notifications
-        self.queue.retain(|n| !n.is_expired());
+    /// Retourne true si des notifications sont visibles (pour la subscription de tick).
+    pub fn has_visible(&self) -> bool {
+        !self.queue.is_empty()
+    }
 
-        let mut actions = Vec::new();
+    /// Gère un message de notification. Retourne les actions déclenchées.
+    pub fn update(&mut self, message: Message) -> Vec<NotificationAction> {
+        match message {
+            Message::Dismiss(idx) => {
+                if let Some(notification) = self.queue.get_mut(idx) {
+                    notification.dismiss();
+                }
+                Vec::new()
+            }
+            Message::ActionClicked(idx, action) => {
+                if let Some(notification) = self.queue.get_mut(idx) {
+                    notification.dismiss();
+                }
+                vec![action]
+            }
+            Message::Tick => {
+                self.queue.retain(|n| !n.is_expired());
+                Vec::new()
+            }
+        }
+    }
 
-        for (idx, notification) in self.queue.iter_mut().enumerate() {
-            let anchor = egui::Align2::RIGHT_TOP;
-            let offset = egui::vec2(-12.0, 12.0 + idx as f32 * 120.0);
+    /// Construit la vue des notifications en overlay.
+    pub fn view(&self, theme: &Theme) -> Element<'_, Message> {
+        if self.queue.is_empty() {
+            return Space::new(0, 0).into();
+        }
 
-            egui::Area::new(egui::Id::new(("toast", idx)))
-                .anchor(anchor, offset)
-                .show(ctx, |ui| {
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(320.0, 110.0),
-                        egui::Layout::top_down(egui::Align::LEFT),
-                        |ui| {
-                            ui.spacing_mut().item_spacing = egui::vec2(8.0, 6.0);
+        let mut notifications = column![].spacing(8).width(Length::Fixed(340.0));
 
-                            let fill = match notification.kind {
-                                NotificationKind::Success => Color32::from_rgb(26, 102, 64),
-                                NotificationKind::Error => Color32::from_rgb(125, 32, 32),
-                                NotificationKind::Info => Color32::from_rgb(32, 64, 125),
-                            };
-                            let text_color = Color32::WHITE;
+        for (idx, notification) in self.queue.iter().enumerate() {
+            let fill_color = match notification.kind {
+                NotificationKind::Success => Color::from_rgb8(26, 102, 64),
+                NotificationKind::Error => Color::from_rgb8(125, 32, 32),
+                NotificationKind::Info => Color::from_rgb8(32, 64, 125),
+            };
 
-                            let frame = egui::Frame::default()
-                                .fill(fill)
-                                .rounding(egui::Rounding::same(8.0))
-                                .outer_margin(egui::Margin::same(4.0))
-                                .inner_margin(egui::Margin::symmetric(12.0, 10.0));
+            let mut content = column![].spacing(4);
 
-                            frame.show(ui, |ui| {
-                                // Header with title and dismiss button
-                                ui.horizontal(|ui| {
-                                    ui.heading(
-                                        egui::RichText::new(&notification.title).color(text_color),
-                                    );
-                                    ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Center),
-                                        |ui| {
-                                            if ui.button("×").clicked() {
-                                                notification.dismiss();
-                                            }
-                                        },
-                                    );
-                                });
+            // Titre + bouton dismiss
+            let title_row = row![
+                text(&notification.title)
+                    .size(theme.typography.body)
+                    .color(Color::WHITE),
+                Space::with_width(Length::Fill),
+                button(text("x").size(12).color(Color::WHITE))
+                    .on_press(Message::Dismiss(idx))
+                    .padding(2),
+            ]
+            .align_y(Alignment::Center);
+            content = content.push(title_row);
 
-                                // Message
-                                ui.label(
-                                    egui::RichText::new(&notification.message)
-                                        .color(text_color)
-                                        .small(),
-                                );
+            // Message
+            content = content.push(
+                text(&notification.message)
+                    .size(theme.typography.label)
+                    .color(Color::from_rgba8(255, 255, 255, 0.85)),
+            );
 
-                                // Detail (if present)
-                                if let Some(detail) = &notification.detail {
-                                    ui.label(
-                                        egui::RichText::new(detail)
-                                            .color(text_color)
-                                            .italics()
-                                            .small(),
-                                    );
-                                }
+            // Détail optionnel
+            if let Some(detail) = &notification.detail {
+                content = content.push(
+                    text(detail)
+                        .size(theme.typography.label)
+                        .color(Color::from_rgba8(255, 255, 255, 0.7)),
+                );
+            }
 
-                                // Progress bar showing time remaining
-                                let progress = notification.progress();
-                                let remaining_width = ui.available_width() * (1.0 - progress);
-                                let bar_height = 3.0;
-                                let bar_rect = egui::Rect::from_min_size(
-                                    ui.cursor().min,
-                                    egui::vec2(remaining_width, bar_height),
-                                );
-                                ui.painter().rect_filled(
-                                    bar_rect,
-                                    egui::Rounding::same(1.5),
-                                    Color32::from_white_alpha(80),
-                                );
-                                ui.add_space(bar_height + 4.0);
-
-                                // Action buttons
-                                let mut clicked_action = None;
-                                ui.horizontal_wrapped(|ui| {
-                                    for action in &notification.actions {
-                                        let clicked = match action {
-                                            NotificationAction::RetryClone => {
-                                                ui.button("Retry").clicked()
-                                            }
-                                            NotificationAction::CopyLogPath(_) => {
-                                                ui.button("Copy log path").clicked()
-                                            }
-                                            NotificationAction::OpenRelease(_) => {
-                                                ui.button("Open release").clicked()
-                                            }
-                                        };
-                                        if clicked {
-                                            clicked_action = Some(action.clone());
-                                        }
-                                    }
-
-                                    if let Some(path) = &notification.log_path {
-                                        let target = format!("file://{}", path.display());
-                                        ui.hyperlink_to("Open logs", target);
-                                    }
-                                });
-
-                                // Handle clicked action after the loop
-                                if let Some(action) = clicked_action {
-                                    actions.push(action);
-                                    notification.dismiss();
-                                }
-                            });
-                        },
+            // Boutons d'action
+            if !notification.actions.is_empty() {
+                let mut action_row = row![].spacing(6);
+                for action in &notification.actions {
+                    let label = match action {
+                        NotificationAction::RetryClone => "Réessayer",
+                        NotificationAction::CopyLogPath(_) => "Copier le chemin log",
+                        NotificationAction::OpenRelease(_) => "Ouvrir la release",
+                    };
+                    action_row = action_row.push(
+                        button(text(label).size(12).color(Color::WHITE))
+                            .on_press(Message::ActionClicked(idx, action.clone()))
+                            .padding([2, 6]),
                     );
-                });
+                }
+                content = content.push(action_row);
+            }
+
+            let toast = container(content)
+                .padding(12)
+                .style(move |_theme: &iced::Theme| container::Style {
+                    background: Some(fill_color.into()),
+                    border: iced::Border {
+                        radius: 8.0.into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })
+                .width(Length::Fill);
+
+            notifications = notifications.push(toast);
         }
 
-        // Request repaint if we have notifications (for progress bar animation)
-        if !self.queue.is_empty() {
-            ctx.request_repaint_after(Duration::from_millis(100));
-        }
-
-        actions
+        container(notifications)
+            .width(Length::Fixed(340.0))
+            .into()
     }
 }
 
@@ -306,11 +297,9 @@ mod tests {
     #[test]
     fn notification_center_respects_limit() {
         let mut center = NotificationCenter::new();
-
         for i in 0..10 {
             center.push(Notification::success(format!("Test {i}"), "Message"));
         }
-
         assert_eq!(center.len(), MAX_NOTIFICATIONS);
     }
 
@@ -327,7 +316,6 @@ mod tests {
         let mut center = NotificationCenter::new();
         center.push(Notification::success("Test 1", "Message"));
         center.push(Notification::success("Test 2", "Message"));
-
         assert_eq!(center.len(), 2);
         center.dismiss_all();
         assert!(center.is_empty());

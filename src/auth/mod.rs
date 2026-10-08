@@ -14,7 +14,7 @@ use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use keyring::Entry;
 use rand::RngCore;
 use rand::rngs::OsRng;
-use reqwest::blocking::Client;
+use reqwest::Client;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
@@ -38,10 +38,10 @@ const MAX_TOKEN_LENGTH: usize = 512;
 /// HTTP client timeout for token validation.
 const VALIDATION_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Reusable HTTP client for token validation.
+/// Client HTTP réutilisable pour la validation des tokens.
 static HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
 
-/// Gets or creates the shared HTTP client for token validation.
+/// Récupère ou crée le client HTTP partagé pour la validation des tokens.
 fn get_http_client() -> &'static Client {
     HTTP_CLIENT.get_or_init(|| {
         Client::builder()
@@ -100,10 +100,11 @@ impl AuthManager {
         self.storage.known_hosts()
     }
 
-    pub fn validate_token(&self, host: &str, token: &str) -> Result<(), String> {
+    /// Valide un token auprès du fournisseur distant (async).
+    pub async fn validate_token(&self, host: &str, token: &str) -> Result<(), String> {
         let trimmed = token.trim();
 
-        // Basic format validation
+        // Validation basique du format
         if trimmed.is_empty() {
             return Err("Token cannot be empty".to_string());
         }
@@ -122,7 +123,7 @@ impl AuthManager {
             ));
         }
 
-        // Check for invalid characters (tokens should be printable ASCII)
+        // Vérification des caractères invalides (ASCII imprimables uniquement)
         if !trimmed.chars().all(|c| c.is_ascii_graphic()) {
             return Err("Token contains invalid characters".to_string());
         }
@@ -131,16 +132,17 @@ impl AuthManager {
         let client = get_http_client();
 
         if normalized_host.contains("github") {
-            validate_github(client, &normalized_host, token)
+            validate_github(client, &normalized_host, token).await
         } else if normalized_host.contains("gitlab") {
-            validate_gitlab(client, &normalized_host, token)
+            validate_gitlab(client, &normalized_host, token).await
         } else {
             Ok(())
         }
     }
 
-    pub fn validate_and_store(&self, host: &str, token: &str) -> Result<(), String> {
-        self.validate_token(host, token)?;
+    /// Valide puis stocke le token (async).
+    pub async fn validate_and_store(&self, host: &str, token: &str) -> Result<(), String> {
+        self.validate_token(host, token).await?;
         self.storage.set_token(host, token)
     }
 
@@ -635,7 +637,8 @@ fn normalize_host(host: &str) -> String {
     with_scheme
 }
 
-fn validate_github(client: &Client, host: &str, token: &str) -> Result<(), String> {
+/// Valide un token GitHub via l'API utilisateur.
+async fn validate_github(client: &Client, host: &str, token: &str) -> Result<(), String> {
     let api_base = if host.contains("api.github.com") {
         host.to_string()
     } else if host.contains("github.com") {
@@ -650,6 +653,7 @@ fn validate_github(client: &Client, host: &str, token: &str) -> Result<(), Strin
         .header(USER_AGENT, HeaderValue::from_static("gitspace"))
         .header(AUTHORIZATION, format!("Bearer {}", token))
         .send()
+        .await
         .map_err(|err| format!("GitHub validation failed: {err}"))?;
 
     if response.status().is_success() {
@@ -659,7 +663,8 @@ fn validate_github(client: &Client, host: &str, token: &str) -> Result<(), Strin
     }
 }
 
-fn validate_gitlab(client: &Client, host: &str, token: &str) -> Result<(), String> {
+/// Valide un token GitLab via l'API utilisateur.
+async fn validate_gitlab(client: &Client, host: &str, token: &str) -> Result<(), String> {
     let url = format!("{}/api/v4/user", host.trim_end_matches('/'));
     let mut headers = HeaderMap::new();
     headers.insert(USER_AGENT, HeaderValue::from_static("gitspace"));
@@ -672,6 +677,7 @@ fn validate_gitlab(client: &Client, host: &str, token: &str) -> Result<(), Strin
         .get(url)
         .headers(headers)
         .send()
+        .await
         .map_err(|err| format!("GitLab validation failed: {err}"))?;
 
     if response.status().is_success() {
