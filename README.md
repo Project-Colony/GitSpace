@@ -7,7 +7,8 @@ panel-based interface inspired by GitKraken. It is written in Rust with egui.
 
 > **Status:** early development. The app builds and runs from source, but CI is not green
 > yet and there is no signed release. The only published build is an old unsigned Windows
-> prerelease. The update checker can report a new version but never installs one.
+> prerelease. GitSpace has no built-in updater; updates will be delivered through the
+> Colony launcher.
 
 ## What it does
 
@@ -39,7 +40,6 @@ cargo run --release
 - `src/ui/`: egui panels and layout.
 - `src/git/`: `git2` wrappers for repository operations.
 - `src/auth/`: OAuth and token storage.
-- `src/update.rs`: update check against the release feed.
 - `dotnet/` and `schemas/`: experimental .NET helper and its JSON contracts.
 - `docs/`: design notes and contributor guide ([docs/contrib.md](docs/contrib.md)).
 

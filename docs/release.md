@@ -1,6 +1,6 @@
 # Release and Installation Guide
 
-This document explains how to build GitSpace on each supported desktop platform, how the update checker works, and how to ship signed release artifacts with CI.
+This document explains how to build GitSpace on each supported desktop platform and how to ship release artifacts with CI. GitSpace has no built-in updater: updates will be delivered through the Colony launcher.
 
 ## Building locally
 
@@ -30,14 +30,6 @@ This document explains how to build GitSpace on each supported desktop platform,
    cargo build --release
    ```
 3. The binary is located at `target/release/gitspace.exe`.
-
-### Update checks and channels
-GitSpace can automatically check for updates at launch. You can toggle this behavior and choose between the **Stable** and **Preview** channels under **Settings → Updates**.
-
-- **Preview** deliberately targets prerelease builds so early adopters can validate fixes before they are promoted to stable. Unsigned or unchecked assets are ignored to avoid distributing unverified builds on this channel.
-- **Stable** continues to prioritize the latest non-prerelease build with the same verification rules applied to every asset.
-
-Each downloadable artifact must publish a checksum or detached signature. GitSpace downloads and validates the published fingerprint before persisting the update; if verification fails or the download stalls, the updater restores the previous file from a backup to keep the current installation intact. This rollback guard also covers partially downloaded assets so users can simply retry once network conditions improve.
 
 ## CI release workflow
 

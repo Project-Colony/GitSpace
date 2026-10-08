@@ -7,7 +7,6 @@ mod error;
 mod git;
 mod logging;
 mod ui;
-mod update;
 
 use ui::app::GitSpaceApp;
 

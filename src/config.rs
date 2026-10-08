@@ -71,13 +71,6 @@ pub struct LoggingOptions {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub enum ReleaseChannel {
-    #[default]
-    Stable,
-    Preview,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum MotionIntensity {
     Low,
     #[default]
@@ -115,12 +108,6 @@ pub struct Preferences {
     keybindings: Vec<Keybinding>,
     #[serde(default)]
     network: NetworkOptions,
-    #[serde(default = "default_auto_check_updates")]
-    auto_check_updates: bool,
-    #[serde(default)]
-    release_channel: ReleaseChannel,
-    #[serde(default)]
-    update_feed_override: Option<String>,
     #[serde(default)]
     allow_encrypted_tokens: bool,
     #[serde(default = "default_control_height")]
@@ -148,9 +135,6 @@ impl Default for Preferences {
             default_clone_path: default_clone_path(),
             keybindings: default_keybindings(),
             network: NetworkOptions::default(),
-            auto_check_updates: default_auto_check_updates(),
-            release_channel: ReleaseChannel::default(),
-            update_feed_override: None,
             allow_encrypted_tokens: false,
             control_height: default_control_height(),
             branch_box_height: default_branch_box_height(),
@@ -229,12 +213,6 @@ fn config_path() -> PathBuf {
     base.join(APP_CONFIG_DIR).join(CONFIG_FILE_NAME)
 }
 
-pub fn app_data_dir() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(APP_CONFIG_DIR)
-}
-
 fn default_clone_path() -> String {
     dirs::home_dir()
         .or_else(|| std::env::current_dir().ok())
@@ -280,10 +258,6 @@ fn default_use_https() -> bool {
 }
 
 fn default_allow_ssh() -> bool {
-    true
-}
-
-fn default_auto_check_updates() -> bool {
     true
 }
 
@@ -351,30 +325,6 @@ impl Preferences {
 
     pub fn network(&self) -> &NetworkOptions {
         &self.network
-    }
-
-    pub fn auto_check_updates(&self) -> bool {
-        self.auto_check_updates
-    }
-
-    pub fn set_auto_check_updates(&mut self, enabled: bool) {
-        self.auto_check_updates = enabled;
-    }
-
-    pub fn release_channel(&self) -> ReleaseChannel {
-        self.release_channel
-    }
-
-    pub fn set_release_channel(&mut self, channel: ReleaseChannel) {
-        self.release_channel = channel;
-    }
-
-    pub fn update_feed_override(&self) -> Option<&str> {
-        self.update_feed_override.as_deref()
-    }
-
-    pub fn set_update_feed_override(&mut self, override_url: Option<String>) {
-        self.update_feed_override = override_url.filter(|value| !value.trim().is_empty());
     }
 
     pub fn allow_encrypted_tokens(&self) -> bool {

@@ -30,7 +30,6 @@ pub enum NotificationKind {
 pub enum NotificationAction {
     RetryClone,
     CopyLogPath(PathBuf),
-    OpenRelease(String),
 }
 
 /// A toast notification with optional actions.
@@ -249,9 +248,6 @@ impl NotificationCenter {
                                             }
                                             NotificationAction::CopyLogPath(_) => {
                                                 ui.button("Copy log path").clicked()
-                                            }
-                                            NotificationAction::OpenRelease(_) => {
-                                                ui.button("Open release").clicked()
                                             }
                                         };
                                         if clicked {
