@@ -16,7 +16,9 @@ panel-based interface inspired by GitKraken. It is written in Rust with egui.
   stashes and remotes.
 - Branch actions: create, rename, delete, check out, merge, rebase and compare.
 - Sign in to GitHub and GitLab through OAuth or a personal access token. Tokens are kept in
-  the system keyring or in an encrypted local file.
+  the system keyring or in an encrypted local file, and are only ever sent over HTTPS: a
+  self-hosted host entered as `http://` is refused, and a plain-HTTP remote never receives a
+  token.
 - Structured logs with rotation (`GITSPACE_LOG` sets the filter).
 
 ## Build from source
