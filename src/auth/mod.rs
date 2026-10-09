@@ -743,9 +743,10 @@ mod tests {
         assert_eq!(decrypted.tokens, map.tokens);
     }
 
-    fn storage_in(dir: &std::path::Path, key: [u8; 32]) -> TokenStorage {
+    /// A storage in `dir` with a fresh random key, so two calls never share a key.
+    fn storage_in(dir: &std::path::Path) -> TokenStorage {
         TokenStorage {
-            key: SecureKey(key),
+            key: SecureKey(ChaCha20Poly1305::generate_key(&mut OsRng).into()),
             path: dir.join(TOKEN_FILE_NAME),
             host_path: dir.join(HOST_FILE_NAME),
             allow_encrypted_fallback: true,
@@ -755,7 +756,7 @@ mod tests {
     #[test]
     fn undecryptable_token_file_is_not_overwritten() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let original = storage_in(dir.path(), [1; 32]);
+        let original = storage_in(dir.path());
         original
             .persist_fallback("github.com", "first-token")
             .expect("first save");
@@ -765,7 +766,7 @@ mod tests {
         let before = fs::read(&original.path).expect("read tokens");
 
         // Same file, other key: the keyring was locked or the master password changed.
-        let other_key = storage_in(dir.path(), [2; 32]);
+        let other_key = storage_in(dir.path());
         let err = other_key
             .persist_fallback("example.com", "third-token")
             .expect_err("an undecryptable file must not be rewritten");
@@ -781,7 +782,7 @@ mod tests {
     #[test]
     fn missing_token_file_starts_empty() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let storage = storage_in(&dir.path().join("gitspace"), [3; 32]);
+        let storage = storage_in(&dir.path().join("gitspace"));
         storage
             .persist_fallback("github.com", "token")
             .expect("save into a new directory");
@@ -794,7 +795,7 @@ mod tests {
     #[test]
     fn unreadable_host_index_is_not_overwritten() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let storage = storage_in(dir.path(), [4; 32]);
+        let storage = storage_in(dir.path());
         fs::write(&storage.host_path, "not json").expect("write index");
         assert!(storage.record_host("github.com").is_err());
         assert!(storage.remove_host("github.com").is_err());
