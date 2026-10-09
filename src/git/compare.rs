@@ -59,7 +59,12 @@ fn branch_commit(
     };
 
     let id = commit.id().to_string();
-    let summary = commit.summary().unwrap_or_default().to_string();
+    let summary = commit
+        .summary()
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+        .to_string();
     let author = commit.author().name().unwrap_or("Unknown").to_string();
     let time = commit.time();
 

@@ -83,7 +83,12 @@ pub fn read_commit_log(
         if let Some(search) = &filter.search {
             let search_lower = search.to_lowercase();
             let message = commit.message().unwrap_or_default().to_lowercase();
-            let summary = commit.summary().unwrap_or_default().to_lowercase();
+            let summary = commit
+                .summary()
+                .ok()
+                .flatten()
+                .unwrap_or_default()
+                .to_lowercase();
             if !message.contains(&search_lower) && !summary.contains(&search_lower) {
                 continue;
             }
@@ -130,10 +135,15 @@ pub fn read_commit_log(
         commits.push(CommitInfo {
             id,
             short_id,
-            summary: commit.summary().unwrap_or_default().to_string(),
+            summary: commit
+                .summary()
+                .ok()
+                .flatten()
+                .unwrap_or_default()
+                .to_string(),
             message: commit.message().unwrap_or_default().to_string(),
             author: commit.author().name().unwrap_or("Unknown").to_string(),
-            email: commit.author().email().map(|s| s.to_string()),
+            email: commit.author().email().ok().map(|s| s.to_string()),
             time: commit.time(),
             parents,
             files_changed,
@@ -223,10 +233,15 @@ fn commit_info_from_commit(commit: &git2::Commit<'_>) -> CommitInfo {
     CommitInfo {
         id,
         short_id,
-        summary: commit.summary().unwrap_or_default().to_string(),
+        summary: commit
+            .summary()
+            .ok()
+            .flatten()
+            .unwrap_or_default()
+            .to_string(),
         message: commit.message().unwrap_or_default().to_string(),
         author: commit.author().name().unwrap_or("Unknown").to_string(),
-        email: commit.author().email().map(|s| s.to_string()),
+        email: commit.author().email().ok().map(|s| s.to_string()),
         time: commit.time(),
         parents: commit.parents().map(|p| p.id().to_string()).collect(),
         files_changed: None,

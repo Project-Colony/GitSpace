@@ -30,7 +30,7 @@ pub fn list_branches<P: AsRef<Path>>(repo_path: P) -> Result<Vec<BranchEntry>, E
     let head_name = repo
         .head()
         .ok()
-        .and_then(|head| head.shorthand().map(|s| s.to_string()));
+        .and_then(|head| head.shorthand().ok().map(|s| s.to_string()));
 
     let mut entries = Vec::new();
     for branch_result in repo.branches(None)? {
@@ -160,7 +160,7 @@ pub fn checkout_branch<P: AsRef<Path>>(repo_path: P, name: &str) -> Result<(), E
 
     repo.checkout_tree(&object, Some(CheckoutBuilder::default().force()))?;
     if let Some(reference) = reference {
-        if let Some(name) = reference.name() {
+        if let Ok(name) = reference.name() {
             repo.set_head(name)?;
         } else {
             repo.set_head_detached(object.id())?;

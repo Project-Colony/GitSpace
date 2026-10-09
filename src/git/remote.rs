@@ -36,7 +36,7 @@ pub fn list_remotes<P: AsRef<Path>>(path: P) -> Result<Vec<RemoteInfo>, git2::Er
     let mut remotes = Vec::new();
 
     if let Ok(names) = repo.remotes() {
-        for name in names.iter().flatten() {
+        for name in names.iter().flatten().flatten() {
             if let Ok(remote) = repo.find_remote(name) {
                 let url = remote.url().unwrap_or("(no url)").to_string();
                 remotes.push(RemoteInfo {
@@ -67,7 +67,7 @@ pub fn fetch_remote<P: AsRef<Path>>(
     let mut remote = repo.find_remote(remote_name)?;
 
     // Validate URL against network policy
-    if let Some(url) = remote.url() {
+    if let Ok(url) = remote.url() {
         validate_transport_url(url, network)?;
     }
 
@@ -146,7 +146,12 @@ pub fn push_branch<P: AsRef<Path>>(
     let mut remote = repo.find_remote(remote_name)?;
 
     // Validate URL against network policy
-    if let Some(url) = remote.pushurl().or_else(|| remote.url()) {
+    if let Some(url) = remote
+        .pushurl()
+        .ok()
+        .flatten()
+        .or_else(|| remote.url().ok())
+    {
         validate_transport_url(url, network)?;
     }
 
@@ -178,7 +183,7 @@ pub fn prune_remotes<P: AsRef<Path>>(
     let mut remote = repo.find_remote(remote_name)?;
 
     // Validate URL against network policy
-    if let Some(url) = remote.url() {
+    if let Ok(url) = remote.url() {
         validate_transport_url(url, network)?;
     }
 
