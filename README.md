@@ -26,7 +26,7 @@ panel-based interface inspired by GitKraken. It is written in Rust with egui.
 Requirements:
 
 - Rust (latest stable) and Git.
-- On Linux, the usual egui/wgpu system libraries (see `.github/workflows/ci.yml`).
+- On Linux, the usual egui/glow (OpenGL) system libraries (see `.github/workflows/ci.yml`).
 
 ```bash
 git clone https://github.com/Project-Colony/GitSpace
