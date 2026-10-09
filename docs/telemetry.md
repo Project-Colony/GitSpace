@@ -3,7 +3,7 @@
 GitSpace ships with optional, anonymized diagnostics. The experience is opt-in: users are prompted on first launch and can toggle the feature any time from **Settings → Privacy**.
 
 ## What is collected
-- Launch and session metadata (counts, release channel).
+- Launch and session metadata (counts).
 - Feature usage signals such as tab switches, tab reordering, or repository openings.
 - UI navigation context is captured with the trigger type (click, keyboard, context menu, drag-and-drop) to validate accessibility paths.
 - Repository references are hashed before they leave the device; no file contents, commit messages, or credentials are recorded.

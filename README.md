@@ -5,10 +5,9 @@
 GitSpace is a desktop Git client that gathers your GitHub and GitLab repositories in one
 panel-based interface inspired by GitKraken. It is written in Rust with egui.
 
-> **Status:** early development. The app builds and runs from source, but CI is not green
-> yet and there is no signed release. The only published build is an old unsigned Windows
-> prerelease. GitSpace has no built-in updater; updates will be delivered through the
-> Colony launcher.
+> **Status:** early development. The app builds and runs from source, and CI builds and
+> tests it on Linux, macOS and Windows. There is no published release yet. GitSpace has no
+> built-in updater; updates will be delivered through the Colony launcher.
 
 ## What it does
 
