@@ -7,9 +7,7 @@ use crate::config::{
     Keybinding, LoggingOptions, MotionIntensity, Preferences, ThemeMode, MAX_LOG_RETENTION_FILES,
     MIN_LOG_RETENTION_FILES,
 };
-use crate::dotnet::{DialogOpenRequest, DialogOptions, DotnetClient};
 use crate::ui::menu;
-use crate::ui::notifications::{Notification, NotificationCenter};
 use crate::ui::theme::SharedTheme;
 
 pub struct SettingsPanel {
@@ -21,7 +19,6 @@ pub struct SettingsPanel {
     pending_control_height: Option<f32>,
     import_status: Option<String>,
     export_status: Option<String>,
-    native_dialog_status: Option<String>,
 }
 
 impl SettingsPanel {
@@ -35,7 +32,6 @@ impl SettingsPanel {
             pending_control_height: None,
             import_status: None,
             export_status: None,
-            native_dialog_status: None,
         }
     }
 
@@ -59,7 +55,7 @@ impl SettingsPanel {
         self.pending_control_height.take()
     }
 
-    pub fn ui(&mut self, ui: &mut Ui, notifications: &mut NotificationCenter) {
+    pub fn ui(&mut self, ui: &mut Ui) {
         ui.add_space(8.0);
         ui.heading(RichText::new("Settings").color(self.theme.palette.text_primary));
         ui.label(
@@ -71,7 +67,7 @@ impl SettingsPanel {
         ui.add_space(12.0);
 
         self.theme_section(ui);
-        self.clone_section(ui, notifications);
+        self.clone_section(ui);
         self.keybinding_section(ui);
         self.network_section(ui);
         self.logging_section(ui);
@@ -133,7 +129,7 @@ impl SettingsPanel {
         );
     }
 
-    fn clone_section(&mut self, ui: &mut Ui, notifications: &mut NotificationCenter) {
+    fn clone_section(&mut self, ui: &mut Ui) {
         self.collapsible_section(
             ui,
             "settings-repositories",
@@ -159,45 +155,7 @@ impl SettingsPanel {
                                 .set_default_clone_path(path.display().to_string());
                         }
                     }
-
-                    if ui.button("Choose folder (native helper)").clicked() {
-                        let request = DialogOpenRequest {
-                            kind: "open_folder".to_string(),
-                            title: Some("Select default clone destination".to_string()),
-                            filters: Vec::new(),
-                            options: DialogOptions {
-                                multi_select: false,
-                                show_hidden: false,
-                            },
-                        };
-                        match DotnetClient::helper().dialog_open(request) {
-                            Ok(response) => {
-                                if response.cancelled || response.selected_paths.is_empty() {
-                                    panel.native_dialog_status =
-                                        Some("Native dialog cancelled.".to_string());
-                                } else {
-                                    let selected = &response.selected_paths[0];
-                                    panel.preferences.set_default_clone_path(selected.clone());
-                                    panel.native_dialog_status =
-                                        Some(format!("Selected {}", selected));
-                                }
-                            }
-                            Err(err) => {
-                                notifications.push(Notification::error(
-                                    "Native helper failed",
-                                    err.user_message(),
-                                ));
-                                panel.native_dialog_status =
-                                    Some(format!("Native helper failed: {}", err));
-                            }
-                        }
-                    }
                 });
-
-                if let Some(status) = &panel.native_dialog_status {
-                    ui.add_space(4.0);
-                    ui.label(RichText::new(status).color(panel.theme.palette.text_secondary));
-                }
             },
         );
     }

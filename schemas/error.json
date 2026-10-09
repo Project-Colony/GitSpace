@@ -1,7 +1,0 @@
-{
-  "category": "InvalidRequest",
-  "message": "Missing payload.kind",
-  "details": {
-    "field": "kind"
-  }
-}
