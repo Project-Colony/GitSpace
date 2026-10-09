@@ -38,7 +38,7 @@ hmac = "0.12"
 thiserror = "1.0"
 zeroize = { version = "1.7", features = ["derive"] }
 parking_lot = "0.12"
-oauth2 = "4.4"
+oauth2 = "5.0"
 tiny_http = "0.12"
 webbrowser = "1.0"
 
