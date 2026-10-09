@@ -2,6 +2,7 @@ pub mod oauth;
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io::ErrorKind;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -21,6 +22,8 @@ use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 use url::Url;
 use zeroize::{Zeroize, ZeroizeOnDrop};
+
+use crate::config::write_atomic;
 
 pub use oauth::{OAuthFlow, OAuthProvider, OAuthResult, OAuthToken};
 
@@ -307,7 +310,7 @@ impl TokenStorage {
             warn!(target: "gitspace::auth", error = %err, "failed to clear token from native keyring");
         }
         let mut result = if self.allow_encrypted_fallback {
-            let mut map = self.read_fallback()?;
+            let mut map = self.read_fallback_for_update()?;
             map.tokens.remove(host);
             self.write_fallback(&map)
         } else {
@@ -372,36 +375,46 @@ impl TokenStorage {
     }
 
     fn persist_fallback(&self, host: &str, token: &str) -> Result<(), String> {
-        let mut tokens = self.read_fallback().unwrap_or_default();
+        let mut tokens = self.read_fallback_for_update()?;
         tokens.tokens.insert(host.to_string(), token.to_string());
         self.write_fallback(&tokens)
     }
 
     fn write_fallback(&self, map: &TokenMap) -> Result<(), String> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|err| format!("Failed to prepare credential directory: {err}"))?;
-        }
         let blob = encrypt_tokens(map, &self.key.0)?;
         let serialized = serde_json::to_string_pretty(&blob)
             .map_err(|err| format!("Failed to serialize credentials: {err}"))?;
-        fs::write(&self.path, serialized)
+        write_atomic(&self.path, serialized.as_bytes())
             .map_err(|err| format!("Failed to write credentials: {err}"))
     }
 
+    /// Reads the saved tokens before a rewrite. A file that exists but cannot be read or
+    /// decrypted (keyring locked, master password changed or unset) is an error, never an
+    /// empty map: rewriting it would drop every other saved token.
+    fn read_fallback_for_update(&self) -> Result<TokenMap, String> {
+        self.read_fallback().map_err(|err| {
+            format!(
+                "{err}. {} was left untouched so the other saved tokens are kept. Unlock the \
+                 system keyring or use the same {MASTER_PASSWORD_ENV} as when the tokens were \
+                 saved, then restart GitSpace, or move the file aside to start over",
+                self.path.display()
+            )
+        })
+    }
+
     fn read_fallback(&self) -> Result<TokenMap, String> {
-        if !self.path.exists() {
-            return Ok(TokenMap::default());
-        }
-        let data = fs::read_to_string(&self.path)
-            .map_err(|err| format!("Failed to read credential file: {err}"))?;
+        let data = match fs::read_to_string(&self.path) {
+            Ok(data) => data,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(TokenMap::default()),
+            Err(err) => return Err(format!("Failed to read credential file: {err}")),
+        };
         let blob: EncryptedTokenFile = serde_json::from_str(&data)
             .map_err(|err| format!("Failed to parse credential file: {err}"))?;
         decrypt_tokens(&blob, &self.key.0)
     }
 
     fn record_host(&self, host: &str) -> Result<(), String> {
-        let mut index = self.read_host_index().unwrap_or_default();
+        let mut index = self.read_host_index()?;
         if !index.hosts.iter().any(|value| value == host) {
             index.hosts.push(host.to_string());
             index.hosts.sort();
@@ -411,7 +424,7 @@ impl TokenStorage {
     }
 
     fn remove_host(&self, host: &str) -> Result<(), String> {
-        let mut index = self.read_host_index().unwrap_or_default();
+        let mut index = self.read_host_index()?;
         let original_len = index.hosts.len();
         index.hosts.retain(|value| value != host);
         if index.hosts.len() != original_len {
@@ -421,22 +434,18 @@ impl TokenStorage {
     }
 
     fn read_host_index(&self) -> Result<HostIndex, String> {
-        if !self.host_path.exists() {
-            return Ok(HostIndex::default());
-        }
-        let data = fs::read_to_string(&self.host_path)
-            .map_err(|err| format!("Failed to read host index: {err}"))?;
+        let data = match fs::read_to_string(&self.host_path) {
+            Ok(data) => data,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(HostIndex::default()),
+            Err(err) => return Err(format!("Failed to read host index: {err}")),
+        };
         serde_json::from_str(&data).map_err(|err| format!("Failed to parse host index: {err}"))
     }
 
     fn write_host_index(&self, index: &HostIndex) -> Result<(), String> {
-        if let Some(parent) = self.host_path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|err| format!("Failed to prepare host directory: {err}"))?;
-        }
         let serialized = serde_json::to_string_pretty(index)
             .map_err(|err| format!("Failed to serialize host index: {err}"))?;
-        fs::write(&self.host_path, serialized)
+        write_atomic(&self.host_path, serialized.as_bytes())
             .map_err(|err| format!("Failed to write host index: {err}"))
     }
 
@@ -493,18 +502,29 @@ fn load_or_create_local_key() -> [u8; 32] {
         .join(TOKEN_LOCAL_KEY_FILE);
 
     // Try to load existing key
-    let mut stored_key = if let Ok(bytes) = fs::read(&key_path) {
-        if bytes.len() == 32 {
+    let mut stored_key = match fs::read(&key_path) {
+        Ok(bytes) if bytes.len() == 32 => {
             let mut key = [0u8; 32];
             key.copy_from_slice(&bytes);
             key
-        } else {
+        }
+        Ok(_) => {
             warn!(target: "gitspace::auth", "invalid local key file size, regenerating");
             generate_and_store_key(&key_path)
         }
-    } else {
-        info!(target: "gitspace::auth", "generating new local encryption key");
-        generate_and_store_key(&key_path)
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            info!(target: "gitspace::auth", "generating new local encryption key");
+            generate_and_store_key(&key_path)
+        }
+        Err(err) => {
+            // Replacing a key file that exists but cannot be read would make the tokens
+            // encrypted with it unrecoverable. Use a key for this session only: the saved
+            // tokens then fail to decrypt and are left untouched.
+            error!(target: "gitspace::auth", error = %err, "failed to read local key file");
+            let mut key = [0u8; 32];
+            OsRng.fill_bytes(&mut key);
+            key
+        }
     };
 
     // If master password is set, derive additional key material for defense in depth
@@ -595,14 +615,17 @@ fn load_or_create_secret(name: &str, len: usize) -> Vec<u8> {
         .join(SERVICE_NAME)
         .join(name);
 
-    if let Ok(bytes) = fs::read(&path) {
-        if bytes.len() == len {
-            return bytes;
-        }
-    }
-
     let mut secret = vec![0u8; len];
     OsRng.fill_bytes(&mut secret);
+    match fs::read(&path) {
+        Ok(bytes) if bytes.len() == len => return bytes,
+        Err(err) if err.kind() != ErrorKind::NotFound => {
+            // Same as the local key: never replace a secret that exists but cannot be read.
+            warn!(target: "gitspace::auth", error = %err, path = %path.display(), "unable to read derived-key secret; using one for this session only");
+            return secret;
+        }
+        _ => {}
+    }
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
@@ -718,5 +741,67 @@ mod tests {
 
         let decrypted = decrypt_tokens(&first, &key).expect("decrypt");
         assert_eq!(decrypted.tokens, map.tokens);
+    }
+
+    /// A storage in `dir` with a fresh random key, so two calls never share a key.
+    fn storage_in(dir: &std::path::Path) -> TokenStorage {
+        TokenStorage {
+            key: SecureKey(ChaCha20Poly1305::generate_key(&mut OsRng).into()),
+            path: dir.join(TOKEN_FILE_NAME),
+            host_path: dir.join(HOST_FILE_NAME),
+            allow_encrypted_fallback: true,
+        }
+    }
+
+    #[test]
+    fn undecryptable_token_file_is_not_overwritten() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let original = storage_in(dir.path());
+        original
+            .persist_fallback("github.com", "first-token")
+            .expect("first save");
+        original
+            .persist_fallback("gitlab.com", "second-token")
+            .expect("second save");
+        let before = fs::read(&original.path).expect("read tokens");
+
+        // Same file, other key: the keyring was locked or the master password changed.
+        let other_key = storage_in(dir.path());
+        let err = other_key
+            .persist_fallback("example.com", "third-token")
+            .expect_err("an undecryptable file must not be rewritten");
+        assert!(err.contains("left untouched"), "{err}");
+        assert!(other_key.read_fallback_for_update().is_err());
+
+        assert_eq!(fs::read(&original.path).expect("read tokens"), before);
+        let tokens = original.read_fallback().expect("decrypt").tokens;
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens["gitlab.com"], "second-token");
+    }
+
+    #[test]
+    fn missing_token_file_starts_empty() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = storage_in(&dir.path().join("gitspace"));
+        storage
+            .persist_fallback("github.com", "token")
+            .expect("save into a new directory");
+        assert_eq!(
+            storage.read_fallback().expect("decrypt").tokens["github.com"],
+            "token"
+        );
+    }
+
+    #[test]
+    fn unreadable_host_index_is_not_overwritten() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = storage_in(dir.path());
+        fs::write(&storage.host_path, "not json").expect("write index");
+        assert!(storage.record_host("github.com").is_err());
+        assert!(storage.remove_host("github.com").is_err());
+        assert_eq!(
+            fs::read_to_string(&storage.host_path).expect("read index"),
+            "not json"
+        );
     }
 }

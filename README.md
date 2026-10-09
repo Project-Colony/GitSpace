@@ -37,7 +37,8 @@ cargo run --release
 - `src/ui/`: egui panels and layout.
 - `src/git/`: `git2` wrappers for repository operations.
 - `src/auth/`: OAuth and token storage.
-- `docs/`: design notes and contributor guide ([docs/contrib.md](docs/contrib.md)).
+- `docs/`: design notes, the contributor guide ([docs/contrib.md](docs/contrib.md)) and where
+  settings and tokens are stored ([docs/guide/configuration.md](docs/guide/configuration.md)).
 
 ## License
 
