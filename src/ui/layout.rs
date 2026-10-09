@@ -5,7 +5,8 @@ use crate::config::AppConfig;
 use crate::ui::{
     auth::AuthPanel, branches::BranchPanel, clone::ClonePanel, context::RepoContext, dev_gallery,
     menu, notifications::NotificationCenter, perf::PerfScope, recent::RecentList,
-    repo_overview::RepoOverviewPanel, settings::SettingsPanel, stage::StagePanel, theme::SharedTheme,
+    repo_overview::RepoOverviewPanel, settings::SettingsPanel, stage::StagePanel,
+    theme::SharedTheme,
 };
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -126,7 +127,10 @@ impl ShellLayout {
             .frame(
                 egui::Frame::none()
                     .fill(self.theme.palette.surface)
-                    .stroke(egui::Stroke::new(1.0, self.theme.palette.surface_highlight)),
+                    .stroke(egui::Stroke::new(
+                        1.0_f32,
+                        self.theme.palette.surface_highlight,
+                    )),
             )
             .show(ctx, |ui| {
                 ui.add_space(12.0);
@@ -240,7 +244,7 @@ impl ShellLayout {
     pub fn tab_bar(
         &self,
         ui: &mut Ui,
-        tab_order: &mut Vec<MainTab>,
+        tab_order: &mut [MainTab],
         active: &mut MainTab,
     ) -> TabInteraction {
         let _scope = PerfScope::new("layout::tab_bar");
@@ -285,7 +289,7 @@ impl ShellLayout {
 
                 if is_active {
                     let rect = response.rect;
-                    let stroke = egui::Stroke::new(2.0, self.theme.palette.accent);
+                    let stroke = egui::Stroke::new(2.0_f32, self.theme.palette.accent);
                     ui.painter()
                         .line_segment([rect.left_bottom(), rect.right_bottom()], stroke);
                 }
@@ -334,6 +338,7 @@ impl ShellLayout {
         interaction
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn tab_content(
         &self,
         ui: &mut Ui,

@@ -2,7 +2,7 @@ use std::path::Path;
 use std::process::Command;
 
 use chrono::Utc;
-use git2::{BranchType, Error, Repository, build::CheckoutBuilder};
+use git2::{build::CheckoutBuilder, BranchType, Error, Repository};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BranchKind {

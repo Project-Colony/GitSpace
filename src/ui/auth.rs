@@ -104,8 +104,10 @@ impl AuthPanel {
 
                 if oauth_hosts.is_empty() {
                     ui.label(
-                        RichText::new("No accounts connected yet. Use the buttons below to log in.")
-                            .color(layout.theme.palette.text_secondary),
+                        RichText::new(
+                            "No accounts connected yet. Use the buttons below to log in.",
+                        )
+                        .color(layout.theme.palette.text_secondary),
                     );
                 } else {
                     for host in oauth_hosts {
@@ -132,18 +134,21 @@ impl AuthPanel {
                                     .small(),
                             );
 
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                let disconnect = AuthActionButton::new("Disconnect")
-                                    .variant(ActionVariant::Secondary)
-                                    .small();
-                                if disconnect.show(ui, layout.theme).clicked() {
-                                    if has_oauth {
-                                        let _ = self.auth.clear_oauth_token(&host);
-                                    } else {
-                                        let _ = self.auth.clear_token(&host);
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    let disconnect = AuthActionButton::new("Disconnect")
+                                        .variant(ActionVariant::Secondary)
+                                        .small();
+                                    if disconnect.show(ui, layout.theme).clicked() {
+                                        if has_oauth {
+                                            let _ = self.auth.clear_oauth_token(&host);
+                                        } else {
+                                            let _ = self.auth.clear_token(&host);
+                                        }
                                     }
-                                }
-                            });
+                                },
+                            );
                         });
                         ui.add_space(layout.spacing.xs);
                     }
@@ -259,7 +264,7 @@ impl AuthPanel {
             ui.label(
                 RichText::new(
                     "For advanced users: manually enter a Personal Access Token.\n\
-                     Useful for self-hosted instances or when OAuth is not available."
+                     Useful for self-hosted instances or when OAuth is not available.",
                 )
                 .color(layout.theme.palette.text_secondary),
             );
@@ -456,7 +461,10 @@ impl<'a> AuthLayout<'a> {
     {
         let frame = egui::Frame::none()
             .fill(self.theme.palette.surface)
-            .stroke(egui::Stroke::new(1.0, self.theme.palette.surface_highlight))
+            .stroke(egui::Stroke::new(
+                1.0_f32,
+                self.theme.palette.surface_highlight,
+            ))
             .inner_margin(egui::Margin::same(self.spacing.md))
             .rounding(egui::Rounding::same(self.spacing.xs));
         frame.show(ui, |ui| {

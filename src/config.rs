@@ -24,20 +24,15 @@ pub struct RecentRepo {
     pub path: String,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum ThemeMode {
     #[serde(alias = "Light")]
     Latte,
     Frappe,
     Macchiato,
     #[serde(alias = "Dark")]
+    #[default]
     Mocha,
-}
-
-impl Default for ThemeMode {
-    fn default() -> Self {
-        Self::Mocha
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -75,29 +70,19 @@ pub struct LoggingOptions {
     retention_files: usize,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum ReleaseChannel {
+    #[default]
     Stable,
     Preview,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum MotionIntensity {
     Low,
+    #[default]
     Medium,
     High,
-}
-
-impl Default for ReleaseChannel {
-    fn default() -> Self {
-        Self::Stable
-    }
-}
-
-impl Default for MotionIntensity {
-    fn default() -> Self {
-        Self::Medium
-    }
 }
 
 impl Default for NetworkOptions {
@@ -344,14 +329,9 @@ impl Preferences {
         }
 
         // Expand home directory if path starts with ~
-        let expanded = if path.starts_with("~/") {
-            if let Some(home) = dirs::home_dir() {
-                home.join(&path[2..]).to_string_lossy().to_string()
-            } else {
-                path
-            }
-        } else {
-            path
+        let expanded = match (path.strip_prefix("~/"), dirs::home_dir()) {
+            (Some(rest), Some(home)) => home.join(rest).to_string_lossy().to_string(),
+            _ => path,
         };
 
         self.default_clone_path = expanded;

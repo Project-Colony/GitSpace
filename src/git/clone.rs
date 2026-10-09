@@ -2,13 +2,15 @@
 
 use git2::build::RepoBuilder;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 use crate::config::NetworkOptions;
 use crate::error::AppError;
-use crate::git::transport::{create_remote_callbacks, configure_proxy_options, validate_transport_url};
+use crate::git::transport::{
+    configure_proxy_options, create_remote_callbacks, validate_transport_url,
+};
 
 /// Request parameters for cloning a repository.
 #[derive(Debug, Clone)]

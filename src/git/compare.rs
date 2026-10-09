@@ -11,6 +11,7 @@ pub struct BranchCommit {
     pub id: String,
     pub summary: String,
     pub author: String,
+    #[allow(dead_code)] // not displayed by the comparison view yet
     pub time: git2::Time,
 }
 

@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use eframe::egui::{
-    ComboBox, RichText, Slider, TextEdit, Ui, collapsing_header::CollapsingState,
-};
+use eframe::egui::{collapsing_header::CollapsingState, ComboBox, RichText, Slider, TextEdit, Ui};
 use rfd::FileDialog;
 
 use crate::config::{
@@ -328,9 +326,7 @@ impl SettingsPanel {
                 ui.add_space(8.0);
                 let mut auto_fetch_enabled = panel.preferences.auto_fetch_enabled();
                 ui.checkbox(&mut auto_fetch_enabled, "Auto-fetch remotes");
-                panel
-                    .preferences
-                    .set_auto_fetch_enabled(auto_fetch_enabled);
+                panel.preferences.set_auto_fetch_enabled(auto_fetch_enabled);
 
                 ui.add_space(4.0);
                 ui.add_enabled_ui(auto_fetch_enabled, |ui| {
@@ -349,37 +345,41 @@ impl SettingsPanel {
                     .selected_text(selected_text)
                     .icon(menu::combo_icon(Arc::clone(&panel.theme), icon_id))
                     .show_ui(ui, |ui| {
-                        menu::with_menu_popup_motion(ui, "settings-auto-fetch-interval-menu", |ui| {
-                            let mut selected_interval = current_interval;
-                            for interval in preset_intervals {
-                                let label = auto_fetch_interval_label(interval);
+                        menu::with_menu_popup_motion(
+                            ui,
+                            "settings-auto-fetch-interval-menu",
+                            |ui| {
+                                let mut selected_interval = current_interval;
+                                for interval in preset_intervals {
+                                    let label = auto_fetch_interval_label(interval);
+                                    if menu::menu_item(
+                                        ui,
+                                        &panel.theme,
+                                        ("settings-auto-fetch-interval-item", label.as_str()),
+                                        label.as_str(),
+                                        selected_interval == interval,
+                                    )
+                                    .clicked()
+                                    {
+                                        selected_interval = interval;
+                                    }
+                                }
                                 if menu::menu_item(
                                     ui,
                                     &panel.theme,
-                                    ("settings-auto-fetch-interval-item", label.as_str()),
-                                    label.as_str(),
-                                    selected_interval == interval,
+                                    ("settings-auto-fetch-interval-item", "custom"),
+                                    "Custom",
+                                    !preset_intervals.contains(&selected_interval),
                                 )
                                 .clicked()
                                 {
-                                    selected_interval = interval;
+                                    selected_interval = current_interval;
                                 }
-                            }
-                            if menu::menu_item(
-                                ui,
-                                &panel.theme,
-                                ("settings-auto-fetch-interval-item", "custom"),
-                                "Custom",
-                                !preset_intervals.contains(&selected_interval),
-                            )
-                            .clicked()
-                            {
-                                selected_interval = current_interval;
-                            }
-                            panel
-                                .preferences
-                                .set_auto_fetch_interval_minutes(selected_interval);
-                        });
+                                panel
+                                    .preferences
+                                    .set_auto_fetch_interval_minutes(selected_interval);
+                            },
+                        );
                     });
 
                     ui.add_space(4.0);
@@ -456,9 +456,7 @@ impl SettingsPanel {
                     .text("Retained log files"),
                 );
                 if response.changed() {
-                    panel
-                        .logging
-                        .set_retention_files(retention_files as usize);
+                    panel.logging.set_retention_files(retention_files as usize);
                 }
             },
         );
@@ -635,8 +633,10 @@ impl SettingsPanel {
                                 Ok(prefs) => {
                                     panel.preferences = prefs.clone();
                                     panel.pending_preferences = Some(prefs);
-                                    panel.import_status =
-                                        Some(format!("Imported preferences from {}", path.display()));
+                                    panel.import_status = Some(format!(
+                                        "Imported preferences from {}",
+                                        path.display()
+                                    ));
                                 }
                                 Err(err) => {
                                     panel.import_status = Some(err.to_string());

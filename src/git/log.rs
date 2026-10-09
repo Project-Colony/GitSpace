@@ -210,10 +210,7 @@ fn resolve_branch_oid(
     Ok(None)
 }
 
-fn resolve_ref_oid(
-    repo: &Repository,
-    reference: &str,
-) -> Result<Option<git2::Oid>, git2::Error> {
+fn resolve_ref_oid(repo: &Repository, reference: &str) -> Result<Option<git2::Oid>, git2::Error> {
     if let Ok(object) = repo.revparse_single(reference) {
         return Ok(Some(object.id()));
     }

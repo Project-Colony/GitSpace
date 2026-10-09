@@ -2,20 +2,21 @@ pub mod oauth;
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::Duration;
 
 use argon2::{Algorithm, Argon2, Params, Version};
-use base64::{Engine as _, engine::general_purpose};
+use base64::{engine::general_purpose, Engine as _};
 use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use keyring::Entry;
-use rand::RngCore;
 use rand::rngs::OsRng;
+use rand::RngCore;
 use reqwest::blocking::Client;
-use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, USER_AGENT};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 use url::Url;
@@ -513,7 +514,7 @@ fn load_or_create_local_key() -> [u8; 32] {
         let salt = load_or_create_secret(TOKEN_SALT_FILE, 16);
         // OWASP recommended: 64 MB memory, 3 iterations, 1 thread
         // m_cost is in KiB, so 65536 = 64 MB
-        let params = Params::new(65536, 3, 1, None).unwrap_or_else(|_| Params::DEFAULT);
+        let params = Params::new(65536, 3, 1, None).unwrap_or(Params::DEFAULT);
         let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
 
         let mut derived = [0u8; 32];
@@ -546,7 +547,7 @@ fn generate_and_store_key(path: &PathBuf) -> [u8; 32] {
     }
 
     // Write key file
-    if let Err(err) = fs::write(path, &key) {
+    if let Err(err) = fs::write(path, key) {
         error!(target: "gitspace::auth", error = %err, "failed to write local key file");
         return key;
     }

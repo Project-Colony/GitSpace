@@ -74,23 +74,6 @@ impl OAuthProvider {
             host: "gitlab.com".to_string(),
         }
     }
-
-    /// Creates GitLab OAuth configuration for a self-hosted instance.
-    pub fn gitlab_self_hosted(client_id: &str, base_url: &str) -> Self {
-        let base = base_url.trim_end_matches('/');
-        Self {
-            name: "GitLab".to_string(),
-            client_id: client_id.to_string(),
-            auth_url: format!("{}/oauth/authorize", base),
-            token_url: format!("{}/oauth/token", base),
-            scopes: vec![
-                "read_user".to_string(),
-                "read_repository".to_string(),
-                "write_repository".to_string(),
-            ],
-            host: extract_host_from_url(base_url).unwrap_or_else(|| base_url.to_string()),
-        }
-    }
 }
 
 /// OAuth token with optional refresh token and expiration.
@@ -123,6 +106,7 @@ impl OAuthToken {
     }
 
     /// Checks if the token is expired or about to expire (within 5 minutes).
+    #[allow(dead_code)] // token refresh is not wired yet
     pub fn is_expired(&self) -> bool {
         if let Some(expires_at) = self.expires_at {
             let now = chrono::Utc::now().timestamp();
@@ -138,6 +122,7 @@ impl OAuthToken {
 #[derive(Debug, Clone)]
 pub enum OAuthResult {
     Success(OAuthToken),
+    #[allow(dead_code)] // matched by the UI, no flow produces it yet
     Cancelled,
     Error(String),
 }
@@ -231,8 +216,8 @@ impl OAuthFlow {
     /// Waits for the OAuth callback on a local HTTP server.
     fn wait_for_callback(&self) -> Result<String, String> {
         let addr = format!("127.0.0.1:{}", self.redirect_port);
-        let listener =
-            TcpListener::bind(&addr).map_err(|e| format!("Failed to bind callback server: {}", e))?;
+        let listener = TcpListener::bind(&addr)
+            .map_err(|e| format!("Failed to bind callback server: {}", e))?;
 
         listener
             .set_nonblocking(true)
@@ -261,9 +246,7 @@ impl OAuthFlow {
             match listener.accept() {
                 Ok((mut stream, _)) => {
                     let mut buffer = [0; 4096];
-                    stream
-                        .set_read_timeout(Some(Duration::from_secs(5)))
-                        .ok();
+                    stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
 
                     if let Ok(size) = stream.read(&mut buffer) {
                         let request = String::from_utf8_lossy(&buffer[..size]);
@@ -462,11 +445,6 @@ fn create_error_response(error: &str) -> String {
         html.len(),
         html
     )
-}
-
-/// Extracts the host from a URL.
-fn extract_host_from_url(url: &str) -> Option<String> {
-    url::Url::parse(url).ok()?.host_str().map(|h| h.to_string())
 }
 
 #[cfg(test)]

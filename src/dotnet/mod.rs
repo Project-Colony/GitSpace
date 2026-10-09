@@ -3,10 +3,10 @@
 use crate::error::AppError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Debug, Serialize)]
 pub struct DotnetRequest {
@@ -95,11 +95,17 @@ impl DotnetClient {
     }
 
     pub fn helper() -> Self {
-        Self::new("dotnet").with_args([
+        let mut args = vec![
             "run",
             "--project",
             "dotnet/GitSpace.Helper/GitSpace.Helper.csproj",
-        ])
+        ];
+        // On Windows the project also targets net10.0-windows, and `dotnet run`
+        // refuses a multi-target project unless told which framework to run.
+        if cfg!(windows) {
+            args.extend(["--framework", "net10.0-windows"]);
+        }
+        Self::new("dotnet").with_args(args)
     }
 
     pub fn with_args(mut self, args: impl IntoIterator<Item = impl Into<String>>) -> Self {
@@ -137,16 +143,19 @@ impl DotnetClient {
             )));
         }
 
-        serde_json::from_slice(&output.stdout).map_err(|err| {
-            tracing::warn!(target: "gitspace::dotnet", error = %err, context = "dotnet_response", "JSON parse error");
-            AppError::Unknown(err.to_string())
-        })
+        // `dotnet run` prints build output, such as NuGet audit warnings, on the
+        // same stdout ahead of the helper's one-line reply.
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .rev()
+            .find_map(|line| serde_json::from_str(line).ok())
+            .ok_or_else(|| {
+                tracing::warn!(target: "gitspace::dotnet", context = "dotnet_response", "no JSON reply on stdout");
+                AppError::Unknown("the .NET helper returned no JSON reply".to_string())
+            })
     }
 
-    pub fn dialog_open(
-        &self,
-        payload: DialogOpenRequest,
-    ) -> Result<DialogOpenResponse, AppError> {
+    pub fn dialog_open(&self, payload: DialogOpenRequest) -> Result<DialogOpenResponse, AppError> {
         let request = DotnetRequest {
             id: next_request_id(),
             command: "dialog.open".to_string(),
@@ -217,9 +226,9 @@ fn map_dotnet_error(error: &DotnetError) -> AppError {
 
 fn response_payload(response: DotnetResponse, context: &str) -> Result<Value, AppError> {
     match response.status.as_str() {
-        "ok" => response.payload.ok_or_else(|| {
-            AppError::Unknown(format!("Missing {context}"))
-        }),
+        "ok" => response
+            .payload
+            .ok_or_else(|| AppError::Unknown(format!("Missing {context}"))),
         "error" => Err(response
             .error
             .as_ref()

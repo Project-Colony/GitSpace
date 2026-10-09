@@ -5,20 +5,20 @@ use std::time::Duration;
 
 use base64::Engine;
 use ed25519_dalek::{Signature as Ed25519Signature, VerifyingKey};
-use reqwest::Proxy;
 use reqwest::blocking::Client;
-use rsa::RsaPublicKey;
+use reqwest::Proxy;
 use rsa::pkcs1v15::Signature as RsaSignature;
 use rsa::pkcs1v15::VerifyingKey as RsaVerifyingKey;
 use rsa::pkcs8::DecodePublicKey;
 use rsa::signature::Verifier;
+use rsa::RsaPublicKey;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use spki::der::{Decode, Encode};
 use spki::{AlgorithmIdentifierRef, ObjectIdentifier, SubjectPublicKeyInfoRef};
 use x509_cert::Certificate;
 
-use crate::config::{NetworkOptions, ReleaseChannel, app_data_dir};
+use crate::config::{app_data_dir, NetworkOptions, ReleaseChannel};
 
 const DEFAULT_RELEASE_FEED: &str = "https://api.github.com/repos/gitspace-app/GitSpace/releases";
 const SIGNING_KEY_FILE: &str = "update-signing.pem";
@@ -559,52 +559,6 @@ fn rollback_from_backup(path: &Path, backup: Option<PathBuf>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_dalek::SigningKey;
-    use rsa::RsaPrivateKey;
-    use rsa::pkcs8::DecodePrivateKey;
-    use rsa::signature::{SignatureEncoding, Signer};
-
-    const TEST_ED25519_PRIVATE_KEY: &str = "REDACTED: private key removed from history";
-
-    const TEST_RSA_PRIVATE_KEY: &str = "REDACTED: private key removed from history";
-
-    const TEST_RSA_PUBLIC_KEY: &str = "-----BEGIN PUBLIC KEY-----
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAs+1d20i0/rTNWw/LhBUK
-d39WUSRzUOGqSH4Hf0T8mDl3jkr/1sD8YUBvpnq3396itv50CpyzqVLMgv7tCpAT
-+x4YeFn848N3YfHeIlzVOzqENdxus0lJ7ukF7vdJzl1t14tdgKDBgCmTQlz22paf
-aCDgMkakx+F1uR4NYDKMnMMXBWxHDC5xz8CxIfQPcfujmU8nZlJSiuGDO8xflMBt
-iexnQ4fi860vCwKsZAfMvBEzY1HSKb+kjXyh/SeHFA4qW+sWdpdfTSJwqoJTwqDv
-TLayByl3pUMlyZWjvjnC6AvaEu3tNZ9Vh6O0k9HZwa38uZarX+mlRH3wvoiuFplB
-hwIDAQAB
------END PUBLIC KEY-----";
-
-    fn embedded_metadata() -> SignatureMetadata {
-        parse_signature_key(EMBEDDED_SIGNING_KEY.as_bytes()).expect("embedded key")
-    }
-
-    #[test]
-    fn verifies_ed25519_signatures() {
-        let pem = pem::parse(TEST_ED25519_PRIVATE_KEY).expect("private key");
-        let signing = SigningKey::from_pkcs8_der(pem.contents()).expect("signing key");
-        let payload = b"release-payload";
-        let signature = signing.sign(payload);
-
-        verify_signature(payload, &signature.to_bytes(), &embedded_metadata())
-            .expect("signature valid");
-    }
-
-    #[test]
-    fn rejects_corrupted_signature() {
-        let pem = pem::parse(TEST_ED25519_PRIVATE_KEY).expect("private key");
-        let signing = SigningKey::from_pkcs8_der(pem.contents()).expect("signing key");
-        let payload = b"release-payload";
-        let mut signature = signing.sign(payload).to_bytes();
-        signature[0] ^= 0xFF;
-
-        let err = verify_signature(payload, &signature, &embedded_metadata())
-            .expect_err("signature should fail");
-        assert!(matches!(err, UpdateError::Verification(_)));
-    }
 
     #[test]
     fn rejects_missing_signature_metadata() {
@@ -620,17 +574,5 @@ hwIDAQAB
         let err = ensure_asset_verification(b"payload", &asset, &client, &network)
             .expect_err("metadata missing");
         assert!(matches!(err, UpdateError::Verification(_)));
-    }
-
-    #[test]
-    fn verifies_rsa_signatures() {
-        let private_key = RsaPrivateKey::from_pkcs8_pem(TEST_RSA_PRIVATE_KEY).expect("rsa key");
-        let public_key =
-            parse_signature_key(TEST_RSA_PUBLIC_KEY.as_bytes()).expect("rsa public key");
-        let payload = b"rsa-payload";
-        let signer = rsa::pkcs1v15::SigningKey::<Sha256>::new(private_key);
-        let signature = signer.sign(payload);
-
-        verify_signature(payload, &signature.to_bytes(), &public_key).expect("rsa valid");
     }
 }

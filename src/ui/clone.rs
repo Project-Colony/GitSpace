@@ -1,21 +1,21 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
+use std::sync::Arc;
 
 use eframe::egui::{self, Align, ComboBox, Layout, RichText, Sense, TextEdit, Ui};
 use poll_promise::Promise;
-use reqwest::StatusCode;
 use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, USER_AGENT};
+use reqwest::StatusCode;
 use serde::Deserialize;
 use url::Url;
 
 use crate::auth::AuthManager;
 use crate::config::NetworkOptions;
-use crate::error::{AppError, logs_directory};
-use crate::git::clone::{CloneProgress, CloneRequest, clone_repository};
+use crate::error::{logs_directory, AppError};
+use crate::git::clone::{clone_repository, CloneProgress, CloneRequest};
 use crate::ui::menu;
 use crate::ui::notifications::{Notification, NotificationAction, NotificationCenter};
 use crate::ui::theme::SharedTheme;
@@ -171,7 +171,7 @@ impl ClonePanel {
                 } else {
                     self.theme.palette.surface
                 };
-                let stroke = egui::Stroke::new(1.0, self.theme.palette.accent_weak);
+                let stroke = egui::Stroke::new(1.0_f32, self.theme.palette.accent_weak);
                 let painter = ui.painter();
                 painter.rect(rect, 8.0, fill, stroke);
 
@@ -198,9 +198,9 @@ impl ClonePanel {
                 RichText::new("Remote repository search").color(self.theme.palette.text_primary),
             );
             let search_help = format!(
-                "Search {} or {} without leaving the app. Select a result to fill the clone URL.",
-                format!("{} GitHub", Provider::GitHub.icon()),
-                format!("{} GitLab", Provider::GitLab.icon()),
+                "Search {} GitHub or {} GitLab without leaving the app. Select a result to fill the clone URL.",
+                Provider::GitHub.icon(),
+                Provider::GitLab.icon(),
             );
             ui.label(RichText::new(search_help).color(self.theme.palette.text_secondary));
             ui.add_space(6.0);
@@ -393,10 +393,10 @@ impl ClonePanel {
 
         self.clone_promise = Some(Promise::spawn_thread("clone_repo", move || {
             let sender = tx.clone();
-            let result = clone_repository(request, move |progress| {
+
+            clone_repository(request, move |progress| {
                 let _ = sender.send(CloneEvent::Progress(progress));
-            });
-            result
+            })
         }));
     }
 
@@ -503,7 +503,7 @@ fn repo_name_from_url(repo_url: &str) -> Option<String> {
     if let Ok(url) = Url::parse(trimmed) {
         if let Some(segment) = url
             .path_segments()
-            .and_then(|segments| segments.filter(|s| !s.is_empty()).last())
+            .and_then(|mut segments| segments.rfind(|s| !s.is_empty()))
         {
             let name = segment.trim_end_matches(".git");
             if !name.is_empty() {
@@ -726,9 +726,7 @@ fn search_gitlab(
 
         if !response.status().is_success() {
             if page == 1 {
-                return Err(AppError::from(
-                    response.error_for_status().unwrap_err(),
-                ));
+                return Err(AppError::from(response.error_for_status().unwrap_err()));
             }
             break;
         }

@@ -3,12 +3,14 @@ use std::process::Command;
 use eframe::egui::{self, Align, Layout, Margin, RichText, Ui};
 
 use crate::auth::AuthManager;
-use crate::config::{MIN_BRANCH_BOX_HEIGHT, NetworkOptions};
+use crate::config::{NetworkOptions, MIN_BRANCH_BOX_HEIGHT};
 use crate::git::{
-    remote::{PullOutcome, RemoteInfo, fetch_remote, list_remotes, pull_branch, push_branch},
-    status::{RepoStatus, read_repo_status},
+    remote::{fetch_remote, list_remotes, pull_branch, push_branch, PullOutcome, RemoteInfo},
+    status::{read_repo_status, RepoStatus},
 };
-use crate::ui::{animation::motion_settings, context::RepoContext, perf::PerfScope, theme::SharedTheme};
+use crate::ui::{
+    animation::motion_settings, context::RepoContext, perf::PerfScope, theme::SharedTheme,
+};
 
 pub struct RepoOverviewPanel {
     theme: SharedTheme,
@@ -163,7 +165,10 @@ impl RepoOverviewPanel {
         let grip_height = 6.0;
         let frame = egui::Frame::none()
             .fill(self.theme.palette.surface)
-            .stroke(egui::Stroke::new(1.0, self.theme.palette.surface_highlight))
+            .stroke(egui::Stroke::new(
+                1.0_f32,
+                self.theme.palette.surface_highlight,
+            ))
             .rounding(8.0)
             .shadow(shadow)
             .inner_margin(Margin {
@@ -220,7 +225,7 @@ impl RepoOverviewPanel {
             self.resize_delta_accumulator += delta;
             let should_apply = self
                 .last_resize_update
-                .map_or(true, |last| (now - last) >= 0.016);
+                .is_none_or(|last| (now - last) >= 0.016);
             if should_apply && self.resize_delta_accumulator.abs() > f32::EPSILON {
                 self.branch_box_height = (self.branch_box_height + self.resize_delta_accumulator)
                     .max(MIN_BRANCH_BOX_HEIGHT);
@@ -242,7 +247,7 @@ impl RepoOverviewPanel {
         let painter = ui.painter();
         painter.rect_filled(grip_rect, 0.0, self.theme.palette.surface);
         let grip_center = grip_rect.center();
-        let grip_line = egui::Stroke::new(1.0, self.theme.palette.surface_highlight);
+        let grip_line = egui::Stroke::new(1.0_f32, self.theme.palette.surface_highlight);
         painter.line_segment(
             [
                 egui::pos2(grip_rect.left() + 12.0, grip_center.y),
@@ -295,7 +300,10 @@ impl RepoOverviewPanel {
                 .to_egui_shadow(self.theme.palette.text_primary);
             let frame = egui::Frame::none()
                 .fill(self.theme.palette.surface)
-                .stroke(egui::Stroke::new(1.0, self.theme.palette.surface_highlight))
+                .stroke(egui::Stroke::new(
+                    1.0_f32,
+                    self.theme.palette.surface_highlight,
+                ))
                 .shadow(shadow)
                 .rounding(6.0)
                 .inner_margin(Margin::same(10.0));
@@ -338,7 +346,10 @@ impl RepoOverviewPanel {
                     };
 
                     if result.is_ok()
-                        && matches!(action, ActionKind::Fetch | ActionKind::Pull | ActionKind::Push)
+                        && matches!(
+                            action,
+                            ActionKind::Fetch | ActionKind::Pull | ActionKind::Push
+                        )
                     {
                         self.reload_repo_state(repo);
                     }
@@ -434,7 +445,10 @@ impl RepoOverviewPanel {
         };
 
         let branch = upstream_branch.or(status.branch);
-        Ok(RemoteSelection { remote_name, branch })
+        Ok(RemoteSelection {
+            remote_name,
+            branch,
+        })
     }
 
     fn resolve_remote_token(&self, auth: &AuthManager, remote_name: &str) -> Option<String> {
@@ -456,7 +470,7 @@ impl RepoOverviewPanel {
                 .args(["/K", "cd", "/d", &repo.path])
                 .spawn()
                 .map_err(|err| err.to_string())?;
-            return Ok("Terminal opened".to_string());
+            Ok("Terminal opened".to_string())
         }
 
         #[cfg(target_os = "macos")]
@@ -465,7 +479,7 @@ impl RepoOverviewPanel {
                 .args(["-a", "Terminal", &repo.path])
                 .spawn()
                 .map_err(|err| err.to_string())?;
-            return Ok("Terminal opened".to_string());
+            Ok("Terminal opened".to_string())
         }
 
         #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
@@ -552,8 +566,7 @@ struct RemoteSelection {
 }
 
 fn split_upstream(upstream: &str) -> Option<(&str, &str)> {
-    let mut parts = upstream.splitn(2, '/');
-    let remote = parts.next()?;
-    let branch = parts.next()?;
+    let (remote, branch) = upstream.split_once('/')?;
+
     Some((remote, branch))
 }

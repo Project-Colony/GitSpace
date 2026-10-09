@@ -31,7 +31,8 @@ pub fn merge_branch<P: AsRef<Path>>(
         MergeStrategy::Rebase => ("rebase", vec![target]),
     };
 
-    let output = run_git_command_with_timeout(repo_path_ref, command, &args, GIT_OPERATION_TIMEOUT)?;
+    let output =
+        run_git_command_with_timeout(repo_path_ref, command, &args, GIT_OPERATION_TIMEOUT)?;
 
     let conflicts = detect_conflicts(repo_path_ref).map_err(|err| err.to_string())?;
 
@@ -69,17 +70,15 @@ pub fn detect_conflicts<P: AsRef<Path>>(repo_path: P) -> Result<Vec<String>, git
     let mut conflicts = Vec::new();
     if let Ok(index) = repo.index() {
         if index.has_conflicts() {
-            for conflict in index.conflicts()? {
-                if let Ok(conflict) = conflict {
-                    if let Some(name) = conflict
-                        .our
-                        .as_ref()
-                        .or(conflict.their.as_ref())
-                        .or(conflict.ancestor.as_ref())
-                        .and_then(|entry| std::str::from_utf8(&entry.path).ok())
-                    {
-                        conflicts.push(name.to_string());
-                    }
+            for conflict in index.conflicts()?.flatten() {
+                if let Some(name) = conflict
+                    .our
+                    .as_ref()
+                    .or(conflict.their.as_ref())
+                    .or(conflict.ancestor.as_ref())
+                    .and_then(|entry| std::str::from_utf8(&entry.path).ok())
+                {
+                    conflicts.push(name.to_string());
                 }
             }
         }
@@ -93,7 +92,11 @@ trait EmptyStringExt {
 
 impl EmptyStringExt for String {
     fn if_empty_then(self, alt: impl FnOnce() -> String) -> String {
-        if self.is_empty() { alt() } else { self }
+        if self.is_empty() {
+            alt()
+        } else {
+            self
+        }
     }
 }
 
