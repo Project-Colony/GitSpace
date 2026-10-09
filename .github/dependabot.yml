@@ -1,7 +1,6 @@
-# Keep the supply chain current: GitHub Actions, Cargo and NuGet dependencies.
+# Keep the supply chain current: GitHub Actions and Cargo dependencies.
 #
-# From Project-Colony-Resources templates/dependabot.yml, plus NuGet for the
-# .NET helper.
+# From Project-Colony-Resources templates/dependabot.yml.
 #
 # Dependabot opening a PR is not the rule being followed: merging it is. See
 # design/dependencies.md: everything is on its latest release, always.
@@ -29,13 +28,4 @@ updates:
       # Minor and patch bumps arrive as one PR, so a routine week is one review
       # rather than fifteen. Majors stay separate: they deserve their own read.
       cargo-minor:
-        update-types: ["minor", "patch"]
-
-  # The .NET helper (credential storage and native file dialogs).
-  - package-ecosystem: nuget
-    directory: /dotnet/GitSpace.Helper
-    schedule:
-      interval: weekly
-    groups:
-      nuget-minor:
         update-types: ["minor", "patch"]

@@ -385,7 +385,7 @@ impl ShellLayout {
                 None
             }
             MainTab::Settings => {
-                settings_panel.ui(ui, notifications);
+                settings_panel.ui(ui);
                 None
             }
             MainTab::DevGallery => {
