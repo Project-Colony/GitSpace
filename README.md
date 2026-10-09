@@ -25,8 +25,6 @@ Requirements:
 
 - Rust (latest stable) and Git.
 - On Linux, the usual egui/wgpu system libraries (see `.github/workflows/ci.yml`).
-- Optional: the .NET 10 SDK, only for the experimental helper in `dotnet/`
-  (see [docs/dotnet-setup.md](docs/dotnet-setup.md)).
 
 ```bash
 git clone https://github.com/Project-Colony/GitSpace
@@ -39,7 +37,6 @@ cargo run --release
 - `src/ui/`: egui panels and layout.
 - `src/git/`: `git2` wrappers for repository operations.
 - `src/auth/`: OAuth and token storage.
-- `dotnet/` and `schemas/`: experimental .NET helper and its JSON contracts.
 - `docs/`: design notes and contributor guide ([docs/contrib.md](docs/contrib.md)).
 
 ## License

@@ -135,7 +135,7 @@ impl eframe::App for GitSpaceApp {
         }
 
         // Show preferences panel fullscreen - if open, skip other panels
-        let preferences_open = self.preferences_panel.show(ctx, &mut self.notifications);
+        let preferences_open = self.preferences_panel.show(ctx);
 
         if !preferences_open {
             if let Some(selection) =

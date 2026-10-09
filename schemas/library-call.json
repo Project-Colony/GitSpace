@@ -1,8 +1,0 @@
-{
-  "id": "req-0300",
-  "command": "library.call",
-  "payload": {
-    "name": "system.info",
-    "payload": {}
-  }
-}

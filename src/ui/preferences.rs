@@ -9,9 +9,7 @@ use crate::config::{
     Keybinding, LoggingOptions, MotionIntensity, Preferences, ThemeMode, MAX_LOG_RETENTION_FILES,
     MIN_LOG_RETENTION_FILES,
 };
-use crate::dotnet::{DialogOpenRequest, DialogOptions, DotnetClient};
 use crate::ui::menu;
-use crate::ui::notifications::{Notification, NotificationCenter};
 use crate::ui::theme::SharedTheme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,7 +56,6 @@ pub struct PreferencesPanel {
     pending_control_height: Option<f32>,
     import_status: Option<String>,
     export_status: Option<String>,
-    native_dialog_status: Option<String>,
     open: bool,
     active_category: PreferencesCategory,
 }
@@ -74,7 +71,6 @@ impl PreferencesPanel {
             pending_control_height: None,
             import_status: None,
             export_status: None,
-            native_dialog_status: None,
             open: false,
             active_category: PreferencesCategory::General,
         }
@@ -122,7 +118,7 @@ impl PreferencesPanel {
 
     /// Show the preferences as a fullscreen panel (replaces all other content)
     /// Returns true if the panel is open (caller should skip rendering other panels)
-    pub fn show(&mut self, ctx: &egui::Context, notifications: &mut NotificationCenter) -> bool {
+    pub fn show(&mut self, ctx: &egui::Context) -> bool {
         if !self.open {
             return false;
         }
@@ -131,7 +127,7 @@ impl PreferencesPanel {
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(self.theme.palette.background))
             .show(ctx, |ui| {
-                self.ui_content(ui, notifications);
+                self.ui_content(ui);
             });
 
         // Close on escape key
@@ -142,7 +138,7 @@ impl PreferencesPanel {
         true
     }
 
-    fn ui_content(&mut self, ui: &mut Ui, notifications: &mut NotificationCenter) {
+    fn ui_content(&mut self, ui: &mut Ui) {
         let available_size = ui.available_size();
         let sidebar_width = 180.0;
 
@@ -183,12 +179,10 @@ impl PreferencesPanel {
                         ui.add_space(8.0);
 
                         match self.active_category {
-                            PreferencesCategory::General => self.general_content(ui, notifications),
+                            PreferencesCategory::General => self.general_content(ui),
                             PreferencesCategory::Appearance => self.appearance_content(ui),
                             PreferencesCategory::Accessibility => self.accessibility_content(ui),
-                            PreferencesCategory::GitSpace => {
-                                self.gitspace_content(ui, notifications)
-                            }
+                            PreferencesCategory::GitSpace => self.gitspace_content(ui),
                         }
 
                         ui.add_space(16.0);
@@ -258,7 +252,7 @@ impl PreferencesPanel {
     // ========================
     // Général (General) section
     // ========================
-    fn general_content(&mut self, ui: &mut Ui, _notifications: &mut NotificationCenter) {
+    fn general_content(&mut self, ui: &mut Ui) {
         ui.heading(RichText::new("Général").color(self.theme.palette.text_primary));
         ui.label(
             RichText::new("Paramètres généraux de l'application")
@@ -526,7 +520,7 @@ impl PreferencesPanel {
     // ========================
     // GitSpace section
     // ========================
-    fn gitspace_content(&mut self, ui: &mut Ui, notifications: &mut NotificationCenter) {
+    fn gitspace_content(&mut self, ui: &mut Ui) {
         ui.heading(RichText::new("GitSpace").color(self.theme.palette.text_primary));
         ui.label(
             RichText::new("Paramètres spécifiques à GitSpace")
@@ -560,43 +554,7 @@ impl PreferencesPanel {
                     self.pending_preferences = Some(self.preferences.clone());
                 }
             }
-
-            if ui.button("Choisir (natif)").clicked() {
-                let request = DialogOpenRequest {
-                    kind: "open_folder".to_string(),
-                    title: Some("Sélectionner la destination par défaut".to_string()),
-                    filters: Vec::new(),
-                    options: DialogOptions {
-                        multi_select: false,
-                        show_hidden: false,
-                    },
-                };
-                match DotnetClient::helper().dialog_open(request) {
-                    Ok(response) => {
-                        if response.cancelled || response.selected_paths.is_empty() {
-                            self.native_dialog_status = Some("Dialogue natif annulé.".to_string());
-                        } else {
-                            let selected = &response.selected_paths[0];
-                            self.preferences.set_default_clone_path(selected.clone());
-                            self.pending_preferences = Some(self.preferences.clone());
-                            self.native_dialog_status = Some(format!("Sélectionné: {}", selected));
-                        }
-                    }
-                    Err(err) => {
-                        notifications.push(Notification::error(
-                            "Helper natif échoué",
-                            err.user_message(),
-                        ));
-                        self.native_dialog_status = Some(format!("Helper natif échoué: {}", err));
-                    }
-                }
-            }
         });
-
-        if let Some(status) = &self.native_dialog_status {
-            ui.add_space(4.0);
-            ui.label(RichText::new(status).color(self.theme.palette.text_secondary));
-        }
 
         ui.add_space(20.0);
 
