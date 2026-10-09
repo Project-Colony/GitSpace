@@ -270,7 +270,15 @@ impl TokenStorage {
         }
 
         let result = if self.allow_encrypted_fallback {
-            self.persist_fallback(host, token)
+            self.persist_fallback(host, token).or_else(|err| {
+                if keyring_result.is_ok() {
+                    // The keyring copy is saved and read first, so the token is not lost.
+                    warn!(target: "gitspace::auth", error = %err, "token saved in the native keyring only; the encrypted fallback was not updated");
+                    Ok(())
+                } else {
+                    Err(err)
+                }
+            })
         } else if keyring_result.is_err() {
             Err("Native keyring unavailable and encrypted storage is disabled".to_string())
         } else {

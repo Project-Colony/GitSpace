@@ -275,6 +275,14 @@ fn backup_path(path: &Path) -> PathBuf {
 /// crash or a full disk never leaves a truncated file behind. The replaced file keeps its
 /// permissions.
 pub(crate) fn write_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
+    // Write through a symlink (dotfile managers) instead of replacing the link itself.
+    let resolved;
+    let path = if fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink()) {
+        resolved = fs::canonicalize(path)?;
+        resolved.as_path()
+    } else {
+        path
+    };
     let parent = path.parent().unwrap_or(Path::new("."));
     fs::create_dir_all(parent)?;
     let name = path
@@ -297,8 +305,13 @@ fn write_then_rename(tmp: &Path, path: &Path, contents: &[u8]) -> io::Result<()>
         .write(true)
         .create_new(true)
         .open(tmp)?;
-    if let Ok(metadata) = fs::metadata(path) {
-        file.set_permissions(metadata.permissions())?;
+    // Keep the target's mode bits. Unix only: on Windows the only bit is read-only, which
+    // would make both the rename and the cleanup of the temporary file fail.
+    #[cfg(unix)]
+    {
+        if let Ok(metadata) = fs::metadata(path) {
+            file.set_permissions(metadata.permissions())?;
+        }
     }
     file.write_all(contents)?;
     file.sync_all()?;
@@ -623,5 +636,26 @@ mod tests {
             .map(|entry| entry.expect("entry").file_name())
             .collect();
         assert_eq!(entries, [CONFIG_FILE_NAME]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_writes_through_a_symlinked_config() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let target = dir.path().join("dotfiles").join(CONFIG_FILE_NAME);
+        fs::create_dir_all(target.parent().unwrap()).expect("create dir");
+        fs::write(&target, "{}").expect("write target");
+        let link = dir.path().join(CONFIG_FILE_NAME);
+        std::os::unix::fs::symlink(&target, &link).expect("symlink");
+
+        let mut config = AppConfig::load_from(&link);
+        config.touch_recent("/work/repo");
+        config.save_to(&link).expect("save");
+
+        assert!(fs::symlink_metadata(&link)
+            .expect("link metadata")
+            .file_type()
+            .is_symlink());
+        assert_eq!(AppConfig::load_from(&target).recent_repos().len(), 1);
     }
 }
