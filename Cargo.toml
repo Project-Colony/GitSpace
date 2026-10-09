@@ -27,7 +27,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 keyring = "2.3"
 chacha20poly1305 = { version = "0.10", features = ["std"] }
 rand = "0.8.8"
-base64 = "0.22"
+base64 = "0.23"
 url = "2.5"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["ansi", "env-filter", "fmt", "json", "registry"] }
