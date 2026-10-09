@@ -41,7 +41,7 @@ pub fn list_worktrees<P: AsRef<Path>>(repo_path: P) -> Result<Vec<String>, Error
     let names = repo.worktrees()?;
     let mut entries = Vec::new();
 
-    for name in names.iter().flatten() {
+    for name in names.iter().flatten().flatten() {
         if let Ok(worktree) = repo.find_worktree(name) {
             let path = worktree.path();
             entries.push(path.to_string_lossy().to_string());
@@ -61,10 +61,11 @@ pub fn list_submodules<P: AsRef<Path>>(repo_path: P) -> Result<Vec<SubmoduleEntr
     for submodule in submodules {
         let name = submodule
             .name()
+            .ok()
             .map(str::to_string)
             .unwrap_or_else(|| submodule.path().to_string_lossy().to_string());
         let path = submodule.path().to_string_lossy().to_string();
-        let url = submodule.url().map(str::to_string);
+        let url = submodule.url().ok().flatten().map(str::to_string);
         entries.push(SubmoduleEntry { name, path, url });
     }
 
