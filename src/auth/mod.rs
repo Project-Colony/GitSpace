@@ -131,7 +131,7 @@ impl AuthManager {
             return Err("Token contains invalid characters".to_string());
         }
 
-        let normalized_host = normalize_host(host);
+        let normalized_host = normalize_host(host)?;
         let client = get_http_client();
 
         if normalized_host.contains("github") {
@@ -649,20 +649,25 @@ fn load_or_create_secret(name: &str, len: usize) -> Vec<u8> {
     secret
 }
 
-fn normalize_host(host: &str) -> String {
+/// Turns a user-entered host into the `https://host[:port]` base URL that tokens are sent to.
+///
+/// A host without a scheme gets `https://`. Any other scheme, `http://` included, is refused so
+/// a token is never sent in clear text.
+fn normalize_host(host: &str) -> Result<String, String> {
     let trimmed = host.trim().trim_end_matches('/');
-    let with_scheme = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+    let with_scheme = if trimmed.contains("://") {
         trimmed.to_string()
     } else {
-        format!("https://{}", trimmed)
+        format!("https://{trimmed}")
     };
-    if let Ok(parsed) = Url::parse(&with_scheme) {
-        if let Some(host) = parsed.host_str() {
-            let scheme = parsed.scheme();
-            return format!("{}://{}", scheme, host);
-        }
+    let parsed =
+        Url::parse(&with_scheme).map_err(|err| format!("Invalid host \"{trimmed}\": {err}"))?;
+    if parsed.scheme() != "https" {
+        return Err(
+            "The host must use https: GitSpace never sends a token over plain HTTP.".to_string(),
+        );
     }
-    with_scheme
+    Ok(parsed.origin().ascii_serialization())
 }
 
 fn validate_github(client: &Client, host: &str, token: &str) -> Result<(), String> {
@@ -811,5 +816,32 @@ mod tests {
             fs::read_to_string(&storage.host_path).expect("read index"),
             "not json"
         );
+    }
+
+    #[test]
+    fn normalize_host_only_allows_https() {
+        assert_eq!(
+            normalize_host(" gitlab.example.com/ ").as_deref(),
+            Ok("https://gitlab.example.com")
+        );
+        assert_eq!(
+            normalize_host("https://git.example.com:8443/group").as_deref(),
+            Ok("https://git.example.com:8443")
+        );
+        assert!(normalize_host("http://gitlab.example.com").is_err());
+        assert!(normalize_host("HTTP://gitlab.example.com").is_err());
+        assert!(normalize_host("ssh://gitlab.example.com").is_err());
+    }
+
+    #[test]
+    fn plain_http_host_is_refused_before_any_request() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let auth = AuthManager {
+            storage: storage_in(dir.path()),
+        };
+        let err = auth
+            .validate_token("http://gitlab.example.com", "glpat-0123456789abcdef")
+            .expect_err("plain HTTP host");
+        assert!(err.contains("https"), "{err}");
     }
 }

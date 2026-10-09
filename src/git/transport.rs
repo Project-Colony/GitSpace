@@ -96,6 +96,24 @@ pub fn configure_proxy_options(network: &NetworkOptions) -> ProxyOptions<'static
     proxy_options
 }
 
+/// Answers a credential request with the saved token, but only over HTTPS (or SSH):
+/// a remote reached over plain `http://` never receives the token.
+fn token_credentials(
+    url: &str,
+    username_from_url: Option<&str>,
+    token: Option<&str>,
+) -> Result<Cred, git2::Error> {
+    let Some(token) = token else {
+        return Cred::default();
+    };
+    if url.to_ascii_lowercase().starts_with("http://") {
+        return Err(git2::Error::from_str(
+            "This remote uses plain HTTP: GitSpace never sends a token over it. Use an https:// remote URL.",
+        ));
+    }
+    Cred::userpass_plaintext(username_from_url.unwrap_or("git"), token)
+}
+
 /// Creates remote callbacks with credential handling and optional timeout.
 pub fn create_remote_callbacks(
     token: Option<String>,
@@ -104,13 +122,8 @@ pub fn create_remote_callbacks(
     let mut callbacks = RemoteCallbacks::new();
     let start = Instant::now();
 
-    callbacks.credentials(move |_url, username_from_url, _allowed| {
-        if let Some(ref token) = token {
-            let username = username_from_url.unwrap_or("git");
-            Cred::userpass_plaintext(username, token)
-        } else {
-            Cred::default()
-        }
+    callbacks.credentials(move |url, username_from_url, _allowed| {
+        token_credentials(url, username_from_url, token.as_deref())
     });
 
     callbacks.transfer_progress(move |_stats| {
@@ -127,13 +140,8 @@ pub fn create_remote_callbacks(
 pub fn create_push_callbacks(token: Option<String>) -> RemoteCallbacks<'static> {
     let mut callbacks = RemoteCallbacks::new();
 
-    callbacks.credentials(move |_url, username_from_url, _allowed| {
-        if let Some(ref token) = token {
-            let username = username_from_url.unwrap_or("git");
-            Cred::userpass_plaintext(username, token)
-        } else {
-            Cred::default()
-        }
+    callbacks.credentials(move |url, username_from_url, _allowed| {
+        token_credentials(url, username_from_url, token.as_deref())
     });
 
     callbacks.push_transfer_progress(|_current, _total, _bytes| {});
@@ -241,5 +249,15 @@ mod tests {
         // and should be allowed when SSH is disabled
         assert!(validate_transport_url("https://user@github.com/repo.git", &network).is_ok());
         assert!(validate_transport_url("https://token@github.com/repo.git", &network).is_ok());
+    }
+
+    #[test]
+    fn token_is_never_offered_over_plain_http() {
+        let token = Some("secret");
+        assert!(token_credentials("http://git.example.com/repo.git", None, token).is_err());
+        assert!(token_credentials("HTTP://git.example.com/repo.git", None, token).is_err());
+        assert!(token_credentials("https://git.example.com/repo.git", None, token).is_ok());
+        // Without a token there is nothing to leak, so plain HTTP keeps the default credentials.
+        assert!(token_credentials("http://git.example.com/repo.git", None, None).is_ok());
     }
 }
