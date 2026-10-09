@@ -6,8 +6,8 @@ use eframe::egui::{
 use rfd::FileDialog;
 
 use crate::config::{
-    Keybinding, LoggingOptions, MotionIntensity, Preferences, ReleaseChannel, ThemeMode,
-    MAX_LOG_RETENTION_FILES, MIN_LOG_RETENTION_FILES,
+    Keybinding, LoggingOptions, MotionIntensity, Preferences, ThemeMode, MAX_LOG_RETENTION_FILES,
+    MIN_LOG_RETENTION_FILES,
 };
 use crate::dotnet::{DialogOpenRequest, DialogOptions, DotnetClient};
 use crate::ui::menu;
@@ -59,8 +59,6 @@ pub struct PreferencesPanel {
     import_status: Option<String>,
     export_status: Option<String>,
     native_dialog_status: Option<String>,
-    update_request: bool,
-    update_status: Option<String>,
     open: bool,
     active_category: PreferencesCategory,
 }
@@ -77,8 +75,6 @@ impl PreferencesPanel {
             import_status: None,
             export_status: None,
             native_dialog_status: None,
-            update_request: false,
-            update_status: None,
             open: false,
             active_category: PreferencesCategory::General,
         }
@@ -116,18 +112,6 @@ impl PreferencesPanel {
 
     pub fn take_control_height_change(&mut self) -> Option<f32> {
         self.pending_control_height.take()
-    }
-
-    pub fn take_update_request(&mut self) -> bool {
-        if self.update_request {
-            self.update_request = false;
-            return true;
-        }
-        false
-    }
-
-    pub fn set_update_status<S: Into<String>>(&mut self, status: S) {
-        self.update_status = Some(status.into());
     }
 
     /// Mark preferences as changed (triggers auto-save)
@@ -809,92 +793,6 @@ impl PreferencesPanel {
                 .push(Keybinding::default());
             self.pending_preferences = Some(self.preferences.clone());
         }
-
-        ui.add_space(20.0);
-
-        // Updates subsection
-        self.section_header(
-            ui,
-            "Mises à jour",
-            "Contrôlez la vérification des nouvelles versions",
-        );
-        ui.add_space(8.0);
-
-        let mut auto_check = self.preferences.auto_check_updates();
-        let response = ui.checkbox(
-            &mut auto_check,
-            "Vérifier automatiquement les mises à jour au lancement",
-        );
-        if response.changed() {
-            self.preferences.set_auto_check_updates(auto_check);
-            self.pending_preferences = Some(self.preferences.clone());
-        }
-
-        ui.add_space(4.0);
-        let icon_id = ui.make_persistent_id("prefs-release-icon");
-        let current_channel = self.preferences.release_channel();
-        ComboBox::from_label(
-            RichText::new("Canal de release").color(self.theme.palette.text_secondary),
-        )
-        .selected_text(channel_label(current_channel))
-        .icon(menu::combo_icon(Arc::clone(&self.theme), icon_id))
-        .show_ui(ui, |ui| {
-            menu::with_menu_popup_motion(ui, "prefs-release-menu", |ui| {
-                let mut selected_channel = current_channel;
-                for channel in [ReleaseChannel::Stable, ReleaseChannel::Preview] {
-                    if menu::menu_item(
-                        ui,
-                        &self.theme,
-                        ("prefs-release-item", channel_label(channel)),
-                        channel_label(channel),
-                        selected_channel == channel,
-                    )
-                    .clicked()
-                    {
-                        selected_channel = channel;
-                    }
-                }
-                if selected_channel != current_channel {
-                    self.preferences.set_release_channel(selected_channel);
-                    self.pending_preferences = Some(self.preferences.clone());
-                }
-            });
-        });
-
-        ui.add_space(4.0);
-        let mut update_feed_override = self
-            .preferences
-            .update_feed_override()
-            .unwrap_or_default()
-            .to_string();
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new("Feed URL personnalisé").color(self.theme.palette.text_secondary),
-            );
-            ui.add_sized(
-                [280.0, control_height],
-                TextEdit::singleline(&mut update_feed_override)
-                    .hint_text("https://example.com/feed.json"),
-            );
-        });
-        self.preferences
-            .set_update_feed_override(Some(update_feed_override));
-        ui.label(
-            RichText::new("Pour pré-release / feed interne.")
-                .color(self.theme.palette.text_secondary),
-        );
-
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            if ui.button("Vérifier maintenant").clicked() {
-                self.update_request = true;
-                self.update_status = Some("Vérification des mises à jour...".to_string());
-            }
-
-            if let Some(status) = &self.update_status {
-                ui.label(RichText::new(status).color(self.theme.palette.text_secondary));
-            }
-        });
     }
 
     fn section_header(&self, ui: &mut Ui, title: &str, subtitle: &str) {
@@ -930,13 +828,6 @@ fn mode_label(mode: ThemeMode) -> &'static str {
         ThemeMode::Frappe => "Frappe",
         ThemeMode::Macchiato => "Macchiato",
         ThemeMode::Mocha => "Mocha",
-    }
-}
-
-fn channel_label(channel: ReleaseChannel) -> &'static str {
-    match channel {
-        ReleaseChannel::Stable => "Stable",
-        ReleaseChannel::Preview => "Preview",
     }
 }
 

@@ -27,7 +27,6 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 keyring = "2.3"
 chacha20poly1305 = { version = "0.10", features = ["std"] }
 rand = "0.8"
-sha2 = "0.10"
 base64 = "0.22"
 hostname = "0.3"
 url = "2.5"
@@ -36,11 +35,6 @@ tracing-subscriber = { version = "0.3", features = ["ansi", "env-filter", "fmt",
 tracing-appender = "0.2"
 argon2 = { version = "0.5", default-features = false, features = ["std"] }
 hmac = "0.12"
-ed25519-dalek = { version = "2", features = ["pkcs8"] }
-pem = "3"
-rsa = { version = "0.9", features = ["pem", "sha2"] }
-spki = { version = "0.7", features = ["alloc"] }
-x509-cert = { version = "0.2", features = ["pem"] }
 thiserror = "1.0"
 zeroize = { version = "1.7", features = ["derive"] }
 parking_lot = "0.12"

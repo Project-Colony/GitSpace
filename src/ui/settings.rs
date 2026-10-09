@@ -4,8 +4,8 @@ use eframe::egui::{collapsing_header::CollapsingState, ComboBox, RichText, Slide
 use rfd::FileDialog;
 
 use crate::config::{
-    Keybinding, LoggingOptions, MotionIntensity, Preferences, ReleaseChannel, ThemeMode,
-    MAX_LOG_RETENTION_FILES, MIN_LOG_RETENTION_FILES,
+    Keybinding, LoggingOptions, MotionIntensity, Preferences, ThemeMode, MAX_LOG_RETENTION_FILES,
+    MIN_LOG_RETENTION_FILES,
 };
 use crate::dotnet::{DialogOpenRequest, DialogOptions, DotnetClient};
 use crate::ui::menu;
@@ -22,8 +22,6 @@ pub struct SettingsPanel {
     import_status: Option<String>,
     export_status: Option<String>,
     native_dialog_status: Option<String>,
-    update_request: bool,
-    update_status: Option<String>,
 }
 
 impl SettingsPanel {
@@ -38,8 +36,6 @@ impl SettingsPanel {
             import_status: None,
             export_status: None,
             native_dialog_status: None,
-            update_request: false,
-            update_status: None,
         }
     }
 
@@ -63,19 +59,6 @@ impl SettingsPanel {
         self.pending_control_height.take()
     }
 
-    pub fn take_update_request(&mut self) -> bool {
-        if self.update_request {
-            self.update_request = false;
-            return true;
-        }
-
-        false
-    }
-
-    pub fn set_update_status<S: Into<String>>(&mut self, status: S) {
-        self.update_status = Some(status.into());
-    }
-
     pub fn ui(&mut self, ui: &mut Ui, notifications: &mut NotificationCenter) {
         ui.add_space(8.0);
         ui.heading(RichText::new("Settings").color(self.theme.palette.text_primary));
@@ -93,7 +76,6 @@ impl SettingsPanel {
         self.network_section(ui);
         self.logging_section(ui);
         self.privacy_section(ui);
-        self.update_section(ui);
         self.motion_section(ui);
         ui.add_space(4.0);
         self.actions(ui);
@@ -462,85 +444,6 @@ impl SettingsPanel {
         );
     }
 
-    fn update_section(&mut self, ui: &mut Ui) {
-        self.collapsible_section(
-            ui,
-            "settings-updates",
-            "Updates",
-            "Control how GitSpace checks for new versions and which release channel you follow.",
-            |ui, panel| {
-                let mut auto_check = panel.preferences.auto_check_updates();
-                ui.checkbox(&mut auto_check, "Automatically check for updates on launch");
-                panel.preferences.set_auto_check_updates(auto_check);
-
-                ui.add_space(4.0);
-                let icon_id = ui.make_persistent_id("settings-release-icon");
-                ComboBox::from_label(
-                    RichText::new("Release channel").color(panel.theme.palette.text_secondary),
-                )
-                .selected_text(channel_label(panel.preferences.release_channel()))
-                .icon(menu::combo_icon(Arc::clone(&panel.theme), icon_id))
-                .show_ui(ui, |ui| {
-                    menu::with_menu_popup_motion(ui, "settings-release-menu", |ui| {
-                        let mut selected_channel = panel.preferences.release_channel();
-                        for channel in [ReleaseChannel::Stable, ReleaseChannel::Preview] {
-                            if menu::menu_item(
-                                ui,
-                                &panel.theme,
-                                ("settings-release-item", channel_label(channel)),
-                                channel_label(channel),
-                                selected_channel == channel,
-                            )
-                            .clicked()
-                            {
-                                selected_channel = channel;
-                            }
-                        }
-                        panel.preferences.set_release_channel(selected_channel);
-                    });
-                });
-
-                ui.add_space(4.0);
-                let control_height = ui.spacing().interact_size.y;
-                let mut update_feed_override = panel
-                    .preferences
-                    .update_feed_override()
-                    .unwrap_or_default()
-                    .to_string();
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new("Update feed override")
-                            .color(panel.theme.palette.text_secondary),
-                    );
-                    ui.add_sized(
-                        [340.0, control_height],
-                        TextEdit::singleline(&mut update_feed_override)
-                            .hint_text("https://example.com/feed.json"),
-                    );
-                });
-                panel
-                    .preferences
-                    .set_update_feed_override(Some(update_feed_override));
-                ui.label(
-                    RichText::new("Pour pré-release / feed interne.")
-                        .color(panel.theme.palette.text_secondary),
-                );
-
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    if ui.button("Check for updates now").clicked() {
-                        panel.update_request = true;
-                        panel.update_status = Some("Checking for updates...".to_string());
-                    }
-
-                    if let Some(status) = &panel.update_status {
-                        ui.label(RichText::new(status).color(panel.theme.palette.text_secondary));
-                    }
-                });
-            },
-        );
-    }
-
     fn motion_section(&mut self, ui: &mut Ui) {
         self.collapsible_section(
             ui,
@@ -699,13 +602,6 @@ fn mode_label(mode: ThemeMode) -> &'static str {
         ThemeMode::Frappe => "Frappe",
         ThemeMode::Macchiato => "Macchiato",
         ThemeMode::Mocha => "Mocha",
-    }
-}
-
-fn channel_label(channel: ReleaseChannel) -> &'static str {
-    match channel {
-        ReleaseChannel::Stable => "Stable",
-        ReleaseChannel::Preview => "Preview",
     }
 }
 
