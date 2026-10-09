@@ -26,7 +26,7 @@ open = "5.3"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 keyring = "2.3"
 chacha20poly1305 = { version = "0.10", features = ["std"] }
-rand = "0.8"
+rand = "0.8.8"
 base64 = "0.22"
 hostname = "0.3"
 url = "2.5"
@@ -38,9 +38,9 @@ hmac = "0.12"
 thiserror = "1.0"
 zeroize = { version = "1.7", features = ["derive"] }
 parking_lot = "0.12"
-oauth2 = { version = "5", default-features = false, features = ["reqwest-blocking"] }
+oauth2 = { version = "5.0.0", default-features = false, features = ["reqwest-blocking"] }
 tiny_http = "0.12"
-webbrowser = "1.0"
+webbrowser = "1.2.4"
 
 [dev-dependencies]
 tempfile = "3"
