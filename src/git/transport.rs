@@ -444,7 +444,7 @@ mod tests {
             );
         }
         // The token is never sent as an SSH password, so every method is used up.
-        let err = picker.next(url, Some("git"), ssh).unwrap_err();
+        let err = picker.next(url, Some("git"), ssh).err().expect("a refusal");
         assert!(err.message().contains("ssh-agent"), "{}", err.message());
         assert!(picker.next(url, Some("git"), ssh).is_err());
     }
@@ -459,7 +459,7 @@ mod tests {
             credtype(picker.next(url, None, allowed)),
             CredentialType::USER_PASS_PLAINTEXT
         );
-        let err = picker.next(url, None, allowed).unwrap_err();
+        let err = picker.next(url, None, allowed).err().expect("a refusal");
         assert!(
             err.message().contains("refused the saved token"),
             "{}",
@@ -480,7 +480,7 @@ mod tests {
             credtype(picker.next(url, None, allowed)),
             CredentialType::DEFAULT
         );
-        let err = picker.next(url, None, allowed).unwrap_err();
+        let err = picker.next(url, None, allowed).err().expect("a refusal");
         assert!(err.message().contains("save a token"), "{}", err.message());
     }
 
