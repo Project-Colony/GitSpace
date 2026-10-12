@@ -7,6 +7,7 @@
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
+use std::sync::Once;
 use std::time::{Duration, Instant};
 
 use git2::{
@@ -298,12 +299,32 @@ pub fn create_push_callbacks(token: Option<String>) -> RemoteCallbacks<'static> 
     credential_callbacks(token)
 }
 
+/// Cuts a connection that sends nothing for `timeout_secs`. libgit2 calls the progress callback
+/// only when data arrives, so [`StallTimer`] alone never sees a connection that hangs. This
+/// covers SSH and the HTTPS sockets libgit2 opens itself; WinHTTP on Windows ignores it.
+///
+/// ponytail: libgit2 keeps the timeout in a process-wide setting, so the value from the first
+/// transfer stays until GitSpace restarts.
+fn apply_socket_timeout(timeout_secs: u64) {
+    static APPLIED: Once = Once::new();
+    APPLIED.call_once(|| {
+        let millis = timeout_secs.saturating_mul(1000).min(i32::MAX as u64) as i32;
+        // SAFETY: libgit2 reads this setting only when a transfer opens its connection, and
+        // every transfer passes through this `Once` before it starts, so the write happens
+        // before any read.
+        if let Err(err) = unsafe { git2::opts::set_server_timeout_in_milliseconds(millis) } {
+            tracing::warn!(target: "gitspace::git", error = %err, "could not set the git network timeout");
+        }
+    });
+}
+
 /// Configures FetchOptions for `url` with proxy and callbacks.
 pub fn configure_fetch_options<'a>(
     network: &NetworkOptions,
     url: &str,
     callbacks: RemoteCallbacks<'a>,
 ) -> FetchOptions<'a> {
+    apply_socket_timeout(network.network_timeout_secs);
     let mut fetch = FetchOptions::new();
     fetch.proxy_options(configure_proxy_options(network, url));
     fetch.remote_callbacks(callbacks);
@@ -316,6 +337,7 @@ pub fn configure_push_options<'a>(
     url: &str,
     callbacks: RemoteCallbacks<'a>,
 ) -> PushOptions<'a> {
+    apply_socket_timeout(network.network_timeout_secs);
     let mut push = PushOptions::new();
     push.proxy_options(configure_proxy_options(network, url));
     push.remote_callbacks(callbacks);

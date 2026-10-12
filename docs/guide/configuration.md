@@ -46,8 +46,10 @@ The network preferences apply to clone, fetch, pull and push:
   HTTP proxy, as GitSpace's own GitHub and GitLab requests do. When the matching field is
   empty, git's `http.proxy` setting and the `https_proxy` and `http_proxy` environment variables
   apply. SSH remotes never go through a proxy.
-- **Timeout**: a transfer stops when no data arrived for that many seconds. A long clone keeps
-  running as long as data arrives. `0` turns the timeout off.
+- **Timeout**: a transfer stops when the connection sends nothing for that many seconds. A long
+  clone keeps running as long as data arrives. `0` turns the timeout off. Git transfers read the
+  value once, at the first clone, fetch or push, so restart GitSpace after changing it. On
+  Windows, HTTPS remotes wait as long as the system allows.
 - **SSH remotes** (`git@host:owner/repo.git` or `ssh://...`): GitSpace signs in with the keys
   loaded in ssh-agent, then with `~/.ssh/id_ed25519`, `~/.ssh/id_ecdsa` and `~/.ssh/id_rsa`.
   A key protected by a passphrase only works through ssh-agent. The host key must already be
