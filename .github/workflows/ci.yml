@@ -36,3 +36,9 @@ jobs:
 
       - name: Cargo build
         run: cargo build --all-targets --all-features
+
+      - name: Check the macOS x86_64 build
+        if: runner.os == 'macOS'
+        run: |
+          rustup target add x86_64-apple-darwin
+          cargo check --target x86_64-apple-darwin

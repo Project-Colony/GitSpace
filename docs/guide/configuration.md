@@ -37,3 +37,21 @@ GitSpace never saves over a file it could not read:
   `tokens.enc` aside to start over.
 - **`token-hosts.json` cannot be read**: the host list is left as it is and the error is
   logged.
+
+## Network
+
+The network preferences apply to clone, fetch, pull and push:
+
+- **Proxy**: `https://` remotes go through the HTTPS proxy and `http://` remotes through the
+  HTTP proxy, as GitSpace's own GitHub and GitLab requests do. When the matching field is
+  empty, git's `http.proxy` setting and the `https_proxy` and `http_proxy` environment variables
+  apply. SSH remotes never go through a proxy.
+- **Timeout**: a transfer stops when no data arrived for that many seconds. A long clone keeps
+  running as long as data arrives. `0` turns the timeout off.
+- **SSH remotes** (`git@host:owner/repo.git` or `ssh://...`): GitSpace signs in with the keys
+  loaded in ssh-agent, then with `~/.ssh/id_ed25519`, `~/.ssh/id_ecdsa` and `~/.ssh/id_rsa`.
+  A key protected by a passphrase only works through ssh-agent. The host key must already be
+  in `~/.ssh/known_hosts`: connect once with `ssh -T git@host` to add it. A saved token is
+  never sent over SSH.
+- **HTTPS remotes** use the saved token for the host. A remote reached over plain `http://`
+  never receives the token.
