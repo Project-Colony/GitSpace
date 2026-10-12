@@ -11,11 +11,12 @@ use std::time::Duration;
 
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::{engine::general_purpose, Engine as _};
-use chacha20poly1305::aead::{Aead, AeadCore, KeyInit};
-use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
+use chacha20poly1305::aead::{Aead, Generate, KeyInit};
+use chacha20poly1305::{ChaCha20Poly1305, Nonce};
 use keyring::Entry;
-use rand::rngs::OsRng;
-use rand::RngCore;
+use rand::rand_core::UnwrapErr;
+use rand::rngs::SysRng;
+use rand::Rng;
 use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, USER_AGENT};
 use serde::{Deserialize, Serialize};
@@ -375,7 +376,7 @@ impl TokenStorage {
     fn remove_from_keyring(&self, host: &str) -> Result<(), String> {
         let entry = Entry::new(SERVICE_NAME, host)
             .map_err(|err| format!("Failed to access keyring: {err}"))?;
-        match entry.delete_password() {
+        match entry.delete_credential() {
             Ok(()) => Ok(()),
             Err(keyring::Error::NoEntry) => Ok(()),
             Err(err) => Err(format!("Failed to remove keyring entry: {err}")),
@@ -463,8 +464,9 @@ impl TokenStorage {
 }
 
 fn encrypt_tokens(map: &TokenMap, key: &[u8; 32]) -> Result<EncryptedTokenFile, String> {
-    let cipher = ChaCha20Poly1305::new(Key::from_slice(key));
-    let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng);
+    let cipher = ChaCha20Poly1305::new(key.into());
+    // Drawn from the operating system's RNG for every write, so a key never reuses a nonce.
+    let nonce = Nonce::generate();
 
     let serialized =
         serde_json::to_string(map).map_err(|err| format!("Failed to serialize tokens: {err}"))?;
@@ -479,17 +481,18 @@ fn encrypt_tokens(map: &TokenMap, key: &[u8; 32]) -> Result<EncryptedTokenFile, 
 }
 
 fn decrypt_tokens(blob: &EncryptedTokenFile, key: &[u8; 32]) -> Result<TokenMap, String> {
-    let cipher = ChaCha20Poly1305::new(Key::from_slice(key));
+    let cipher = ChaCha20Poly1305::new(key.into());
     let nonce_bytes = general_purpose::STANDARD
         .decode(&blob.nonce)
         .map_err(|err| format!("Failed to decode nonce: {err}"))?;
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    let nonce = Nonce::try_from(nonce_bytes.as_slice())
+        .map_err(|_| format!("Invalid nonce length: {} bytes", nonce_bytes.len()))?;
     let cipher_bytes = general_purpose::STANDARD
         .decode(&blob.ciphertext)
         .map_err(|err| format!("Failed to decode ciphertext: {err}"))?;
 
     let plaintext = cipher
-        .decrypt(nonce, cipher_bytes.as_ref())
+        .decrypt(&nonce, cipher_bytes.as_ref())
         .map_err(|err| format!("Failed to decrypt credentials: {err}"))?;
     let content = String::from_utf8(plaintext)
         .map_err(|err| format!("Invalid credential encoding: {err}"))?;
@@ -530,7 +533,7 @@ fn load_or_create_local_key() -> [u8; 32] {
             // tokens then fail to decrypt and are left untouched.
             error!(target: "gitspace::auth", error = %err, "failed to read local key file");
             let mut key = [0u8; 32];
-            OsRng.fill_bytes(&mut key);
+            UnwrapErr(SysRng).fill_bytes(&mut key);
             key
         }
     };
@@ -538,32 +541,36 @@ fn load_or_create_local_key() -> [u8; 32] {
     // If master password is set, derive additional key material for defense in depth
     if let Ok(master_password) = std::env::var(MASTER_PASSWORD_ENV) {
         let salt = load_or_create_secret(TOKEN_SALT_FILE, 16);
-        // OWASP recommended: 64 MB memory, 3 iterations, 1 thread
-        // m_cost is in KiB, so 65536 = 64 MB
-        let params = Params::new(65536, 3, 1, None).unwrap_or(Params::DEFAULT);
-        let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
-
-        let mut derived = [0u8; 32];
-        if argon2
-            .hash_password_into(master_password.as_bytes(), &salt, &mut derived)
-            .is_ok()
-        {
+        if let Some(mut derived) = derive_master_key(master_password.as_bytes(), &salt) {
             // XOR the derived key with the stored key for defense in depth
             for (a, b) in stored_key.iter_mut().zip(derived.iter()) {
                 *a ^= b;
             }
+            derived.zeroize();
         }
-        // Zero the derived key
-        derived.zeroize();
     }
 
     stored_key
 }
 
+/// Derives the key mixed into the local key when a master password is set. Changing the
+/// algorithm or parameters makes every token saved under a master password unreadable.
+fn derive_master_key(password: &[u8], salt: &[u8]) -> Option<[u8; 32]> {
+    // OWASP recommended: 64 MB memory, 3 iterations, 1 thread
+    // m_cost is in KiB, so 65536 = 64 MB
+    let params = Params::new(65536, 3, 1, None).unwrap_or(Params::DEFAULT);
+    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+    let mut derived = [0u8; 32];
+    argon2
+        .hash_password_into(password, salt, &mut derived)
+        .ok()
+        .map(|()| derived)
+}
+
 /// Generates a cryptographically secure random key and stores it with restricted permissions.
 fn generate_and_store_key(path: &PathBuf) -> [u8; 32] {
     let mut key = [0u8; 32];
-    OsRng.fill_bytes(&mut key);
+    UnwrapErr(SysRng).fill_bytes(&mut key);
 
     if let Some(parent) = path.parent() {
         if let Err(err) = fs::create_dir_all(parent) {
@@ -606,7 +613,7 @@ fn load_or_create_keyring_key() -> Result<[u8; 32], String> {
         }
         Err(keyring::Error::NoEntry) => {
             let mut key = [0u8; 32];
-            OsRng.fill_bytes(&mut key);
+            UnwrapErr(SysRng).fill_bytes(&mut key);
             let encoded = general_purpose::STANDARD.encode(key);
             entry
                 .set_password(&encoded)
@@ -624,7 +631,7 @@ fn load_or_create_secret(name: &str, len: usize) -> Vec<u8> {
         .join(name);
 
     let mut secret = vec![0u8; len];
-    OsRng.fill_bytes(&mut secret);
+    UnwrapErr(SysRng).fill_bytes(&mut secret);
     match fs::read(&path) {
         Ok(bytes) if bytes.len() == len => return bytes,
         Err(err) if err.kind() != ErrorKind::NotFound => {
@@ -744,7 +751,7 @@ mod tests {
 
     #[test]
     fn token_encryption_round_trips_with_fresh_nonces() {
-        let key: [u8; 32] = ChaCha20Poly1305::generate_key(&mut OsRng).into();
+        let key: [u8; 32] = Generate::generate();
         let mut map = TokenMap::default();
         map.tokens.insert("github.com".into(), "secret".into());
 
@@ -756,10 +763,45 @@ mod tests {
         assert_eq!(decrypted.tokens, map.tokens);
     }
 
+    // Known answers computed with OpenSSL, independently of the crates in Cargo.toml: a
+    // crate update that changed either result would lock users out of their saved tokens.
+
+    #[test]
+    fn saved_token_file_decrypts_with_a_known_key() {
+        let key: [u8; 32] = std::array::from_fn(|i| i as u8);
+        let blob = EncryptedTokenFile {
+            nonce: "ZGVmZ2hpamtsbW5v".into(),
+            ciphertext: "TzPPpfPAGCHZ5G5dleCs+wWkvFfwPcmX5Fie3aVZopy91+2BwUk9Fu2wvoKDxobquaZzixP/xoVED+ssLExO+hF9".into(),
+        };
+        let tokens = decrypt_tokens(&blob, &key).expect("decrypt").tokens;
+        assert_eq!(tokens["github.com"], "gho_known_answer_token");
+
+        let short_nonce = EncryptedTokenFile {
+            nonce: "AAAA".into(),
+            ..blob
+        };
+        let err = decrypt_tokens(&short_nonce, &key).expect_err("a 3-byte nonce is invalid");
+        assert!(err.contains("nonce"), "{err}");
+    }
+
+    #[test]
+    fn master_password_derives_a_known_key() {
+        let salt: [u8; 16] = std::array::from_fn(|i| i as u8);
+        let derived = derive_master_key(b"correct horse battery staple", &salt).expect("derive");
+        assert_eq!(
+            derived,
+            [
+                0x0d, 0x1a, 0x3c, 0x65, 0x23, 0xc8, 0xf0, 0x6e, 0x4e, 0x0a, 0xf9, 0xc5, 0x15, 0xaa,
+                0x5b, 0x54, 0x48, 0xcf, 0xeb, 0xd6, 0x83, 0x8f, 0x2d, 0x52, 0xc3, 0xd8, 0xb6, 0xef,
+                0x8d, 0xdc, 0x3c, 0x2e,
+            ]
+        );
+    }
+
     /// A storage in `dir` with a fresh random key, so two calls never share a key.
     fn storage_in(dir: &std::path::Path) -> TokenStorage {
         TokenStorage {
-            key: SecureKey(ChaCha20Poly1305::generate_key(&mut OsRng).into()),
+            key: SecureKey(Generate::generate()),
             path: dir.join(TOKEN_FILE_NAME),
             host_path: dir.join(HOST_FILE_NAME),
             allow_encrypted_fallback: true,

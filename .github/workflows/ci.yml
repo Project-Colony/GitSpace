@@ -5,6 +5,9 @@ on:
     branches: ["*"]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   checks:
     name: Checks (${{ matrix.os }})
@@ -16,10 +19,18 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
+      # Pinned to master with `toolchain:` set, like release.yml: the `stable`
+      # branch is rebased onto every master commit, so a SHA pinned on it stops
+      # being reachable from any branch.
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master, 2026-10-09
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -42,3 +53,24 @@ jobs:
         run: |
           rustup target add x86_64-apple-darwin
           cargo check --target x86_64-apple-darwin
+
+  # Holds `rust-version` in Cargo.toml honest: the oldest toolchain it promises.
+  msrv:
+    name: MSRV (Rust 1.88)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust 1.88
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master, 2026-10-09
+        with:
+          toolchain: "1.88"
+
+      - name: Install Linux dependencies
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+
+      - name: Cargo check
+        run: cargo check --all-targets --all-features
