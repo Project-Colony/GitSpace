@@ -541,30 +541,29 @@ fn load_or_create_local_key() -> [u8; 32] {
     // If master password is set, derive additional key material for defense in depth
     if let Ok(master_password) = std::env::var(MASTER_PASSWORD_ENV) {
         let salt = load_or_create_secret(TOKEN_SALT_FILE, 16);
-        if let Some(mut derived) = derive_master_key(master_password.as_bytes(), &salt) {
+        let mut derived = [0u8; 32];
+        if derive_master_key(master_password.as_bytes(), &salt, &mut derived) {
             // XOR the derived key with the stored key for defense in depth
             for (a, b) in stored_key.iter_mut().zip(derived.iter()) {
                 *a ^= b;
             }
-            derived.zeroize();
         }
+        // Zero the derived key
+        derived.zeroize();
     }
 
     stored_key
 }
 
-/// Derives the key mixed into the local key when a master password is set. Changing the
-/// algorithm or parameters makes every token saved under a master password unreadable.
-fn derive_master_key(password: &[u8], salt: &[u8]) -> Option<[u8; 32]> {
+/// Derives the key mixed into the local key when a master password is set, into `out`, which
+/// the caller zeroes. Changing the algorithm or parameters makes every token saved under a
+/// master password unreadable.
+fn derive_master_key(password: &[u8], salt: &[u8], out: &mut [u8; 32]) -> bool {
     // OWASP recommended: 64 MB memory, 3 iterations, 1 thread
     // m_cost is in KiB, so 65536 = 64 MB
     let params = Params::new(65536, 3, 1, None).unwrap_or(Params::DEFAULT);
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
-    let mut derived = [0u8; 32];
-    argon2
-        .hash_password_into(password, salt, &mut derived)
-        .ok()
-        .map(|()| derived)
+    argon2.hash_password_into(password, salt, out).is_ok()
 }
 
 /// Generates a cryptographically secure random key and stores it with restricted permissions.
@@ -787,7 +786,12 @@ mod tests {
     #[test]
     fn master_password_derives_a_known_key() {
         let salt: [u8; 16] = std::array::from_fn(|i| i as u8);
-        let derived = derive_master_key(b"correct horse battery staple", &salt).expect("derive");
+        let mut derived = [0u8; 32];
+        assert!(derive_master_key(
+            b"correct horse battery staple",
+            &salt,
+            &mut derived
+        ));
         assert_eq!(
             derived,
             [
