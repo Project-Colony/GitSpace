@@ -1,6 +1,6 @@
 # Release and Installation Guide
 
-This document explains how to build GitSpace on each supported desktop platform and how to ship release artifacts with CI. GitSpace has no built-in updater: updates will be delivered through the Colony launcher.
+This document explains how to build GitSpace on each supported desktop platform and how releases are published. GitSpace has no built-in updater: updates will be delivered through the Colony launcher.
 
 ## Building locally
 
@@ -31,16 +31,22 @@ This document explains how to build GitSpace on each supported desktop platform 
    ```
 3. The binary is located at `target/release/gitspace.exe`.
 
-## CI release workflow
+## Releases
 
-The GitHub Actions workflow in `.github/workflows/release.yml` builds release artifacts for Linux, macOS, and Windows.
+Releases are never made by hand: no manual tags, no hand-edited versions.
 
-* **Triggers:** manual (`workflow_dispatch`) or a pushed tag that matches `v*`.
-* **Build:** runs `cargo build --release` on each OS, installing required Linux system packages before compilation.
-* **Packaging:** bundles the binary into platform-specific archives (tar.gz for Linux/macOS, zip for Windows).
-* **Artifacts:** uploads the archives as workflow artifacts named `gitspace-<os>` (one per platform) for distribution or attaching to a GitHub Release.
+1. Every merge to `main` runs `.github/workflows/release.yml`. Its release-please job reads the
+   conventional commit titles since the last release and opens, or updates, a release PR that
+   bumps the version in `Cargo.toml` and `Cargo.lock` and adds the entries to `CHANGELOG.md`.
+   The configuration is `release-please-config.json` and `.release-please-manifest.json`.
+2. Merging that release PR creates the `vX.Y.Z` tag and a draft release.
+3. The same run builds the tag on GitHub-hosted runners into four binaries:
+   `gitspace-linux`, `gitspace-windows.exe`, `gitspace-macos` (Apple Silicon) and
+   `gitspace-macos-x86` (Intel). Each one must answer `--version`, and `colony.json` is checked
+   against these names with `colony validate-manifest`.
+4. The shared `sign-and-publish` workflow of Project-Colony-Resources signs every binary
+   (`.sig`, `.meta`, `.meta.sig`, see [Code signing policy](../README.md#code-signing-policy)),
+   checks the result and publishes the release.
 
-To create a tagged release:
-1. Bump the crate version in `Cargo.toml` if needed.
-2. Tag the commit (e.g., `git tag v0.2.0 && git push origin v0.2.0`).
-3. Download the artifacts from the workflow run and publish them (or attach them to a GitHub Release page).
+If a run fails after the tag exists, the release stays a draft. Fix the cause, then rebuild that
+tag with `gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z`.

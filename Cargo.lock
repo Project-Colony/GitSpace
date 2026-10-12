@@ -3,38 +3,6 @@
 version = 4
 
 [[package]]
-name = "GitSpace"
-version = "0.1.0"
-dependencies = [
- "argon2",
- "base64 0.22.1",
- "chacha20poly1305",
- "chrono",
- "dirs",
- "eframe",
- "egui",
- "git2",
- "keyring",
- "oauth2",
- "open",
- "parking_lot",
- "poll-promise",
- "rand 0.8.8",
- "reqwest 0.13.5",
- "rfd",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "url",
- "webbrowser 1.2.4",
- "zeroize",
-]
-
-[[package]]
 name = "ab_glyph"
 version = "0.2.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1759,6 +1727,38 @@ dependencies = [
  "openssl-probe 0.1.6",
  "openssl-sys",
  "url",
+]
+
+[[package]]
+name = "gitspace"
+version = "0.1.0"
+dependencies = [
+ "argon2",
+ "base64 0.22.1",
+ "chacha20poly1305",
+ "chrono",
+ "dirs",
+ "eframe",
+ "egui",
+ "git2",
+ "keyring",
+ "oauth2",
+ "open",
+ "parking_lot",
+ "poll-promise",
+ "rand 0.8.8",
+ "reqwest 0.13.5",
+ "rfd",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "url",
+ "webbrowser 1.2.4",
+ "zeroize",
 ]
 
 [[package]]
