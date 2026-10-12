@@ -6,12 +6,13 @@
 use std::path::Path;
 
 use git2::build::CheckoutBuilder;
-use git2::{AnnotatedCommit, ErrorCode, FetchOptions, FetchPrune, PushOptions, Repository};
+use git2::{AnnotatedCommit, ErrorCode, FetchPrune, Repository};
 
 use crate::config::NetworkOptions;
 use crate::error::AppError;
 use crate::git::transport::{
-    configure_proxy_options, create_push_callbacks, create_remote_callbacks, validate_transport_url,
+    configure_fetch_options, configure_push_options, create_push_callbacks,
+    create_remote_callbacks, validate_transport_url,
 };
 
 /// Information about a configured remote.
@@ -67,15 +68,11 @@ pub fn fetch_remote<P: AsRef<Path>>(
     let mut remote = repo.find_remote(remote_name)?;
 
     // Validate URL against network policy
-    if let Ok(url) = remote.url() {
-        validate_transport_url(url, network)?;
-    }
+    let url = remote.url().unwrap_or_default().to_string();
+    validate_transport_url(&url, network)?;
 
-    // Create fetch options with callbacks
     let callbacks = create_remote_callbacks(token, network.network_timeout_secs);
-    let mut fetch = FetchOptions::new();
-    fetch.remote_callbacks(callbacks);
-    fetch.proxy_options(configure_proxy_options(network));
+    let mut fetch = configure_fetch_options(network, &url, callbacks);
 
     remote.fetch(&[] as &[&str], Some(&mut fetch), None)?;
     Ok(())
@@ -146,20 +143,17 @@ pub fn push_branch<P: AsRef<Path>>(
     let mut remote = repo.find_remote(remote_name)?;
 
     // Validate URL against network policy
-    if let Some(url) = remote
+    let url = remote
         .pushurl()
         .ok()
         .flatten()
         .or_else(|| remote.url().ok())
-    {
-        validate_transport_url(url, network)?;
-    }
+        .unwrap_or_default()
+        .to_string();
+    validate_transport_url(&url, network)?;
 
-    // Create push options with callbacks
     let callbacks = create_push_callbacks(token);
-    let mut push_options = PushOptions::new();
-    push_options.remote_callbacks(callbacks);
-    push_options.proxy_options(configure_proxy_options(network));
+    let mut push_options = configure_push_options(network, &url, callbacks);
 
     let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
     remote.push(&[refspec], Some(&mut push_options))?;
@@ -183,15 +177,11 @@ pub fn prune_remotes<P: AsRef<Path>>(
     let mut remote = repo.find_remote(remote_name)?;
 
     // Validate URL against network policy
-    if let Ok(url) = remote.url() {
-        validate_transport_url(url, network)?;
-    }
+    let url = remote.url().unwrap_or_default().to_string();
+    validate_transport_url(&url, network)?;
 
-    // Create fetch options with callbacks and prune enabled
     let callbacks = create_remote_callbacks(token, network.network_timeout_secs);
-    let mut fetch = FetchOptions::new();
-    fetch.remote_callbacks(callbacks);
-    fetch.proxy_options(configure_proxy_options(network));
+    let mut fetch = configure_fetch_options(network, &url, callbacks);
     fetch.prune(FetchPrune::On);
 
     remote.fetch(&[] as &[&str], Some(&mut fetch), None)?;

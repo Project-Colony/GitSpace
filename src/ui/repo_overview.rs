@@ -1,3 +1,6 @@
+use std::ffi::OsStr;
+use std::io::ErrorKind;
+use std::path::Path;
 use std::process::Command;
 
 use eframe::egui::{self, Align, Layout, Margin, RichText, Ui};
@@ -464,64 +467,22 @@ impl RepoOverviewPanel {
     }
 
     fn open_terminal(&self, repo: &RepoContext) -> Result<String, String> {
-        #[cfg(target_os = "windows")]
-        {
-            Command::new("cmd")
-                .args(["/K", "cd", "/d", &repo.path])
-                .spawn()
-                .map_err(|err| err.to_string())?;
-            Ok("Terminal opened".to_string())
+        let path = Path::new(&repo.path);
+        if !path.is_dir() {
+            return Err(format!("Repository folder not found: {}", repo.path));
         }
 
-        #[cfg(target_os = "macos")]
-        {
-            Command::new("open")
-                .args(["-a", "Terminal", &repo.path])
-                .spawn()
-                .map_err(|err| err.to_string())?;
-            Ok("Terminal opened".to_string())
-        }
-
-        #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-        {
-            let xterm_command = format!("cd '{}' && exec bash", repo.path);
-            let candidates: Vec<(&str, Vec<String>)> = vec![
-                ("x-terminal-emulator", Vec::new()),
-                (
-                    "gnome-terminal",
-                    vec!["--working-directory".into(), repo.path.clone()],
-                ),
-                ("konsole", vec!["--workdir".into(), repo.path.clone()]),
-                (
-                    "xfce4-terminal",
-                    vec!["--working-directory".into(), repo.path.clone()],
-                ),
-                (
-                    "xterm",
-                    vec!["-e".into(), "bash".into(), "-lc".into(), xterm_command],
-                ),
-                (
-                    "alacritty",
-                    vec!["--working-directory".into(), repo.path.clone()],
-                ),
-                ("kitty", vec!["--directory".into(), repo.path.clone()]),
-                (
-                    "wezterm",
-                    vec!["start".into(), "--cwd".into(), repo.path.clone()],
-                ),
-            ];
-
-            for (terminal, args) in candidates {
-                let mut command = Command::new(terminal);
-                command.args(args);
-                command.current_dir(&repo.path);
-                if command.spawn().is_ok() {
-                    return Ok("Terminal opened".to_string());
-                }
+        let mut error = None;
+        for mut command in terminal_commands(path) {
+            match command.spawn() {
+                Ok(_) => return Ok("Terminal opened".to_string()),
+                Err(err) => error = Some(err),
             }
-
-            Err("No supported terminal emulator found on PATH".to_string())
         }
+        Err(match error {
+            Some(err) if err.kind() != ErrorKind::NotFound => err.to_string(),
+            _ => "No supported terminal emulator found on PATH".to_string(),
+        })
     }
 
     fn open_file_explorer(&self, repo: &RepoContext) -> Result<String, String> {
@@ -565,8 +526,71 @@ struct RemoteSelection {
     branch: Option<String>,
 }
 
+/// The terminal emulators to try, in order, each opening in `path`.
+///
+/// The path is only ever the working directory or a whole argument, never part of a shell
+/// command line, so characters such as `&`, `'` or spaces in it cannot run anything.
+fn terminal_commands(path: &Path) -> Vec<Command> {
+    #[cfg(target_os = "windows")]
+    let candidates: Vec<(&str, Vec<&OsStr>)> = vec![("cmd", Vec::new())];
+
+    #[cfg(target_os = "macos")]
+    let candidates: Vec<(&str, Vec<&OsStr>)> = vec![(
+        "open",
+        vec!["-a".as_ref(), "Terminal".as_ref(), path.as_os_str()],
+    )];
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let dir = path.as_os_str();
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let candidates: Vec<(&str, Vec<&OsStr>)> = vec![
+        ("x-terminal-emulator", Vec::new()),
+        ("gnome-terminal", vec!["--working-directory".as_ref(), dir]),
+        ("konsole", vec!["--workdir".as_ref(), dir]),
+        ("xfce4-terminal", vec!["--working-directory".as_ref(), dir]),
+        ("xterm", Vec::new()),
+        ("alacritty", vec!["--working-directory".as_ref(), dir]),
+        ("kitty", vec!["--directory".as_ref(), dir]),
+        ("wezterm", vec!["start".as_ref(), "--cwd".as_ref(), dir]),
+    ];
+
+    candidates
+        .into_iter()
+        .map(|(program, args)| {
+            let mut command = Command::new(program);
+            command.args(args).current_dir(path);
+            command
+        })
+        .collect()
+}
+
 fn split_upstream(upstream: &str) -> Option<(&str, &str)> {
     let (remote, branch) = upstream.split_once('/')?;
 
     Some((remote, branch))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_commands_never_put_the_path_in_a_command_line() {
+        for path in ["/tmp/R&D/it's here", "/tmp/a;b $(touch x)", r"C:\R&D\x y"] {
+            let path = Path::new(path);
+            let commands = terminal_commands(path);
+            assert!(!commands.is_empty());
+            for command in &commands {
+                assert_eq!(command.get_current_dir(), Some(path));
+                for arg in command.get_args() {
+                    assert!(
+                        arg == path.as_os_str()
+                            || !arg.to_string_lossy().contains(&*path.to_string_lossy()),
+                        "{:?} embeds the path in {arg:?}",
+                        command.get_program()
+                    );
+                }
+            }
+        }
+    }
 }

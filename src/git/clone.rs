@@ -4,12 +4,11 @@ use git2::build::RepoBuilder;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
 
 use crate::config::NetworkOptions;
 use crate::error::AppError;
 use crate::git::transport::{
-    configure_proxy_options, create_remote_callbacks, validate_transport_url,
+    configure_fetch_options, create_remote_callbacks, validate_transport_url, StallTimer,
 };
 
 /// Request parameters for cloning a repository.
@@ -41,7 +40,7 @@ pub struct CloneProgress {
 /// Returns an error if:
 /// - The URL violates network policy (SSH disabled, HTTPS required, etc.)
 /// - The clone operation fails
-/// - The operation times out
+/// - No data arrives for `network_timeout_secs`
 pub fn clone_repository(
     request: CloneRequest,
     mut on_progress: impl FnMut(CloneProgress) + Send + 'static,
@@ -49,15 +48,15 @@ pub fn clone_repository(
     // Validate URL against network policy
     validate_transport_url(&request.url, &request.network)?;
 
-    let start = Instant::now();
     let timeout_secs = request.network.network_timeout_secs;
+    let mut stall = StallTimer::new(timeout_secs);
     let timed_out = Arc::new(AtomicBool::new(false));
     let timed_out_clone = Arc::clone(&timed_out);
 
     // Create callbacks with credential handling
     let mut callbacks = create_remote_callbacks(request.token.clone(), timeout_secs);
 
-    // Custom progress callback with timeout check
+    // Custom progress callback with stall check
     callbacks.transfer_progress(move |stats| {
         on_progress(CloneProgress {
             received_objects: stats.received_objects(),
@@ -67,18 +66,14 @@ pub fn clone_repository(
             received_bytes: stats.received_bytes(),
         });
 
-        // Check timeout
-        if timeout_secs > 0 && start.elapsed().as_secs() >= timeout_secs {
-            timed_out_clone.store(true, Ordering::SeqCst);
-            return false;
+        if stall.keep_going(&stats) {
+            return true;
         }
-        true
+        timed_out_clone.store(true, Ordering::SeqCst);
+        false
     });
 
-    // Configure fetch options with proxy
-    let mut fetch = git2::FetchOptions::new();
-    fetch.proxy_options(configure_proxy_options(&request.network));
-    fetch.remote_callbacks(callbacks);
+    let fetch = configure_fetch_options(&request.network, &request.url, callbacks);
 
     // Build and execute clone
     let mut builder = RepoBuilder::new();
@@ -88,7 +83,9 @@ pub fn clone_repository(
         .clone(&request.url, &request.destination)
         .map_err(|err| {
             if timed_out.load(Ordering::SeqCst) {
-                AppError::Network("Clone operation timed out".to_string())
+                AppError::Network(format!(
+                    "Clone stopped: no data arrived for {timeout_secs} seconds"
+                ))
             } else {
                 AppError::from(err)
             }
