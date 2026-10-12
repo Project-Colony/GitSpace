@@ -1,26 +1,42 @@
 //! Authentication panel UI with OAuth and token-based login.
 
+use std::sync::mpsc::{self, Sender};
+use std::time::Duration;
+
 use eframe::egui::{self, RichText, TextEdit, Ui};
 use poll_promise::Promise;
 
-use crate::auth::{AuthManager, OAuthProvider, OAuthResult};
+use crate::auth::{AuthManager, DeviceFlow, OAuthProvider, OAuthResult};
 use crate::ui::theme::{SharedTheme, Theme};
 
-/// OAuth client IDs for providers.
-/// Users can configure these via environment variables or in the UI.
+/// OAuth client IDs built in at compile time. A client ID entered in the UI takes precedence.
 ///
-/// GitHub: https://github.com/settings/developers
-/// GitLab: https://gitlab.com/-/profile/applications
-///
-/// Set callback URL to: http://127.0.0.1:9876/callback
+/// GitHub (device flow): an OAuth app at https://github.com/settings/developers with
+/// "Enable Device Flow" ticked; the callback URL is not used.
+/// GitLab (PKCE): an application at https://gitlab.com/-/user_settings/applications with
+/// "Confidential" unticked and the redirect URI http://127.0.0.1:9876/callback.
 const GITHUB_CLIENT_ID: Option<&str> = option_env!("GITSPACE_GITHUB_CLIENT_ID");
 const GITLAB_CLIENT_ID: Option<&str> = option_env!("GITSPACE_GITLAB_CLIENT_ID");
+
+/// A GitHub sign-in in progress (device flow).
+enum GithubSignIn {
+    /// Asking GitHub for a user code.
+    Requesting(Promise<Result<Box<DeviceFlow>, String>>),
+    /// Waiting for the user to enter the code on GitHub.
+    Waiting {
+        user_code: String,
+        verification_uri: String,
+        result: Promise<OAuthResult>,
+        /// Dropping this sender stops the polling thread.
+        cancel: Sender<()>,
+    },
+}
 
 pub struct AuthPanel {
     theme: SharedTheme,
     auth: AuthManager,
     // OAuth state
-    github_oauth_promise: Option<Promise<OAuthResult>>,
+    github_sign_in: Option<GithubSignIn>,
     gitlab_oauth_promise: Option<Promise<OAuthResult>>,
     github_status: Option<String>,
     gitlab_status: Option<String>,
@@ -39,7 +55,7 @@ impl AuthPanel {
         Self {
             theme,
             auth,
-            github_oauth_promise: None,
+            github_sign_in: None,
             gitlab_oauth_promise: None,
             github_status: None,
             gitlab_status: None,
@@ -62,8 +78,13 @@ impl AuthPanel {
 
     pub fn ui(&mut self, ui: &mut Ui) {
         // Poll async operations
-        self.poll_oauth_promises();
+        self.poll_github_sign_in();
+        self.poll_gitlab_oauth();
         self.poll_manual_validation();
+        if self.github_sign_in.is_some() || self.gitlab_oauth_promise.is_some() {
+            // Show the code and the result without waiting for the next input event.
+            ui.ctx().request_repaint_after(Duration::from_millis(250));
+        }
 
         // Clone theme for layout to avoid borrow conflicts
         let theme = self.theme.clone();
@@ -163,15 +184,18 @@ impl AuthPanel {
             AuthSection::provider("Login with OAuth", '\u{f084}'),
             |ui| {
                 ui.label(
-                    RichText::new("Click to authenticate with your Git provider. A browser window will open.")
-                        .color(layout.theme.palette.text_secondary),
+                    RichText::new(
+                        "GitHub gives you a code to enter on github.com. GitLab opens a browser window.",
+                    )
+                    .color(layout.theme.palette.text_secondary),
                 );
                 ui.add_space(layout.spacing.md);
 
                 ui.horizontal(|ui| {
                     // GitHub OAuth button
-                    let github_enabled = self.github_oauth_promise.is_none()
-                        && (GITHUB_CLIENT_ID.is_some() || !self.custom_github_client_id.is_empty());
+                    let github_enabled = self.github_sign_in.is_none()
+                        && (GITHUB_CLIENT_ID.is_some()
+                            || !self.custom_github_client_id.trim().is_empty());
 
                     let github_button = egui::Button::new(
                         RichText::new("\u{f408} Login with GitHub")
@@ -188,7 +212,8 @@ impl AuthPanel {
 
                     // GitLab OAuth button
                     let gitlab_enabled = self.gitlab_oauth_promise.is_none()
-                        && (GITLAB_CLIENT_ID.is_some() || !self.custom_gitlab_client_id.is_empty());
+                        && (GITLAB_CLIENT_ID.is_some()
+                            || !self.custom_gitlab_client_id.trim().is_empty());
 
                     let gitlab_button = egui::Button::new(
                         RichText::new("\u{f296} Login with GitLab")
@@ -201,6 +226,8 @@ impl AuthPanel {
                         self.start_gitlab_oauth();
                     }
                 });
+
+                self.github_device_code(ui, layout);
 
                 // Status messages
                 if let Some(status) = &self.github_status {
@@ -217,8 +244,9 @@ impl AuthPanel {
                 ui.collapsing("Configure OAuth Apps", |ui| {
                     ui.label(
                         RichText::new(
-                            "To use OAuth, register an OAuth app with your provider and enter the Client ID.\n\
-                             Set the callback URL to: http://127.0.0.1:9876/callback"
+                            "To use OAuth, register an OAuth app with your provider and enter its Client ID.\n\
+                             GitHub: tick \"Enable Device Flow\" in the app settings; the callback URL is not used.\n\
+                             GitLab: untick \"Confidential\" and set the redirect URI to http://127.0.0.1:9876/callback"
                         )
                         .color(layout.theme.palette.text_secondary)
                         .small(),
@@ -311,9 +339,78 @@ impl AuthPanel {
         });
     }
 
+    /// Shows the GitHub user code with copy, open and cancel actions while a sign-in runs.
+    fn github_device_code(&mut self, ui: &mut Ui, layout: &AuthLayout<'_>) {
+        let Some(sign_in) = &self.github_sign_in else {
+            return;
+        };
+        let mut cancel = false;
+        let mut open_error = None;
+
+        ui.add_space(layout.spacing.md);
+        match sign_in {
+            GithubSignIn::Requesting(_) => {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(
+                        RichText::new("Asking GitHub for a sign-in code...")
+                            .color(layout.theme.palette.text_secondary),
+                    );
+                    cancel = ui.button("Cancel").clicked();
+                });
+            }
+            GithubSignIn::Waiting {
+                user_code,
+                verification_uri,
+                ..
+            } => {
+                ui.label(
+                    RichText::new(format!("Enter this code at {verification_uri}:"))
+                        .color(layout.theme.palette.text_secondary),
+                );
+                ui.add_space(layout.spacing.xs);
+                ui.label(
+                    RichText::new(user_code.as_str())
+                        .monospace()
+                        .size(layout.theme.typography.heading)
+                        .strong()
+                        .color(layout.theme.palette.text_primary),
+                );
+                ui.add_space(layout.spacing.xs);
+                ui.horizontal(|ui| {
+                    if ui.button("Copy code").clicked() {
+                        ui.ctx().copy_text(user_code.clone());
+                    }
+                    if ui.button("Open in browser").clicked() {
+                        if let Err(err) = webbrowser::open(verification_uri) {
+                            open_error = Some(format!("Failed to open browser: {err}"));
+                        }
+                    }
+                    cancel = ui.button("Cancel").clicked();
+                });
+                ui.add_space(layout.spacing.xs);
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(
+                        RichText::new("Waiting for you to approve GitSpace on GitHub...")
+                            .color(layout.theme.palette.text_secondary),
+                    );
+                });
+            }
+        }
+
+        if cancel {
+            // Dropping the sign-in drops its cancel sender, which stops the polling thread.
+            self.github_sign_in = None;
+            self.github_status = Some("Login cancelled".to_string());
+        } else if open_error.is_some() {
+            self.github_status = open_error;
+        }
+    }
+
     fn start_github_oauth(&mut self) {
-        let client_id = if !self.custom_github_client_id.is_empty() {
-            self.custom_github_client_id.clone()
+        let client_id = if !self.custom_github_client_id.trim().is_empty() {
+            self.custom_github_client_id.trim().to_string()
         } else if let Some(id) = GITHUB_CLIENT_ID {
             id.to_string()
         } else {
@@ -322,17 +419,16 @@ impl AuthPanel {
         };
 
         let provider = OAuthProvider::github(&client_id);
-        let auth = self.auth.clone();
-
-        self.github_status = Some("Opening browser for login...".to_string());
-        self.github_oauth_promise = Some(Promise::spawn_thread("github_oauth", move || {
-            auth.start_oauth(provider)
-        }));
+        self.github_status = None;
+        self.github_sign_in = Some(GithubSignIn::Requesting(Promise::spawn_thread(
+            "github_device_code",
+            move || DeviceFlow::start(provider).map(Box::new),
+        )));
     }
 
     fn start_gitlab_oauth(&mut self) {
-        let client_id = if !self.custom_gitlab_client_id.is_empty() {
-            self.custom_gitlab_client_id.clone()
+        let client_id = if !self.custom_gitlab_client_id.trim().is_empty() {
+            self.custom_gitlab_client_id.trim().to_string()
         } else if let Some(id) = GITLAB_CLIENT_ID {
             id.to_string()
         } else {
@@ -349,33 +445,46 @@ impl AuthPanel {
         }));
     }
 
-    fn poll_oauth_promises(&mut self) {
-        // Poll GitHub OAuth
-        let github_result = self
-            .github_oauth_promise
-            .as_ref()
-            .and_then(|p| p.ready().cloned());
-
-        if let Some(result) = github_result {
-            self.github_oauth_promise = None;
-            match result {
-                OAuthResult::Success(token) => {
-                    if let Err(e) = self.auth.store_oauth_token(&token) {
-                        self.github_status = Some(format!("Failed to store token: {}", e));
-                    } else {
-                        self.github_status = Some("Successfully connected!".to_string());
-                    }
+    fn poll_github_sign_in(&mut self) {
+        match self.github_sign_in.take() {
+            None => {}
+            Some(GithubSignIn::Requesting(promise)) => match promise.try_take() {
+                Ok(Ok(flow)) => {
+                    let (cancel, cancelled) = mpsc::channel();
+                    let user_code = flow.user_code().to_string();
+                    let verification_uri = flow.verification_uri().to_string();
+                    let result =
+                        Promise::spawn_thread("github_device_flow", move || flow.wait(&cancelled));
+                    self.github_sign_in = Some(GithubSignIn::Waiting {
+                        user_code,
+                        verification_uri,
+                        result,
+                        cancel,
+                    });
                 }
-                OAuthResult::Cancelled => {
-                    self.github_status = Some("Login cancelled".to_string());
+                Ok(Err(e)) => self.github_status = Some(format!("Login failed: {}", e)),
+                Err(promise) => self.github_sign_in = Some(GithubSignIn::Requesting(promise)),
+            },
+            Some(GithubSignIn::Waiting {
+                user_code,
+                verification_uri,
+                result,
+                cancel,
+            }) => match result.try_take() {
+                Ok(result) => self.github_status = Some(self.finish_oauth(result)),
+                Err(result) => {
+                    self.github_sign_in = Some(GithubSignIn::Waiting {
+                        user_code,
+                        verification_uri,
+                        result,
+                        cancel,
+                    })
                 }
-                OAuthResult::Error(e) => {
-                    self.github_status = Some(format!("Login failed: {}", e));
-                }
-            }
+            },
         }
+    }
 
-        // Poll GitLab OAuth
+    fn poll_gitlab_oauth(&mut self) {
         let gitlab_result = self
             .gitlab_oauth_promise
             .as_ref()
@@ -383,21 +492,19 @@ impl AuthPanel {
 
         if let Some(result) = gitlab_result {
             self.gitlab_oauth_promise = None;
-            match result {
-                OAuthResult::Success(token) => {
-                    if let Err(e) = self.auth.store_oauth_token(&token) {
-                        self.gitlab_status = Some(format!("Failed to store token: {}", e));
-                    } else {
-                        self.gitlab_status = Some("Successfully connected!".to_string());
-                    }
-                }
-                OAuthResult::Cancelled => {
-                    self.gitlab_status = Some("Login cancelled".to_string());
-                }
-                OAuthResult::Error(e) => {
-                    self.gitlab_status = Some(format!("Login failed: {}", e));
-                }
-            }
+            self.gitlab_status = Some(self.finish_oauth(result));
+        }
+    }
+
+    /// Stores the token of a finished OAuth sign-in and returns the status to show.
+    fn finish_oauth(&self, result: OAuthResult) -> String {
+        match result {
+            OAuthResult::Success(token) => match self.auth.store_oauth_token(&token) {
+                Ok(()) => "Successfully connected!".to_string(),
+                Err(e) => format!("Failed to store token: {}", e),
+            },
+            OAuthResult::Cancelled => "Login cancelled".to_string(),
+            OAuthResult::Error(e) => format!("Login failed: {}", e),
         }
     }
 

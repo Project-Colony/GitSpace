@@ -25,7 +25,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::config::write_atomic;
 
-pub use oauth::{OAuthFlow, OAuthProvider, OAuthResult, OAuthToken};
+pub use oauth::{DeviceFlow, OAuthFlow, OAuthProvider, OAuthResult, OAuthToken};
 
 const SERVICE_NAME: &str = "gitspace";
 const TOKEN_FILE_NAME: &str = "tokens.enc";
@@ -186,7 +186,8 @@ impl AuthManager {
         self.get_oauth_token(host).is_some()
     }
 
-    /// Starts an OAuth flow for the given provider.
+    /// Starts an authorization code flow with PKCE for the given provider (GitLab).
+    /// GitHub signs in with [`DeviceFlow`] instead.
     ///
     /// This will open the browser for authentication and block until complete.
     pub fn start_oauth(&self, provider: OAuthProvider) -> OAuthResult {
