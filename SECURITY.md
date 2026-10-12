@@ -22,8 +22,10 @@ on your behalf. Reports of particular interest:
 
 - a token sent to a host it does not belong to, or over plain HTTP;
 - a token readable from disk or from the logs by anyone but you;
-- the OAuth sign-in on the loopback callback (`127.0.0.1`, ports 9876 to 9886)
-  accepting a forged or replayed response;
+- the GitLab OAuth sign-in on the loopback callback (`127.0.0.1`, ports 9876
+  to 9886) accepting a forged or replayed response;
+- the GitHub device flow sign-in sending you to a verification page that is not
+  HTTPS or not GitHub's, or accepting a token from a forged poll answer;
 - a repository, remote or path that makes GitSpace run a command or write a
   file outside what you asked for;
 - a release asset whose signature or `.meta` sidecar does not verify (see

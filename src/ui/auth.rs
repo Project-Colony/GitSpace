@@ -276,7 +276,7 @@ impl AuthPanel {
                     if GITHUB_CLIENT_ID.is_some() || GITLAB_CLIENT_ID.is_some() {
                         ui.add_space(layout.spacing.sm);
                         ui.label(
-                            RichText::new("Note: Built-in OAuth credentials are configured via GITSPACE_GITHUB_CLIENT_ID / GITSPACE_GITLAB_CLIENT_ID environment variables.")
+                            RichText::new("Note: this build has a built-in Client ID (GITSPACE_GITHUB_CLIENT_ID / GITSPACE_GITLAB_CLIENT_ID). It is used instead of the one entered here.")
                                 .color(layout.theme.palette.text_secondary)
                                 .small(),
                         );
@@ -409,10 +409,10 @@ impl AuthPanel {
     }
 
     fn start_github_oauth(&mut self) {
-        let client_id = if !self.custom_github_client_id.trim().is_empty() {
-            self.custom_github_client_id.trim().to_string()
-        } else if let Some(id) = GITHUB_CLIENT_ID {
+        let client_id = if let Some(id) = GITHUB_CLIENT_ID {
             id.to_string()
+        } else if !self.custom_github_client_id.trim().is_empty() {
+            self.custom_github_client_id.trim().to_string()
         } else {
             self.github_status = Some("Please configure a GitHub Client ID first".to_string());
             return;
@@ -427,10 +427,10 @@ impl AuthPanel {
     }
 
     fn start_gitlab_oauth(&mut self) {
-        let client_id = if !self.custom_gitlab_client_id.trim().is_empty() {
-            self.custom_gitlab_client_id.trim().to_string()
-        } else if let Some(id) = GITLAB_CLIENT_ID {
+        let client_id = if let Some(id) = GITLAB_CLIENT_ID {
             id.to_string()
+        } else if !self.custom_gitlab_client_id.trim().is_empty() {
+            self.custom_gitlab_client_id.trim().to_string()
         } else {
             self.gitlab_status = Some("Please configure a GitLab Client ID first".to_string());
             return;

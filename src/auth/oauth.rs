@@ -436,8 +436,7 @@ impl DeviceFlow {
                         error = %err,
                         "Token endpoint unreachable, retrying"
                     );
-                    // RFC 8628 section 3.5: back off while the connection fails.
-                    DevicePoll::Retry(interval.max((interval * 2).min(MAX_POLL_BACKOFF)))
+                    DevicePoll::Retry(backoff(interval))
                 }
             };
             match poll {
@@ -511,11 +510,19 @@ fn next_device_poll(
         Ok(response) => DevicePoll::Done(OAuthResult::Success(OAuthToken::from_response(
             &response, provider,
         ))),
+        // A rate limit or a server or proxy error page is passing: ask again later.
+        Err(_) if status == 429 || status >= 500 => DevicePoll::Retry(backoff(interval)),
         Err(_) => DevicePoll::Done(OAuthResult::Error(format!(
             "Unexpected answer from {} (HTTP {status})",
             provider.name
         ))),
     }
+}
+
+/// Doubles the poll interval, up to [`MAX_POLL_BACKOFF`], while the token endpoint cannot answer
+/// (RFC 8628 section 3.5).
+fn backoff(interval: Duration) -> Duration {
+    interval.max((interval * 2).min(MAX_POLL_BACKOFF))
 }
 
 /// Builds the HTTP client for OAuth requests.
@@ -756,8 +763,17 @@ mod tests {
 
     #[test]
     fn device_poll_reports_an_unexpected_answer() {
-        let result = poll(502, "<html>Bad gateway</html>");
-        assert!(matches!(result, DevicePoll::Done(OAuthResult::Error(e)) if e.contains("502")));
+        let result = poll(404, "<html>Not found</html>");
+        assert!(matches!(result, DevicePoll::Done(OAuthResult::Error(e)) if e.contains("404")));
+    }
+
+    #[test]
+    fn device_poll_backs_off_on_a_rate_limit_or_server_error() {
+        for status in [429, 502, 503] {
+            let result = poll(status, "<html>Bad gateway</html>");
+            assert!(matches!(result, DevicePoll::Retry(i) if i == INTERVAL * 2));
+        }
+        assert_eq!(backoff(Duration::from_secs(40)), MAX_POLL_BACKOFF);
     }
 
     #[test]
