@@ -10,6 +10,17 @@ mod ui;
 use ui::app::GitSpaceApp;
 
 fn main() {
+    // Answered before logging starts and before any window opens: the release
+    // workflow smoke-tests every built binary with `--version` on runners that
+    // have no display.
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == "--version" || arg == "-V")
+    {
+        println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
     logging::init_tracing();
     log_dev_feature_flags();
 
