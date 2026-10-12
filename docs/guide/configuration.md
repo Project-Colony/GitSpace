@@ -1,4 +1,4 @@
-# Settings and saved tokens
+# Settings, tokens and logs
 
 GitSpace keeps its files in a `gitspace` folder inside the system configuration directory:
 
@@ -57,3 +57,22 @@ The network preferences apply to clone, fetch, pull and push:
   never sent over SSH.
 - **HTTPS remotes** use the saved token for the host. A remote reached over plain `http://`
   never receives the token.
+- **Auto-fetch**: off by default. When on, GitSpace fetches the remote of the open repository
+  every 1, 5 or 15 minutes, or at an interval you enter, with the same proxy, timeout and
+  token rules as a fetch you start yourself.
+
+## Logs
+
+GitSpace writes JSON logs to a `gitspace/logs` folder inside the system data directory
+(`~/.local/share/gitspace/logs/` on Linux, `~/Library/Application Support/gitspace/logs/` on
+macOS, `%APPDATA%\gitspace\logs\` on Windows), one file per day. Files past the retention
+count set in Preferences are deleted at startup. Logs never contain a token.
+
+## Environment variables
+
+| Variable | Effect |
+|---|---|
+| `GITSPACE_LOG` | the log filter, in [`tracing` `EnvFilter`](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html) syntax. The default is `gitspace=info,info`; `GITSPACE_LOG=gitspace=debug` shows GitSpace's own debug messages |
+| `GITSPACE_TOKEN_MASTER_PASSWORD` | a password mixed into the key that encrypts `tokens.enc` (Argon2id). It must be set to the same value every time GitSpace starts, or saved tokens cannot be decrypted |
+| `GITSPACE_PROFILE_UI` | when set, logs how long each part of the interface takes to draw, for profiling |
+| `GITSPACE_GITHUB_CLIENT_ID`, `GITSPACE_GITLAB_CLIENT_ID` | read when GitSpace is **built**, not when it runs: the OAuth client IDs compiled into the binary. Without them, OAuth sign-in asks for a client ID in **Configure OAuth Apps** on the Auth tab |
