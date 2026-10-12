@@ -88,9 +88,10 @@ GitSpace sends no telemetry, no analytics and no crash reports.
 | Token check | sent | when you save a personal access token: the token to `https://api.github.com/user`, `https://gitlab.com/api/v4/user`, or the matching API of a self-hosted GitHub or GitLab host you entered. A self-hosted host must use `https://`; an `http://` host is refused, so a token never travels in clear text |
 | OAuth sign-in | sent | when you choose to sign in with GitHub or GitLab: your browser opens `github.com` or `gitlab.com`, which sends the authorization code back to GitSpace on `127.0.0.1` (the first free port from 9876 to 9886), and GitSpace exchanges it for a token at the same site, with PKCE. It needs the client ID of an OAuth app you register yourself; a personal access token works without one |
 | Repository search | sent | when you search in the Clone dialog: the search to `https://api.github.com` (`/user`, `/user/repos`, `/users/<name>/repos`, `/orgs/<name>/repos`) or `https://gitlab.com/api/v4/projects`, with your token for that site when one is saved |
-| Git traffic | sent | clone, fetch, pull and push talk to the remote of the repository, only when you start them. Over HTTPS the token saved for that host is sent as the password; a plain-HTTP remote never receives a token |
+| Git traffic | sent | clone, fetch, pull and push talk to the remote of the repository, only when you start them. Over HTTPS the token saved for that host is sent as the password; a plain-HTTP remote never receives a token. Over SSH, GitSpace signs in with the keys in ssh-agent or `~/.ssh/id_ed25519`, `id_ecdsa` and `id_rsa`, and never sends a token |
 
-When a proxy is set in Preferences, the repository search goes through it.
+When a proxy is set in Preferences, the repository search and HTTP(S) git traffic
+go through it; SSH remotes never do.
 GitSpace connects to no server except the ones in this table, and only for the
 action named there. Their privacy policies:
 [GitHub](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement),
