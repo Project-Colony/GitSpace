@@ -14,9 +14,6 @@ use base64::{engine::general_purpose, Engine as _};
 use chacha20poly1305::aead::{Aead, Generate, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce};
 use keyring::Entry;
-use rand::rand_core::UnwrapErr;
-use rand::rngs::SysRng;
-use rand::Rng;
 use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, USER_AGENT};
 use serde::{Deserialize, Serialize};
@@ -532,15 +529,13 @@ fn load_or_create_local_key() -> [u8; 32] {
             // encrypted with it unrecoverable. Use a key for this session only: the saved
             // tokens then fail to decrypt and are left untouched.
             error!(target: "gitspace::auth", error = %err, "failed to read local key file");
-            let mut key = [0u8; 32];
-            UnwrapErr(SysRng).fill_bytes(&mut key);
-            key
+            Generate::generate()
         }
     };
 
     // If master password is set, derive additional key material for defense in depth
     if let Ok(master_password) = std::env::var(MASTER_PASSWORD_ENV) {
-        let salt = load_or_create_secret(TOKEN_SALT_FILE, 16);
+        let salt: [u8; 16] = load_or_create_secret(TOKEN_SALT_FILE);
         let mut derived = [0u8; 32];
         if derive_master_key(master_password.as_bytes(), &salt, &mut derived) {
             // XOR the derived key with the stored key for defense in depth
@@ -568,8 +563,7 @@ fn derive_master_key(password: &[u8], salt: &[u8], out: &mut [u8; 32]) -> bool {
 
 /// Generates a cryptographically secure random key and stores it with restricted permissions.
 fn generate_and_store_key(path: &PathBuf) -> [u8; 32] {
-    let mut key = [0u8; 32];
-    UnwrapErr(SysRng).fill_bytes(&mut key);
+    let key: [u8; 32] = Generate::generate();
 
     if let Some(parent) = path.parent() {
         if let Err(err) = fs::create_dir_all(parent) {
@@ -611,8 +605,7 @@ fn load_or_create_keyring_key() -> Result<[u8; 32], String> {
             Ok(key)
         }
         Err(keyring::Error::NoEntry) => {
-            let mut key = [0u8; 32];
-            UnwrapErr(SysRng).fill_bytes(&mut key);
+            let key: [u8; 32] = Generate::generate();
             let encoded = general_purpose::STANDARD.encode(key);
             entry
                 .set_password(&encoded)
@@ -623,16 +616,15 @@ fn load_or_create_keyring_key() -> Result<[u8; 32], String> {
     }
 }
 
-fn load_or_create_secret(name: &str, len: usize) -> Vec<u8> {
+fn load_or_create_secret<const N: usize>(name: &str) -> [u8; N] {
     let path = dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(SERVICE_NAME)
         .join(name);
 
-    let mut secret = vec![0u8; len];
-    UnwrapErr(SysRng).fill_bytes(&mut secret);
-    match fs::read(&path) {
-        Ok(bytes) if bytes.len() == len => return bytes,
+    let secret: [u8; N] = Generate::generate();
+    match fs::read(&path).map(<[u8; N]>::try_from) {
+        Ok(Ok(saved)) => return saved,
         Err(err) if err.kind() != ErrorKind::NotFound => {
             // Same as the local key: never replace a secret that exists but cannot be read.
             warn!(target: "gitspace::auth", error = %err, path = %path.display(), "unable to read derived-key secret; using one for this session only");
@@ -643,7 +635,7 @@ fn load_or_create_secret(name: &str, len: usize) -> Vec<u8> {
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
-    if let Err(err) = fs::write(&path, &secret) {
+    if let Err(err) = fs::write(&path, secret) {
         warn!(target: "gitspace::auth", error = %err, path = %path.display(), "unable to persist derived-key secret");
     } else {
         // Set restrictive permissions (owner read/write only)
@@ -786,18 +778,15 @@ mod tests {
     #[test]
     fn master_password_derives_a_known_key() {
         let salt: [u8; 16] = std::array::from_fn(|i| i as u8);
+        let password: [u8; 20] = std::array::from_fn(|i| b'a' + i as u8);
         let mut derived = [0u8; 32];
-        assert!(derive_master_key(
-            b"correct horse battery staple",
-            &salt,
-            &mut derived
-        ));
+        assert!(derive_master_key(&password, &salt, &mut derived));
         assert_eq!(
             derived,
             [
-                0x0d, 0x1a, 0x3c, 0x65, 0x23, 0xc8, 0xf0, 0x6e, 0x4e, 0x0a, 0xf9, 0xc5, 0x15, 0xaa,
-                0x5b, 0x54, 0x48, 0xcf, 0xeb, 0xd6, 0x83, 0x8f, 0x2d, 0x52, 0xc3, 0xd8, 0xb6, 0xef,
-                0x8d, 0xdc, 0x3c, 0x2e,
+                0xb5, 0xdd, 0x0e, 0x57, 0xa7, 0x51, 0xbf, 0xd0, 0x66, 0xa3, 0x6b, 0x14, 0x61, 0x4e,
+                0x1f, 0x7d, 0xd3, 0xfb, 0x03, 0x1a, 0x01, 0xe0, 0x21, 0x8f, 0xf7, 0xaa, 0x9b, 0x74,
+                0x0f, 0xdc, 0xdb, 0xf9,
             ]
         );
     }
