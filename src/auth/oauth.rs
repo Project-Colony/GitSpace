@@ -26,9 +26,9 @@ use tracing::{error, info, warn};
 /// OAuth callback server timeout.
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// Local callback port range to try.
-const CALLBACK_PORT_START: u16 = 9876;
-const CALLBACK_PORT_END: u16 = 9886;
+/// Local callback port. GitLab only accepts the exact redirect URI registered with the
+/// application, so the port cannot change from one sign-in to the next.
+const CALLBACK_PORT: u16 = 9876;
 
 /// Timeout of each OAuth HTTP request.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -154,14 +154,19 @@ pub struct OAuthFlow {
     client: BasicClient<EndpointSet, EndpointNotSet, EndpointNotSet, EndpointNotSet, EndpointSet>,
     pkce_verifier: Option<PkceCodeVerifier>,
     csrf_token: Option<CsrfToken>,
-    redirect_port: u16,
 }
 
 impl OAuthFlow {
     /// Creates a new OAuth flow for the given provider.
     pub fn new(provider: OAuthProvider) -> Result<Self, String> {
-        let redirect_port = find_available_port()?;
-        let redirect_url = format!("http://127.0.0.1:{}/callback", redirect_port);
+        // Checked before the browser opens, so a busy port is reported up front.
+        TcpListener::bind(("127.0.0.1", CALLBACK_PORT)).map_err(|e| {
+            format!(
+                "Port {CALLBACK_PORT} is needed for the GitLab sign-in callback but is in use ({e}). \
+                 Close the program using it and try again."
+            )
+        })?;
+        let redirect_url = format!("http://127.0.0.1:{CALLBACK_PORT}/callback");
 
         // No client secret: PKCE public client.
         let client = BasicClient::new(ClientId::new(provider.client_id.clone()))
@@ -183,7 +188,6 @@ impl OAuthFlow {
             client,
             pkce_verifier: None,
             csrf_token: None,
-            redirect_port,
         })
     }
 
@@ -237,8 +241,7 @@ impl OAuthFlow {
 
     /// Waits for the OAuth callback on a local HTTP server.
     fn wait_for_callback(&self) -> Result<String, String> {
-        let addr = format!("127.0.0.1:{}", self.redirect_port);
-        let listener = TcpListener::bind(&addr)
+        let listener = TcpListener::bind(("127.0.0.1", CALLBACK_PORT))
             .map_err(|e| format!("Failed to bind callback server: {}", e))?;
 
         listener
@@ -254,7 +257,7 @@ impl OAuthFlow {
 
         info!(
             target: "gitspace::auth::oauth",
-            port = self.redirect_port,
+            port = CALLBACK_PORT,
             "Waiting for OAuth callback"
         );
 
@@ -549,16 +552,6 @@ fn send(client: &Client, request: HttpRequest) -> Result<HttpResponse, io::Error
     }
     let body = response.bytes().map_err(io::Error::other)?.to_vec();
     builder.body(body).map_err(io::Error::other)
-}
-
-/// Finds an available port for the callback server.
-fn find_available_port() -> Result<u16, String> {
-    for port in CALLBACK_PORT_START..=CALLBACK_PORT_END {
-        if TcpListener::bind(format!("127.0.0.1:{}", port)).is_ok() {
-            return Ok(port);
-        }
-    }
-    Err("No available port for OAuth callback".to_string())
 }
 
 /// Parses the OAuth callback request.

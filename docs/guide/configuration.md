@@ -43,9 +43,11 @@ GitSpace never saves over a file it could not read:
 The network preferences apply to clone, fetch, pull and push:
 
 - **Proxy**: `https://` remotes go through the HTTPS proxy and `http://` remotes through the
-  HTTP proxy, as GitSpace's own GitHub and GitLab requests do. When the matching field is
+  HTTP proxy, and so does the repository search in the Clone dialog. When the matching field is
   empty, git's `http.proxy` setting and the `https_proxy` and `http_proxy` environment variables
-  apply. SSH remotes never go through a proxy.
+  apply. SSH remotes never go through a proxy. Token checks and OAuth sign-in do not use this
+  proxy: they connect directly, or through the system proxy (the `https_proxy` and
+  `http_proxy` environment variables, or the Windows and macOS proxy settings).
 - **Timeout**: a transfer stops when the connection sends nothing for that many seconds. A long
   clone keeps running as long as data arrives. `0` turns the timeout off. Git transfers read the
   value once, at the first clone, fetch or push, so restart GitSpace after changing it. On
@@ -73,6 +75,6 @@ count set in Preferences are deleted at startup. Logs never contain a token.
 | Variable | Effect |
 |---|---|
 | `GITSPACE_LOG` | the log filter, in [`tracing` `EnvFilter`](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html) syntax. The default is `gitspace=info,info`; `GITSPACE_LOG=gitspace=debug` shows GitSpace's own debug messages |
-| `GITSPACE_TOKEN_MASTER_PASSWORD` | a password mixed into the key that encrypts `tokens.enc` (Argon2id). It must be set to the same value every time GitSpace starts, or saved tokens cannot be decrypted |
+| `GITSPACE_TOKEN_MASTER_PASSWORD` | only used when the system keyring is unavailable: a password mixed (Argon2id, salt in `token-salt.bin`) into `token-local-key.bin`, the key that then encrypts `tokens.enc`. In that case it must be set to the same value every time GitSpace starts, or saved tokens cannot be decrypted. It is ignored while the keyring holds the key |
 | `GITSPACE_PROFILE_UI` | when set, logs how long each part of the interface takes to draw, for profiling |
 | `GITSPACE_GITHUB_CLIENT_ID`, `GITSPACE_GITLAB_CLIENT_ID` | read when GitSpace is **built**, not when it runs: the OAuth client IDs compiled into the binary, used instead of any ID entered in **Configure OAuth Apps** on the Auth tab. Without them, OAuth sign-in needs a client ID entered there: a GitHub OAuth app with "Enable Device Flow" ticked, or a GitLab application with "Confidential" unticked and the redirect URI `http://127.0.0.1:9876/callback` |

@@ -47,6 +47,12 @@ jobs:
       - name: Cargo build
         run: cargo build --all-targets --all-features
 
+      # The release workflow smoke-tests every artifact the same way: the
+      # program must print its version and exit before any window opens.
+      - name: Run the built binary with --version
+        shell: bash
+        run: ./target/debug/gitspace --version
+
       - name: Check the macOS x86_64 build
         if: runner.os == 'macOS'
         run: |
