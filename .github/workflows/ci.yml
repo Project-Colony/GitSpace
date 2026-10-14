@@ -5,6 +5,9 @@ on:
     branches: ["*"]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   checks:
     name: Checks (${{ matrix.os }})
@@ -16,10 +19,17 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
+      # rustup is on every GitHub-hosted runner image, like in release.yml, so
+      # there is no third-party toolchain action to pin.
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt --no-self-update
+          rustup default stable
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -42,3 +52,24 @@ jobs:
         run: |
           rustup target add x86_64-apple-darwin
           cargo check --target x86_64-apple-darwin
+
+  # Holds `rust-version` in Cargo.toml honest: the oldest toolchain it promises.
+  msrv:
+    name: MSRV (Rust 1.88)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust 1.88
+        run: |
+          rustup toolchain install 1.88 --profile minimal --no-self-update
+          rustup default 1.88
+
+      - name: Install Linux dependencies
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+
+      - name: Cargo check
+        run: cargo check --all-targets --all-features

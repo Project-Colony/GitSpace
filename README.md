@@ -1,53 +1,106 @@
+<div align="center">
+
 # GitSpace
 
+**A desktop Git client for developers whose repositories live on both GitHub and GitLab.**
+
+</div>
+
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](LICENSE)
+[![Colony app](https://img.shields.io/badge/Colony-development-purple)](https://github.com/Project-Colony/Colony)
+[![Platforms](https://img.shields.io/badge/platforms-linux%20%7C%20windows%20%7C%20macOS-lightgrey)](#installation)
 
-GitSpace is a desktop Git client that gathers your GitHub and GitLab repositories in one
-panel-based interface inspired by GitKraken. It is written in Rust with egui.
+Graphical Git clients either serve one hosting site, like GitHub Desktop, or are closed
+source and tied to an account of their own, like GitKraken. GitSpace is an open source,
+native Rust client that signs in to GitHub, GitLab and their self-hosted instances side by
+side, finds and clones your repositories from both, and then works on them in one
+panel-based window inspired by GitKraken.
 
-> **Status:** early development. The app builds and runs from source, and CI builds and
-> tests it on Linux, macOS and Windows. There is no published release yet. GitSpace has no
-> built-in updater; updates will be delivered through the Colony launcher.
+> **Status:** early development, no release yet. CI builds GitSpace and runs its tests on
+> Linux, macOS and Windows, and checks that it still builds on Rust 1.88. The first signed
+> release is assembled by release-please and has not been published. Personal access tokens
+> work out of the box. OAuth sign-in needs the client ID of an OAuth app you register
+> yourself, because no build embeds one yet. The git operations are covered by tests on
+> local repositories; SSH sign-in, proxies and OAuth are covered by unit tests of their
+> logic, not by tests against live servers. The interface has no language setting yet: most
+> of it is in English, the Preferences window in French. It is being moved from egui to iced
+> and the shared Colony UI kit, which brings English and French locales.
+
+## Why GitSpace
+
+- **Both sites in one place.** Tokens for GitHub, GitLab and self-hosted instances sit side
+  by side, and the Clone dialog searches your repositories on either site without leaving
+  GitSpace.
+- **Tokens stay with you.** They go to the operating system's keyring, are only ever sent
+  over HTTPS, and only to the host they belong to. GitSpace has no account of its own and no
+  server: it talks to the hosts you use and nothing else.
+- **Native and light.** A single Rust binary, no embedded web view.
+- **No telemetry.** Nothing is collected, see [Privacy](#privacy).
 
 ## What it does
 
-- Clone repositories from GitHub, GitLab or any Git URL, and keep a list of recent ones.
-- Browse a repository: overview, history, local and remote branches, staging with diffs,
-  stashes and remotes.
-- Branch actions: create, rename, delete, check out, merge, rebase and compare.
-- Sign in to GitHub with a one-time code entered on github.com (OAuth device flow), to GitLab
-  through OAuth in the browser, or to either with a personal access token. Tokens are kept in
-  the system keyring or in an encrypted local file, and are only ever sent over HTTPS: a
-  self-hosted host entered as `http://` is refused, and a plain-HTTP remote never receives a
-  token.
-- Structured logs with rotation (`GITSPACE_LOG` sets the filter).
+- Clone from GitHub, GitLab or any Git URL over HTTPS or SSH, and reopen recent repositories.
+- Repository overview with fetch, pull (fast-forward), push, open in the file manager and
+  open a terminal, plus optional auto-fetch on an interval.
+- Stage and unstage files with their diffs, restore a file from another branch, and create,
+  apply and drop stashes.
+- History with commit diffs, filtered by branch.
+- Branches: create, rename, delete, check out and track, merge or rebase into the current
+  branch, compare with it, pin favourites, and archive a branch as a tag.
+- Sign in to GitHub with a one-time code entered on github.com (OAuth device flow), to
+  GitLab through OAuth in the browser (PKCE), or to GitHub, GitLab and self-hosted hosts with
+  a personal access token.
+- Network preferences: HTTP and HTTPS proxies, transfer timeout, preferring HTTPS and
+  allowing SSH.
+- Four Catppuccin themes, adjustable control sizes and a reduced-motion setting.
+- Structured logs with daily rotation (`GITSPACE_LOG` sets the filter).
 
-## Build from source
+## Installation
 
-Requirements:
+### Via Colony (recommended)
 
-- Rust 1.88 or newer, and Git.
-- On Linux, the usual egui/glow (OpenGL) system libraries (see `.github/workflows/ci.yml`).
+Search for **GitSpace** in [Colony](https://github.com/Project-Colony/Colony) and install
+it. Updates arrive through the launcher. GitSpace has no updater of its own. This works
+once the first release is published.
+
+### Direct binary download
+
+Grab the asset for your platform from the [latest release](../../releases/latest):
+
+| Platform | Asset |
+|---|---|
+| Linux | `gitspace-linux` |
+| Windows | `gitspace-windows.exe` |
+| macOS (Apple Silicon) | `gitspace-macos` |
+| macOS (Intel) | `gitspace-macos-x86` |
+
+```bash
+chmod +x gitspace-linux && ./gitspace-linux
+```
+
+Every asset is signed: see [Code signing policy](#code-signing-policy) to check one.
+
+### Build from source
 
 ```bash
 git clone https://github.com/Project-Colony/GitSpace
 cd GitSpace
-cargo run --release
+cargo build --release
 ```
+
+Requires Rust 1.88 or newer, and on Linux the system packages listed in
+[docs/guide/install.md](docs/guide/install.md). At runtime GitSpace needs the `git`
+command on your `PATH`: merge, rebase and restoring a file from another branch run it.
 
 OAuth sign-in needs the client ID of an OAuth app: a GitHub OAuth app with "Enable Device
 Flow" ticked, and a GitLab application with "Confidential" unticked and the redirect URI
 `http://127.0.0.1:9876/callback`. Set `GITSPACE_GITHUB_CLIENT_ID` and
-`GITSPACE_GITLAB_CLIENT_ID` when building to build them in, or enter them in Authentication >
-Configure OAuth Apps. A personal access token works without one.
+`GITSPACE_GITLAB_CLIENT_ID` when building to build them in, or enter them under Configure
+OAuth Apps on the Auth tab. A personal access token works without one.
 
-## Project layout
+## Documentation
 
-- `src/ui/`: egui panels and layout.
-- `src/git/`: `git2` wrappers for repository operations.
-- `src/auth/`: OAuth and token storage.
-- `docs/`: design notes, the contributor guide ([docs/contrib.md](docs/contrib.md)) and where
-  settings and tokens are stored ([docs/guide/configuration.md](docs/guide/configuration.md)).
+Full documentation is in [docs/](docs/). Start at [docs/README.md](docs/README.md).
 
 ## Code signing policy
 
@@ -96,7 +149,8 @@ GitSpace sends no telemetry, no analytics and no crash reports.
 | GitHub sign-in | sent | when you choose to sign in with GitHub: GitSpace asks `https://github.com/login/device/code` for a one-time code, you enter it at `https://github.com/login/device` in your browser, and GitSpace asks `https://github.com/login/oauth/access_token` every few seconds whether you approved it, until you approve or deny it, cancel, or the code expires. Only the OAuth app's client ID is sent, never a client secret |
 | GitLab sign-in | sent | when you choose to sign in with GitLab: your browser opens `gitlab.com`, which sends the authorization code back to GitSpace on `127.0.0.1` (the first free port from 9876 to 9886), and GitSpace exchanges it for a token at `gitlab.com`, with PKCE |
 | Repository search | sent | when you search in the Clone dialog: the search to `https://api.github.com` (`/user`, `/user/repos`, `/users/<name>/repos`, `/orgs/<name>/repos`) or `https://gitlab.com/api/v4/projects`, with your token for that site when one is saved |
-| Git traffic | sent | clone, fetch, pull and push talk to the remote of the repository, only when you start them. Over HTTPS the token saved for that host is sent as the password; a plain-HTTP remote never receives a token. Over SSH, GitSpace signs in with the keys in ssh-agent or `~/.ssh/id_ed25519`, `id_ecdsa` and `id_rsa`, and never sends a token |
+| Git traffic | sent | clone, fetch, pull and push talk to the remote of the repository when you start them, and fetch also runs on its own while a repository is open if you turn on auto-fetch in Preferences (off by default, every 1, 5 or 15 minutes or an interval you choose). Over HTTPS the token saved for that host is sent as the password; a plain-HTTP remote never receives a token. Over SSH, GitSpace signs in with the keys in ssh-agent or `~/.ssh/id_ed25519`, `id_ecdsa` and `id_rsa`, and never sends a token |
+| Local git commands | neither | merge, rebase and restoring a file from another branch run your own `git` command in the repository folder. These commands work on the local repository only and do not contact a remote |
 
 When a proxy is set in Preferences, the repository search and HTTP(S) git traffic
 go through it; SSH remotes never do.
