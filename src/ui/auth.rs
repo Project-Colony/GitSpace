@@ -9,7 +9,8 @@ use poll_promise::Promise;
 use crate::auth::{AuthManager, DeviceFlow, OAuthProvider, OAuthResult};
 use crate::ui::theme::{SharedTheme, Theme};
 
-/// OAuth client IDs built in at compile time. A client ID entered in the UI takes precedence.
+/// OAuth client IDs built in at compile time. When set, they are used instead of a client ID
+/// entered in the UI.
 ///
 /// GitHub (device flow): an OAuth app at https://github.com/settings/developers with
 /// "Enable Device Flow" ticked; the callback URL is not used.
