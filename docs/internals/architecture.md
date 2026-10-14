@@ -67,8 +67,20 @@ when the keyring is unavailable, optionally mixed with `GITSPACE_TOKEN_MASTER_PA
 through Argon2id. A file that exists but cannot be decrypted is never overwritten.
 Host names are normalised to `https://`; a plain `http://` host is refused before any request.
 
-`auth/oauth.rs` runs the OAuth authorization code flow with PKCE: it opens the browser and
-listens for the callback on the first free port from 9876 to 9886 on `127.0.0.1`.
+`auth/oauth.rs` runs the two OAuth sign-ins, both through its own reqwest client with
+redirects turned off:
+
+- **GitHub** uses the device flow (RFC 8628). `DeviceFlow::start` asks `github.com` for a
+  one-time code and refuses a verification page that is not `https://`; the Auth tab shows
+  the code, and `DeviceFlow::wait` polls the token endpoint at the interval GitHub sets. It
+  adds 5 seconds on `slow_down`, doubles the interval up to a minute while the endpoint cannot
+  be reached or answers with a rate limit or a server error, and stops when the code is approved, denied or expired, or the user cancels. Only
+  the client ID is sent, never a client secret.
+- **GitLab** uses the authorization code flow with PKCE: `OAuthFlow` opens the browser and
+  listens for the callback on the first free port from 9876 to 9886 on `127.0.0.1`.
+
+The client IDs come from `GITSPACE_GITHUB_CLIENT_ID` and `GITSPACE_GITLAB_CLIENT_ID` at build
+time (`ui/auth.rs`), and otherwise from the IDs entered under Configure OAuth Apps.
 
 ## `config`, `logging`, `error`
 
