@@ -419,10 +419,7 @@ impl DeviceFlow {
         let mut delay = interval;
 
         loop {
-            if !matches!(
-                cancel.recv_timeout(delay),
-                Err(RecvTimeoutError::Timeout)
-            ) {
+            if !matches!(cancel.recv_timeout(delay), Err(RecvTimeoutError::Timeout)) {
                 info!(target: "gitspace::auth::oauth", "Device flow cancelled");
                 return OAuthResult::Cancelled;
             }
