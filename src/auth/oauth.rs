@@ -413,11 +413,14 @@ impl DeviceFlow {
     /// dropped.
     pub fn wait(self, cancel: &Receiver<()>) -> OAuthResult {
         let deadline = Instant::now() + self.details.expires_in();
+        // The interval the server asked for, raised by `slow_down`, and the wait before the next
+        // poll, which also backs off while the token endpoint cannot answer.
         let mut interval = self.details.interval();
+        let mut delay = interval;
 
         loop {
             if !matches!(
-                cancel.recv_timeout(interval),
+                cancel.recv_timeout(delay),
                 Err(RecvTimeoutError::Timeout)
             ) {
                 info!(target: "gitspace::auth::oauth", "Device flow cancelled");
@@ -436,11 +439,15 @@ impl DeviceFlow {
                         error = %err,
                         "Token endpoint unreachable, retrying"
                     );
-                    DevicePoll::Retry(backoff(interval))
+                    DevicePoll::Unavailable
                 }
             };
             match poll {
-                DevicePoll::Retry(next) => interval = next,
+                DevicePoll::Retry(next) => {
+                    interval = next;
+                    delay = next;
+                }
+                DevicePoll::Unavailable => delay = backoff(delay),
                 DevicePoll::Done(result) => {
                     if matches!(result, OAuthResult::Success(_)) {
                         info!(
@@ -477,6 +484,8 @@ impl DeviceFlow {
 enum DevicePoll {
     /// Not approved yet: poll again after this interval.
     Retry(Duration),
+    /// The token endpoint cannot answer for now: poll again after a longer wait.
+    Unavailable,
     /// Approved, denied, expired or failed: stop polling.
     Done(OAuthResult),
 }
@@ -511,7 +520,7 @@ fn next_device_poll(
             &response, provider,
         ))),
         // A rate limit or a server or proxy error page is passing: ask again later.
-        Err(_) if status == 429 || status >= 500 => DevicePoll::Retry(backoff(interval)),
+        Err(_) if status == 429 || status >= 500 => DevicePoll::Unavailable,
         Err(_) => DevicePoll::Done(OAuthResult::Error(format!(
             "Unexpected answer from {} (HTTP {status})",
             provider.name
@@ -519,10 +528,10 @@ fn next_device_poll(
     }
 }
 
-/// Doubles the poll interval, up to [`MAX_POLL_BACKOFF`], while the token endpoint cannot answer
-/// (RFC 8628 section 3.5).
-fn backoff(interval: Duration) -> Duration {
-    interval.max((interval * 2).min(MAX_POLL_BACKOFF))
+/// Doubles the wait between polls, up to [`MAX_POLL_BACKOFF`], while the token endpoint cannot
+/// answer (RFC 8628 section 3.5).
+fn backoff(delay: Duration) -> Duration {
+    delay.max((delay * 2).min(MAX_POLL_BACKOFF))
 }
 
 /// Builds the HTTP client for OAuth requests.
@@ -771,8 +780,9 @@ mod tests {
     fn device_poll_backs_off_on_a_rate_limit_or_server_error() {
         for status in [429, 502, 503] {
             let result = poll(status, "<html>Bad gateway</html>");
-            assert!(matches!(result, DevicePoll::Retry(i) if i == INTERVAL * 2));
+            assert!(matches!(result, DevicePoll::Unavailable));
         }
+        assert_eq!(backoff(INTERVAL), INTERVAL * 2);
         assert_eq!(backoff(Duration::from_secs(40)), MAX_POLL_BACKOFF);
     }
 
