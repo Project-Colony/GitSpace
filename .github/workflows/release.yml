@@ -118,13 +118,15 @@ jobs:
           ref: ${{ needs.release-please.outputs.tag_name || inputs.tag }}
           persist-credentials: false
 
-      # Pinned to master with `toolchain: stable` rather than to the `stable`
-      # branch: that branch is rebased onto every master commit, so a SHA
-      # pinned on it stops being reachable from any branch.
-      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master, 2026-10-09
-        with:
-          toolchain: stable
-          targets: ${{ matrix.target }}
+      # rustup is on every GitHub-hosted runner image, so there is no
+      # third-party toolchain action to pin. Adding the target is a no-op on
+      # the legs that build for their own host; the Intel macOS leg needs it.
+      - name: Install Rust
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          rustup target add ${{ matrix.target }}
 
       # No build cache here: SignPath forbids release builds that reuse
       # outputs of earlier, unverified builds.
