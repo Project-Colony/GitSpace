@@ -15,7 +15,8 @@ panel-based interface inspired by GitKraken. It is written in Rust with egui.
 - Browse a repository: overview, history, local and remote branches, staging with diffs,
   stashes and remotes.
 - Branch actions: create, rename, delete, check out, merge, rebase and compare.
-- Sign in to GitHub and GitLab through OAuth or a personal access token. Tokens are kept in
+- Sign in to GitHub with a one-time code entered on github.com (OAuth device flow), to GitLab
+  through OAuth in the browser, or to either with a personal access token. Tokens are kept in
   the system keyring or in an encrypted local file, and are only ever sent over HTTPS: a
   self-hosted host entered as `http://` is refused, and a plain-HTTP remote never receives a
   token.
@@ -33,6 +34,12 @@ git clone https://github.com/Project-Colony/GitSpace
 cd GitSpace
 cargo run --release
 ```
+
+OAuth sign-in needs the client ID of an OAuth app: a GitHub OAuth app with "Enable Device
+Flow" ticked, and a GitLab application with "Confidential" unticked and the redirect URI
+`http://127.0.0.1:9876/callback`. Set `GITSPACE_GITHUB_CLIENT_ID` and
+`GITSPACE_GITLAB_CLIENT_ID` when building to build them in, or enter them in Authentication >
+Configure OAuth Apps. A personal access token works without one.
 
 ## Project layout
 
@@ -86,7 +93,8 @@ GitSpace sends no telemetry, no analytics and no crash reports.
 | Logs | stored | `gitspace/logs/` in the system data directory (`~/.local/share/gitspace/logs/` on Linux), one file per day, the oldest deleted past the retention set in Preferences. They record operations and errors, never a token |
 | Access tokens | stored | the operating system's keyring (service `gitspace`, one entry per host, plus `oauth:<host>` with the refresh token and expiry after an OAuth sign-in). With "Allow encrypted file storage if the native keyring is unavailable" on, they are also written to `tokens.enc` in the settings folder, encrypted with a key kept in the keyring. When the keyring cannot be used, that key is the file `token-local-key.bin` in the same folder instead, readable by your user account, so `tokens.enc` is then only as safe as that account. Setting `GITSPACE_TOKEN_MASTER_PASSWORD` mixes a password into that key (Argon2id, salt in `token-salt.bin`). `token-hosts.json` lists the hosts that have a token |
 | Token check | sent | when you save a personal access token: the token to `https://api.github.com/user`, `https://gitlab.com/api/v4/user`, or the matching API of a self-hosted GitHub or GitLab host you entered. A self-hosted host must use `https://`; an `http://` host is refused, so a token never travels in clear text |
-| OAuth sign-in | sent | when you choose to sign in with GitHub or GitLab: your browser opens `github.com` or `gitlab.com`, which sends the authorization code back to GitSpace on `127.0.0.1` (the first free port from 9876 to 9886), and GitSpace exchanges it for a token at the same site, with PKCE. It needs the client ID of an OAuth app you register yourself; a personal access token works without one |
+| GitHub sign-in | sent | when you choose to sign in with GitHub: GitSpace asks `https://github.com/login/device/code` for a one-time code, you enter it at `https://github.com/login/device` in your browser, and GitSpace asks `https://github.com/login/oauth/access_token` every few seconds whether you approved it, until you approve or deny it, cancel, or the code expires. Only the OAuth app's client ID is sent, never a client secret |
+| GitLab sign-in | sent | when you choose to sign in with GitLab: your browser opens `gitlab.com`, which sends the authorization code back to GitSpace on `127.0.0.1` (the first free port from 9876 to 9886), and GitSpace exchanges it for a token at `gitlab.com`, with PKCE |
 | Repository search | sent | when you search in the Clone dialog: the search to `https://api.github.com` (`/user`, `/user/repos`, `/users/<name>/repos`, `/orgs/<name>/repos`) or `https://gitlab.com/api/v4/projects`, with your token for that site when one is saved |
 | Git traffic | sent | clone, fetch, pull and push talk to the remote of the repository, only when you start them. Over HTTPS the token saved for that host is sent as the password; a plain-HTTP remote never receives a token. Over SSH, GitSpace signs in with the keys in ssh-agent or `~/.ssh/id_ed25519`, `id_ecdsa` and `id_rsa`, and never sends a token |
 
