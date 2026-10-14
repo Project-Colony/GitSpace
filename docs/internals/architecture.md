@@ -77,7 +77,9 @@ redirects turned off:
   be reached or answers with a rate limit or a server error, and stops when the code is approved, denied or expired, or the user cancels. Only
   the client ID is sent, never a client secret.
 - **GitLab** uses the authorization code flow with PKCE: `OAuthFlow` opens the browser and
-  listens for the callback on the first free port from 9876 to 9886 on `127.0.0.1`.
+  listens for the callback on `127.0.0.1` port 9876, the redirect URI registered with the
+  GitLab application. If that port is in use, sign-in stops with an error before the browser
+  opens.
 
 The client IDs come from `GITSPACE_GITHUB_CLIENT_ID` and `GITSPACE_GITLAB_CLIENT_ID` at build
 time (`ui/auth.rs`), and otherwise from the IDs entered under Configure OAuth Apps.
@@ -113,7 +115,7 @@ Today these only log a warning at startup; nothing else reads them.
 
 Unit tests sit next to the code, in a `#[cfg(test)] mod tests` block, or in `git/tests.rs`
 and `ui/tests.rs` for the larger suites. The git tests build throwaway repositories with
-`tempfile`. `tests/version.rs` runs the built binary with `--version`.
+`tempfile`. CI runs the built binary with `--version`, as the release smoke test does.
 
 ## Release chain
 

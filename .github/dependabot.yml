@@ -32,6 +32,12 @@ updates:
     # `cargo update`.
     allow:
       - dependency-type: all
+    # egui and eframe only move together and their new majors need the
+    # interface rewritten, which the iced port (#1) replaces outright. Remove
+    # this entry with the egui code when that port lands.
+    ignore:
+      - dependency-name: "egui"
+      - dependency-name: "eframe"
     groups:
       # Minor and patch bumps arrive as one PR, so a routine week is one review
       # rather than fifteen. Majors stay separate: they deserve their own read.
