@@ -16,7 +16,7 @@ fake-repos = []
 mock-providers = []
 
 [dependencies]
-eframe = "0.27.2"
+eframe = "0.33.3"
 egui = "0.27.2"
 git2 = { version = "0.21.0", features = ["https", "ssh", "vendored-openssl"] }
 poll-promise = "0.3.0"
