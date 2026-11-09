@@ -34,5 +34,5 @@ The other Project Colony programs share one design system,
 [colony-ui](https://github.com/Project-Colony/Project-Colony-Resources/tree/main/crates/colony-ui),
 built on [iced](https://iced.rs) 0.14. It brings the shared typography, themes, motion,
 preferences page, English and French locales and the per-user paths, none of which egui
-GitSpace can reuse. GitSpace is being ported to it, which is also why `rust-version` is 1.88,
-the floor of iced 0.14. Until that port lands, the egui shell described here is what runs.
+GitSpace can reuse. GitSpace is being ported to it. `rust-version` is 1.99, above the 1.88
+floor of iced 0.14. Until that port lands, the egui shell described here is what runs.

@@ -17,7 +17,7 @@ side, finds and clones your repositories from both, and then works on them in on
 panel-based window inspired by GitKraken.
 
 > **Status:** early development, no release yet. CI builds GitSpace and runs its tests on
-> Linux, macOS and Windows, and checks that it still builds on Rust 1.88. The first signed
+> Linux, macOS and Windows, and checks that it still builds on Rust 1.99. The first signed
 > release is assembled by release-please and has not been published. Personal access tokens
 > work out of the box. OAuth sign-in needs the client ID of an OAuth app you register
 > yourself, because no build embeds one yet. The git operations are covered by tests on
@@ -88,7 +88,7 @@ cd GitSpace
 cargo build --release
 ```
 
-Requires Rust 1.88 or newer, and on Linux the system packages listed in
+Requires Rust 1.99 or newer, and on Linux the system packages listed in
 [docs/guide/install.md](docs/guide/install.md). At runtime GitSpace needs the `git`
 command on your `PATH`: merge, rebase and restoring a file from another branch run it.
 

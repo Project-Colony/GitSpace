@@ -26,7 +26,7 @@ OpenSSL before running the binary.
 
 ## From source
 
-You need Rust 1.88 or newer ([rustup](https://rustup.rs/) installs it) and Git.
+You need Rust 1.99 or newer ([rustup](https://rustup.rs/) installs it) and Git.
 
 On Debian or Ubuntu, install the system packages the window and audio crates link against
 first:
