@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2](https://github.com/Project-Colony/GitSpace/compare/v0.1.1...v0.1.2) (2026-11-09)
+
+
+### Fixes
+
+* **deps:** update dependencies and Rust to 1.99 ([#42](https://github.com/Project-Colony/GitSpace/issues/42)) ([50c58ff](https://github.com/Project-Colony/GitSpace/commit/50c58ffc23b4e554e8950b311ea7335b08a6befc))
+
 ## [0.1.1](https://github.com/Project-Colony/GitSpace/compare/v0.1.0...v0.1.1) (2026-10-14)
 
 
