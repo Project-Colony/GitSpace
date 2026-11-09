@@ -61,7 +61,7 @@ jobs:
 
   # Holds `rust-version` in Cargo.toml honest: the oldest toolchain it promises.
   msrv:
-    name: MSRV (Rust 1.88)
+    name: MSRV (Rust 1.99)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -69,10 +69,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust 1.88
+      - name: Install Rust 1.99
         run: |
-          rustup toolchain install 1.88 --profile minimal --no-self-update
-          rustup default 1.88
+          rustup toolchain install 1.99 --profile minimal --no-self-update
+          rustup default 1.99
 
       - name: Install Linux dependencies
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev

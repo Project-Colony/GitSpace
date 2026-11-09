@@ -2,7 +2,7 @@
 name = "gitspace"
 version = "0.1.1"
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.99"
 # MSRV-aware resolution: `cargo update` never locks a crate newer than rust-version allows.
 resolver = "3"
 description = "Desktop Git client that gathers your GitHub and GitLab repositories in one panel-based interface"
@@ -21,11 +21,11 @@ egui = "0.27.2"
 git2 = { version = "0.21.0", features = ["https", "ssh", "vendored-openssl"] }
 poll-promise = "0.3.0"
 reqwest = { version = "0.13.5", features = ["blocking", "form", "json", "query"] }
-rfd = "0.17.2"
+rfd = "0.18.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 dirs = "7.0.0"
-open = "5.4.4"
+open = "5.4.5"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 # `v1` picks the platform store at compile time: Keychain on macOS, Credential
 # Manager on Windows, Secret Service (pure Rust crypto) elsewhere. There is no
@@ -41,9 +41,9 @@ tracing-appender = "0.2.5"
 argon2 = { version = "0.6.0", default-features = false, features = ["alloc"] }
 thiserror = "2.0.21"
 zeroize = { version = "1.9.1", features = ["derive"] }
-parking_lot = "0.12.5"
+parking_lot = "0.13.0"
 oauth2 = { version = "5.0.0", default-features = false }
-webbrowser = "1.2.4"
+webbrowser = "1.2.6"
 
 [dev-dependencies]
 tempfile = "3.27.0"
