@@ -16,9 +16,9 @@ native Rust client that signs in to GitHub, GitLab and their self-hosted instanc
 side, finds and clones your repositories from both, and then works on them in one
 panel-based window inspired by GitKraken.
 
-> **Status:** early development, no release yet. CI builds GitSpace and runs its tests on
-> Linux, macOS and Windows, and checks that it still builds on Rust 1.99. The first signed
-> release is assembled by release-please and has not been published. Personal access tokens
+> **Status:** early development. CI builds GitSpace and runs its tests on
+> Linux, macOS and Windows, and checks that it still builds on Rust 1.99. Releases are
+> signed and published by release-please and the Colony signing workflow. Personal access tokens
 > work out of the box. OAuth sign-in needs the client ID of an OAuth app you register
 > yourself, because no build embeds one yet. The git operations are covered by tests on
 > local repositories; SSH sign-in, proxies and OAuth are covered by unit tests of their
@@ -60,8 +60,7 @@ panel-based window inspired by GitKraken.
 ### Via Colony (recommended)
 
 Search for **GitSpace** in [Colony](https://github.com/Project-Colony/Colony) and install
-it. Updates arrive through the launcher. GitSpace has no updater of its own. This works
-once the first release is published.
+it. Updates arrive through the launcher. GitSpace has no updater of its own.
 
 ### Direct binary download
 

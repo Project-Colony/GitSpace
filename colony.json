@@ -1,5 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/Project-Colony/Project-Colony-Resources/main/generated/colony.schema.json",
   "name": "GitSpace",
-  "category": "development"
+  "category": "development",
+  "signed": true
 }
