@@ -9,6 +9,7 @@ const MAX_PATCH_SIZE: usize = 64 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct FileDiff {
+    #[allow(dead_code)] // tested, not used by the iced UI yet
     pub path: String,
     pub additions: usize,
     pub deletions: usize,
@@ -196,6 +197,7 @@ pub fn commit_diff_file(
 }
 
 // Diff de l'arbre de travail — comparaison index/répertoire de travail
+#[allow(dead_code)] // tested, not used by the iced UI yet
 pub fn working_tree_diff(repo_path: &str) -> Result<Vec<FileDiff>, git2::Error> {
     with_cached_repo(repo_path, |repo| {
         let mut index = repo.index()?;
@@ -209,6 +211,7 @@ pub fn working_tree_diff(repo_path: &str) -> Result<Vec<FileDiff>, git2::Error> 
 }
 
 // Diff des fichiers indexés (staged) — comparaison HEAD/index
+#[allow(dead_code)] // tested, not used by the iced UI yet
 pub fn staged_diff(repo_path: &str) -> Result<Vec<FileDiff>, git2::Error> {
     with_cached_repo(repo_path, |repo| {
         let mut index = repo.index()?;

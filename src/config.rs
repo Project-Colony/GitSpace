@@ -66,14 +66,6 @@ pub struct LoggingOptions {
     retention_files: usize,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub enum MotionIntensity {
-    Low,
-    #[default]
-    Medium,
-    High,
-}
-
 /// Label shown in the theme pick list.
 impl std::fmt::Display for ThemeMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -82,17 +74,6 @@ impl std::fmt::Display for ThemeMode {
             ThemeMode::Frappe => "Frappe",
             ThemeMode::Macchiato => "Macchiato",
             ThemeMode::Mocha => "Mocha",
-        })
-    }
-}
-
-/// Label shown in the motion intensity pick list.
-impl std::fmt::Display for MotionIntensity {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            MotionIntensity::Low => "Faible",
-            MotionIntensity::Medium => "Moyenne",
-            MotionIntensity::High => "Élevée",
         })
     }
 }
@@ -127,19 +108,8 @@ pub struct Preferences {
     network: NetworkOptions,
     #[serde(default)]
     allow_encrypted_tokens: bool,
-    #[serde(default = "default_control_height")]
-    control_height: f32,
     #[serde(default)]
     pinned_branches: Vec<String>,
-    #[serde(default)]
-    reduced_motion: bool,
-    #[serde(
-        default = "default_motion_intensity",
-        deserialize_with = "default_on_error"
-    )]
-    motion_intensity: MotionIntensity,
-    #[serde(default)]
-    performance_mode: bool,
     #[serde(default = "default_auto_fetch_enabled")]
     auto_fetch_enabled: bool,
     #[serde(default = "default_auto_fetch_interval_minutes")]
@@ -153,11 +123,7 @@ impl Default for Preferences {
             default_clone_path: default_clone_path(),
             network: NetworkOptions::default(),
             allow_encrypted_tokens: false,
-            control_height: default_control_height(),
             pinned_branches: Vec::new(),
-            reduced_motion: false,
-            motion_intensity: default_motion_intensity(),
-            performance_mode: false,
             auto_fetch_enabled: default_auto_fetch_enabled(),
             auto_fetch_interval_minutes: default_auto_fetch_interval_minutes(),
         }
@@ -169,8 +135,8 @@ impl AppConfig {
         Self::load_from(&config_path())
     }
 
-    /// Reads the config without ever losing it. An invalid theme or motion value falls back to
-    /// its default on its own. A file that still cannot be parsed is copied to
+    /// Reads the config without ever losing it. An invalid theme value falls back to its
+    /// default on its own. A file that still cannot be parsed is copied to
     /// `config.json.bak` before the defaults are used, so the next save cannot destroy it.
     fn load_from(path: &Path) -> Self {
         let bytes = match fs::read(path) {
@@ -372,20 +338,12 @@ fn default_network_timeout() -> u64 {
     30
 }
 
-fn default_control_height() -> f32 {
-    28.0
-}
-
 fn default_use_https() -> bool {
     true
 }
 
 fn default_allow_ssh() -> bool {
     true
-}
-
-fn default_motion_intensity() -> MotionIntensity {
-    MotionIntensity::Medium
 }
 
 fn default_log_retention_files() -> usize {
@@ -457,44 +415,12 @@ impl Preferences {
         self.allow_encrypted_tokens = allowed;
     }
 
-    pub fn control_height(&self) -> f32 {
-        self.control_height
-    }
-
-    pub fn set_control_height(&mut self, height: f32) {
-        self.control_height = height.clamp(20.0, 48.0);
-    }
-
     pub fn pinned_branches(&self) -> &[String] {
         &self.pinned_branches
     }
 
     pub fn set_pinned_branches(&mut self, branches: Vec<String>) {
         self.pinned_branches = branches;
-    }
-
-    pub fn reduced_motion(&self) -> bool {
-        self.reduced_motion
-    }
-
-    pub fn set_reduced_motion(&mut self, reduced_motion: bool) {
-        self.reduced_motion = reduced_motion;
-    }
-
-    pub fn motion_intensity(&self) -> MotionIntensity {
-        self.motion_intensity
-    }
-
-    pub fn set_motion_intensity(&mut self, motion_intensity: MotionIntensity) {
-        self.motion_intensity = motion_intensity;
-    }
-
-    pub fn performance_mode(&self) -> bool {
-        self.performance_mode
-    }
-
-    pub fn set_performance_mode(&mut self, performance_mode: bool) {
-        self.performance_mode = performance_mode;
     }
 
     pub fn auto_fetch_enabled(&self) -> bool {
@@ -565,7 +491,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn invalid_enum_values_keep_the_rest_of_the_config() {
+    fn invalid_values_and_removed_settings_keep_the_rest_of_the_config() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join(CONFIG_FILE_NAME);
         fs::write(
@@ -587,8 +513,6 @@ mod tests {
         assert_eq!(config.recent_repos()[0].path, "/work/repo");
         let preferences = config.preferences();
         assert_eq!(preferences.theme_mode(), ThemeMode::Mocha);
-        assert_eq!(preferences.motion_intensity(), MotionIntensity::Medium);
-        assert_eq!(preferences.control_height(), 32.0);
         assert_eq!(preferences.pinned_branches(), ["main"]);
         assert_eq!(config.logging().retention_files(), 12);
         assert!(!backup_path(&path).exists());
