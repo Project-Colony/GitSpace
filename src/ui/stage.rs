@@ -6,7 +6,8 @@ use std::path::Path;
 
 use git2::{Repository, Signature, Status, StatusOptions, StatusShow};
 use iced::widget::{
-    button, checkbox, container, horizontal_rule, pick_list, scrollable, text, text_input, Column, Row,
+    button, checkbox, container, horizontal_rule, pick_list, scrollable, text, text_input, Column,
+    Row,
 };
 use iced::{Element, Length, Task};
 
@@ -14,7 +15,7 @@ use crate::ui::theme::Theme;
 
 use crate::git::branch::restore_file_from_branch;
 use crate::git::diff::{diff_file, staged_diff, working_tree_diff};
-use crate::git::stash::{StashEntry, apply_stash, create_stash, drop_stash, list_stashes};
+use crate::git::stash::{apply_stash, create_stash, drop_stash, list_stashes, StashEntry};
 use crate::git::status::read_repo_status;
 use crate::ui::context::RepoContext;
 
@@ -37,8 +38,6 @@ pub enum Message {
     ToggleUnstaged(String),
     /// Afficher le diff d'un fichier (is_staged, chemin).
     ViewDiff(bool, String),
-    /// Restaurer un fichier depuis la branche courante.
-    RestoreFile(String),
     /// Le message de commit a changé.
     CommitMessageChanged(String),
     /// Un template de commit a été sélectionné (index).
@@ -133,11 +132,7 @@ impl StagePanel {
     }
 
     /// Traite un message et retourne une commande Iced.
-    pub fn update(
-        &mut self,
-        message: Message,
-        repo: Option<&RepoContext>,
-    ) -> Task<Message> {
+    pub fn update(&mut self, message: Message, repo: Option<&RepoContext>) -> Task<Message> {
         match message {
             // ── Actions sur les fichiers ────────────────────────────────
             Message::ToggleStaged(path) => {
@@ -154,11 +149,6 @@ impl StagePanel {
             }
             Message::ViewDiff(is_staged, path) => {
                 self.selected_diff = Some((is_staged, path));
-            }
-            Message::RestoreFile(path) => {
-                // Raccourci : ouvrir le dialogue et sélectionner le fichier
-                self.restore_dialog_open = true;
-                self.restore_selection = Some(path);
             }
 
             // ── Éditeur de commit ───────────────────────────────────────
@@ -248,8 +238,7 @@ impl StagePanel {
                         .unwrap_or_else(|| "HEAD".to_string());
                     match restore_file_from_branch(repo.path(), &current_branch, &path) {
                         Ok(()) => {
-                            self.status =
-                                Some(format!("Restored {path} from {current_branch}"));
+                            self.status = Some(format!("Restored {path} from {current_branch}"));
                             self.needs_refresh = true;
                             self.restore_dialog_open = false;
                             self.restore_selection = None;
@@ -282,25 +271,20 @@ impl StagePanel {
         _theme: &'a Theme,
         repo: Option<&'a RepoContext>,
     ) -> Element<'a, Message> {
-        let mut content = Column::new()
-            .spacing(8)
-            .padding(10)
-            .width(Length::Fill);
+        let mut content = Column::new().spacing(8).padding(10).width(Length::Fill);
 
         // Titre principal
         content = content.push(text("Staging & commits").size(20));
         content = content.push(
-            text("Review unstaged and staged changes, preview diffs, and manage commits.")
-                .size(13),
+            text("Review unstaged and staged changes, preview diffs, and manage commits.").size(13),
         );
 
         // Vérifier si un dépôt est sélectionné
         let repo = match repo {
             Some(r) => r,
             None => {
-                content = content.push(
-                    text("Open a repository to inspect and stage its changes.").size(13),
-                );
+                content = content
+                    .push(text("Open a repository to inspect and stage its changes.").size(13));
                 return container(content)
                     .width(Length::Fill)
                     .height(Length::Fill)
@@ -376,7 +360,11 @@ impl StagePanel {
 
     /// Construit la liste de fichiers staged ou unstaged.
     fn build_file_list(&self, staged: bool) -> Element<'_, Message> {
-        let title = if staged { "Staged files" } else { "Unstaged files" };
+        let title = if staged {
+            "Staged files"
+        } else {
+            "Unstaged files"
+        };
         let list = if staged { &self.staged } else { &self.unstaged };
 
         let mut col = Column::new().spacing(4).push(text(title).size(16));
@@ -453,26 +441,24 @@ impl StagePanel {
         // Contenu du diff
         match &self.selected_diff {
             Some((is_staged, path)) => {
-                let list = if *is_staged { &self.staged } else { &self.unstaged };
+                let list = if *is_staged {
+                    &self.staged
+                } else {
+                    &self.unstaged
+                };
                 let diff_text = list
                     .iter()
                     .find(|f| &f.path == path)
                     .map(|f| f.diff.as_str())
                     .unwrap_or("(file not found in current list)");
-                col = col.push(
-                    scrollable(text(diff_text).size(12))
-                        .height(Length::Fixed(180.0)),
-                );
+                col = col.push(scrollable(text(diff_text).size(12)).height(Length::Fixed(180.0)));
             }
             None => {
                 col = col.push(text("Select a file to view its patch.").size(12));
             }
         }
 
-        container(col)
-            .width(Length::Fill)
-            .padding(8)
-            .into()
+        container(col).width(Length::Fill).padding(8).into()
     }
 
     /// Construit l'éditeur de commit.
@@ -509,8 +495,7 @@ impl StagePanel {
 
         // Case à cocher pour le signoff
         col = col.push(
-            checkbox("Add Signed-off-by", self.include_signoff)
-                .on_toggle(Message::ToggleSignoff),
+            checkbox("Add Signed-off-by", self.include_signoff).on_toggle(Message::ToggleSignoff),
         );
 
         col.into()
@@ -527,9 +512,8 @@ impl StagePanel {
             .on_input(Message::StashMessageChanged)
             .padding(4);
 
-        let untracked_checkbox =
-            checkbox("Include untracked", self.include_untracked_in_stash)
-                .on_toggle(Message::ToggleIncludeUntracked);
+        let untracked_checkbox = checkbox("Include untracked", self.include_untracked_in_stash)
+            .on_toggle(Message::ToggleIncludeUntracked);
 
         let create_btn = button(text("Create stash").size(12))
             .on_press(Message::CreateStash)
@@ -610,9 +594,7 @@ impl StagePanel {
                         .width(Length::Fill),
                 );
             }
-            col = col.push(
-                scrollable(list_col).height(Length::Fixed(180.0)),
-            );
+            col = col.push(scrollable(list_col).height(Length::Fixed(180.0)));
         }
 
         // Boutons d'action
@@ -629,16 +611,10 @@ impl StagePanel {
             button(text("Restore").size(12)).padding(4)
         };
 
-        let actions_row = Row::new()
-            .spacing(8)
-            .push(cancel_btn)
-            .push(restore_btn);
+        let actions_row = Row::new().spacing(8).push(cancel_btn).push(restore_btn);
         col = col.push(actions_row);
 
-        container(col)
-            .width(Length::Fill)
-            .padding(8)
-            .into()
+        container(col).width(Length::Fill).padding(8).into()
     }
 
     // ── Méthodes internes ──────────────────────────────────────────────

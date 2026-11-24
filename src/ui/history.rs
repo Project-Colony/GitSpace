@@ -13,8 +13,8 @@ use iced::{Element, Length};
 use crate::ui::theme::Theme;
 
 use crate::git::{
-    diff::{FileDiff, FileDiffSummary, commit_diff_file, commit_diff_summaries},
-    log::{CommitFilter, CommitInfo, list_local_branches, read_commit_log},
+    diff::{commit_diff_file, commit_diff_summaries, FileDiff, FileDiffSummary},
+    log::{list_local_branches, read_commit_log, CommitFilter, CommitInfo},
 };
 use crate::ui::context::RepoContext;
 
@@ -133,11 +133,7 @@ impl HistoryPanel {
     // -----------------------------------------------------------------------
 
     /// Traite un message et effectue les operations correspondantes.
-    pub fn update(
-        &mut self,
-        message: Message,
-        repo: Option<&RepoContext>,
-    ) -> iced::Task<Message> {
+    pub fn update(&mut self, message: Message, repo: Option<&RepoContext>) -> iced::Task<Message> {
         match message {
             Message::BranchFilterChanged(value) => {
                 self.filters.branch = value;
@@ -232,15 +228,12 @@ impl HistoryPanel {
         // Titre et description
         main_col = main_col
             .push(text("Commit history").size(24))
-            .push(text(
-                "Explore commits, filter by branch or author, and inspect diffs.",
-            ).size(14));
+            .push(text("Explore commits, filter by branch or author, and inspect diffs.").size(14));
 
         // Sans depot, message d'aide
         let Some(_repo) = repo else {
-            main_col = main_col.push(
-                text("Select or clone a repository to view its commit history.").size(14),
-            );
+            main_col = main_col
+                .push(text("Select or clone a repository to view its commit history.").size(14));
             return main_col.into();
         };
 
@@ -273,10 +266,10 @@ impl HistoryPanel {
     /// Section de filtres dans un conteneur stylise.
     fn view_filters(&self) -> Element<'_, Message> {
         // Premiere ligne : branche et auteur
-        let branch_input = text_input("All branches", &self.filters.branch)
-            .on_input(Message::BranchFilterChanged);
-        let author_input = text_input("name or email", &self.filters.author)
-            .on_input(Message::AuthorChanged);
+        let branch_input =
+            text_input("All branches", &self.filters.branch).on_input(Message::BranchFilterChanged);
+        let author_input =
+            text_input("name or email", &self.filters.author).on_input(Message::AuthorChanged);
 
         let first_row = row![
             text("Branch").size(14),
@@ -288,12 +281,12 @@ impl HistoryPanel {
         .spacing(8);
 
         // Deuxieme ligne : recherche, dates, bouton appliquer
-        let search_input = text_input("message contains", &self.filters.search)
-            .on_input(Message::SearchChanged);
-        let since_input = text_input("YYYY-MM-DD", &self.filters.since)
-            .on_input(Message::SinceChanged);
-        let until_input = text_input("YYYY-MM-DD", &self.filters.until)
-            .on_input(Message::UntilChanged);
+        let search_input =
+            text_input("message contains", &self.filters.search).on_input(Message::SearchChanged);
+        let since_input =
+            text_input("YYYY-MM-DD", &self.filters.since).on_input(Message::SinceChanged);
+        let until_input =
+            text_input("YYYY-MM-DD", &self.filters.until).on_input(Message::UntilChanged);
         let apply_btn = button(text("Apply filters")).on_press(Message::ApplyFilters);
 
         let second_row = row![
@@ -308,16 +301,9 @@ impl HistoryPanel {
         ]
         .spacing(8);
 
-        container(
-            column![
-                text("Filters").size(20),
-                first_row,
-                second_row,
-            ]
-            .spacing(6),
-        )
-        .padding(10)
-        .into()
+        container(column![text("Filters").size(20), first_row, second_row,].spacing(6))
+            .padding(10)
+            .into()
     }
 
     /// Liste defilable des commits.
@@ -351,7 +337,7 @@ impl HistoryPanel {
                     text(&commit.short_id).size(12),
                 ]
                 .spacing(4),
-                text(format!("{}", commit.author)).size(12),
+                text(commit.author.to_string()).size(12),
                 text(date_str).size(12),
             ]
             .spacing(2);
@@ -364,9 +350,7 @@ impl HistoryPanel {
 
             // Marquer visuellement la selection
             if is_selected {
-                col = col.push(
-                    container(commit_btn).padding(2),
-                );
+                col = col.push(container(commit_btn).padding(2));
             } else {
                 col = col.push(commit_btn);
             }
@@ -391,9 +375,8 @@ impl HistoryPanel {
         col = col.push(text("Details").size(20));
 
         let Some(commit_id) = &self.selected_commit else {
-            col = col.push(
-                text("Select a commit from the list to see its details and diff.").size(14),
-            );
+            col = col
+                .push(text("Select a commit from the list to see its details and diff.").size(14));
             return col.into();
         };
 
@@ -483,19 +466,14 @@ impl HistoryPanel {
             if is_expanded {
                 if let Some(diff) = self.loaded_patches.get(&file_path) {
                     if diff.truncated {
-                        files_col = files_col.push(
-                            text("Fichier tronque (trop volumineux)").size(11),
-                        );
+                        files_col =
+                            files_col.push(text("Fichier tronque (trop volumineux)").size(11));
                     }
                     // Afficher le patch dans un conteneur a largeur fixe
                     files_col = files_col.push(
-                        container(
-                            scrollable(
-                                text(&diff.patch).size(12),
-                            ),
-                        )
-                        .padding(4)
-                        .width(Length::Fill),
+                        container(scrollable(text(&diff.patch).size(12)))
+                            .padding(4)
+                            .width(Length::Fill),
                     );
                 } else {
                     files_col = files_col.push(text("Loading...").size(12));
@@ -638,7 +616,9 @@ impl HistoryPanel {
             return; // Deja charge
         }
 
-        let (Some(repo), Some(commit_id)) = (self.last_repo.as_ref(), self.selected_commit.as_ref()) else {
+        let (Some(repo), Some(commit_id)) =
+            (self.last_repo.as_ref(), self.selected_commit.as_ref())
+        else {
             return;
         };
 

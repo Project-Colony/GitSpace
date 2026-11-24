@@ -167,6 +167,7 @@ fn head_tree(repo: &Repository) -> Result<Option<Tree<'_>>, git2::Error> {
 
 /// Get full diff for all files in a commit (prefer commit_diff_summaries + commit_diff_file for lazy loading)
 // Utilise le cache thread-local au lieu d'ouvrir le dépôt à chaque appel
+#[allow(dead_code)] // tested, not used by the iced UI yet
 pub fn commit_diff(repo_path: &str, oid: &str) -> Result<Vec<FileDiff>, git2::Error> {
     let oid = Oid::from_str(oid)?;
     with_cached_repo(repo_path, |repo| {
@@ -187,7 +188,10 @@ pub fn commit_diff(repo_path: &str, oid: &str) -> Result<Vec<FileDiff>, git2::Er
 
 /// Get only summaries for a commit (for lazy loading - no patch content)
 // Résumés de diff pour un commit — lecture seule, utilise le cache
-pub fn commit_diff_summaries(repo_path: &str, oid: &str) -> Result<Vec<FileDiffSummary>, git2::Error> {
+pub fn commit_diff_summaries(
+    repo_path: &str,
+    oid: &str,
+) -> Result<Vec<FileDiffSummary>, git2::Error> {
     let oid = Oid::from_str(oid)?;
     with_cached_repo(repo_path, |repo| {
         let commit = repo.find_commit(oid)?;
@@ -206,7 +210,11 @@ pub fn commit_diff_summaries(repo_path: &str, oid: &str) -> Result<Vec<FileDiffS
 
 /// Get the diff for a single file in a commit (for lazy loading)
 // Diff d'un seul fichier dans un commit — chargement paresseux via le cache
-pub fn commit_diff_file(repo_path: &str, oid: &str, file_path: &str) -> Result<Option<FileDiff>, git2::Error> {
+pub fn commit_diff_file(
+    repo_path: &str,
+    oid: &str,
+    file_path: &str,
+) -> Result<Option<FileDiff>, git2::Error> {
     let oid = Oid::from_str(oid)?;
     with_cached_repo(repo_path, |repo| {
         let commit = repo.find_commit(oid)?;

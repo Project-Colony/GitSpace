@@ -4,32 +4,24 @@
 //! et leurs variantes Italic) pour réduire l'empreinte mémoire.
 
 /// Données de police intégrées au binaire pour les poids essentiels.
-pub const FONT_REGULAR: &[u8] = include_bytes!(
-    "../../assets/JetBrainsMonoNerdFont/JetBrainsMonoNerdFont-Regular.ttf"
-);
-pub const FONT_MEDIUM: &[u8] = include_bytes!(
-    "../../assets/JetBrainsMonoNerdFont/JetBrainsMonoNerdFont-Medium.ttf"
-);
-pub const FONT_SEMIBOLD: &[u8] = include_bytes!(
-    "../../assets/JetBrainsMonoNerdFont/JetBrainsMonoNerdFont-SemiBold.ttf"
-);
-pub const FONT_BOLD: &[u8] = include_bytes!(
-    "../../assets/JetBrainsMonoNerdFont/JetBrainsMonoNerdFont-Bold.ttf"
-);
-pub const FONT_ITALIC: &[u8] = include_bytes!(
-    "../../assets/JetBrainsMonoNerdFont/JetBrainsMonoNerdFont-Italic.ttf"
-);
-pub const FONT_BOLD_ITALIC: &[u8] = include_bytes!(
-    "../../assets/JetBrainsMonoNerdFont/JetBrainsMonoNerdFont-BoldItalic.ttf"
-);
+pub const FONT_REGULAR: &[u8] =
+    include_bytes!("../../assets/JetBrainsMonoNerdFont/JetBrainsMonoNerdFont-Regular.ttf");
+pub const FONT_MEDIUM: &[u8] =
+    include_bytes!("../../assets/JetBrainsMonoNerdFont/JetBrainsMonoNerdFont-Medium.ttf");
+pub const FONT_SEMIBOLD: &[u8] =
+    include_bytes!("../../assets/JetBrainsMonoNerdFont/JetBrainsMonoNerdFont-SemiBold.ttf");
+pub const FONT_BOLD: &[u8] =
+    include_bytes!("../../assets/JetBrainsMonoNerdFont/JetBrainsMonoNerdFont-Bold.ttf");
+pub const FONT_ITALIC: &[u8] =
+    include_bytes!("../../assets/JetBrainsMonoNerdFont/JetBrainsMonoNerdFont-Italic.ttf");
+pub const FONT_BOLD_ITALIC: &[u8] =
+    include_bytes!("../../assets/JetBrainsMonoNerdFont/JetBrainsMonoNerdFont-BoldItalic.ttf");
 
 // Mono variants pour le code / diffs
-pub const FONT_MONO_REGULAR: &[u8] = include_bytes!(
-    "../../assets/JetBrainsMonoNerdFont/JetBrainsMonoNerdFontMono-Regular.ttf"
-);
-pub const FONT_MONO_BOLD: &[u8] = include_bytes!(
-    "../../assets/JetBrainsMonoNerdFont/JetBrainsMonoNerdFontMono-Bold.ttf"
-);
+pub const FONT_MONO_REGULAR: &[u8] =
+    include_bytes!("../../assets/JetBrainsMonoNerdFont/JetBrainsMonoNerdFontMono-Regular.ttf");
+pub const FONT_MONO_BOLD: &[u8] =
+    include_bytes!("../../assets/JetBrainsMonoNerdFont/JetBrainsMonoNerdFontMono-Bold.ttf");
 
 /// Police par défaut pour l'UI.
 pub const DEFAULT_FONT: iced::Font = iced::Font {

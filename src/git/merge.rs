@@ -72,17 +72,15 @@ pub fn detect_conflicts<P: AsRef<Path>>(repo_path: P) -> Result<Vec<String>, git
         let mut conflicts = Vec::new();
         if let Ok(index) = repo.index() {
             if index.has_conflicts() {
-                for conflict in index.conflicts()? {
-                    if let Ok(conflict) = conflict {
-                        if let Some(name) = conflict
-                            .our
-                            .as_ref()
-                            .or(conflict.their.as_ref())
-                            .or(conflict.ancestor.as_ref())
-                            .and_then(|entry| std::str::from_utf8(&entry.path).ok())
-                        {
-                            conflicts.push(name.to_string());
-                        }
+                for conflict in index.conflicts()?.flatten() {
+                    if let Some(name) = conflict
+                        .our
+                        .as_ref()
+                        .or(conflict.their.as_ref())
+                        .or(conflict.ancestor.as_ref())
+                        .and_then(|entry| std::str::from_utf8(&entry.path).ok())
+                    {
+                        conflicts.push(name.to_string());
                     }
                 }
             }

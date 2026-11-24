@@ -42,42 +42,40 @@ impl RepoContext {
             .to_string();
 
         // Valider que le chemin est un depot git et extraire les metadonnees
-        let (current_branch, is_dirty, upstream_remote) =
-            with_cached_repo(path_ref, |repo| {
-                // Branche courante
-                let branch = repo
-                    .head()
+        let (current_branch, is_dirty, upstream_remote) = with_cached_repo(path_ref, |repo| {
+            // Branche courante
+            let branch = repo
+                .head()
+                .ok()
+                .and_then(|head| head.shorthand().ok().map(|s| s.to_string()));
+
+            // Statut dirty : verifier s'il y a des modifications
+            let dirty = repo
+                .statuses(Some(
+                    git2::StatusOptions::new()
+                        .include_untracked(true)
+                        .exclude_submodules(true),
+                ))
+                .map(|statuses| !statuses.is_empty())
+                .unwrap_or(false);
+
+            // Remote upstream de la branche courante
+            let upstream = branch.as_deref().and_then(|b| {
+                repo.find_branch(b, git2::BranchType::Local)
                     .ok()
-                    .and_then(|head| head.shorthand().ok().map(|s| s.to_string()));
-
-                // Statut dirty : verifier s'il y a des modifications
-                let dirty = repo
-                    .statuses(Some(
-                        git2::StatusOptions::new()
-                            .include_untracked(true)
-                            .exclude_submodules(true),
-                    ))
-                    .map(|statuses| !statuses.is_empty())
-                    .unwrap_or(false);
-
-                // Remote upstream de la branche courante
-                let upstream = branch.as_deref().and_then(|b| {
-                    repo.find_branch(b, git2::BranchType::Local)
-                        .ok()
-                        .and_then(|local| {
-                            local
-                                .upstream()
-                                .ok()
-                                .and_then(|u| u.name().ok().flatten().map(|s| {
-                                    // Extraire le nom du remote (ex: "origin/main" -> "origin")
-                                    s.split('/').next().unwrap_or(s).to_string()
-                                }))
+                    .and_then(|local| {
+                        local.upstream().ok().and_then(|u| {
+                            u.name().ok().flatten().map(|s| {
+                                // Extraire le nom du remote (ex: "origin/main" -> "origin")
+                                s.split('/').next().unwrap_or(s).to_string()
+                            })
                         })
-                });
+                    })
+            });
 
-                Ok((branch, dirty, upstream))
-            })
-            .ok()?;
+            Ok((branch, dirty, upstream))
+        })
+        .ok()?;
 
         Some(Self {
             path: path_string,

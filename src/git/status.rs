@@ -12,6 +12,7 @@ pub struct RepoStatus {
     pub behind: Option<usize>,
 }
 
+#[allow(dead_code)] // tested, not used by the iced UI yet
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WorkingTreeStatus {
     pub staged: Vec<String>,
@@ -63,9 +64,8 @@ pub fn read_repo_status<P: AsRef<Path>>(path: P) -> Result<RepoStatus, git2::Err
     })
 }
 
-pub fn read_working_tree_status<P: AsRef<Path>>(
-    path: P,
-) -> Result<WorkingTreeStatus, git2::Error> {
+#[allow(dead_code)] // tested, not used by the iced UI yet
+pub fn read_working_tree_status<P: AsRef<Path>>(path: P) -> Result<WorkingTreeStatus, git2::Error> {
     // Lecture seule de l'arbre de travail — utilise le cache thread-local
     with_cached_repo(path, |repo| {
         let mut options = StatusOptions::new();

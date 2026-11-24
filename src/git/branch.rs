@@ -17,6 +17,7 @@ pub struct BranchEntry {
     pub name: String,
     pub kind: BranchKind,
     pub is_head: bool,
+    #[allow(dead_code)] // tested, not used by the iced UI yet
     pub upstream: Option<String>,
 }
 

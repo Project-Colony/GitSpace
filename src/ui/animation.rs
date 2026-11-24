@@ -473,16 +473,9 @@ struct ActiveAnimation {
 /// Chaque widget peut enregistrer une animation via `set_target`,
 /// et lire sa progression avec `progress`. Le tick global met à jour
 /// toutes les animations actives.
+#[derive(Default)]
 pub struct AnimationState {
     animations: HashMap<AnimationId, ActiveAnimation>,
-}
-
-impl Default for AnimationState {
-    fn default() -> Self {
-        Self {
-            animations: HashMap::new(),
-        }
-    }
 }
 
 impl AnimationState {
@@ -529,10 +522,7 @@ impl AnimationState {
 
     /// Retourne la progression actuelle d'une animation (0.0 à 1.0).
     pub fn progress(&self, id: AnimationId) -> f32 {
-        self.animations
-            .get(&id)
-            .map(|a| a.progress)
-            .unwrap_or(0.0)
+        self.animations.get(&id).map(|a| a.progress).unwrap_or(0.0)
     }
 
     /// Retourne true si au moins une animation est en cours.

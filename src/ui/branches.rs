@@ -13,12 +13,12 @@ use iced::{Element, Length};
 use crate::ui::theme::Theme;
 
 use crate::git::branch::{
-    BranchEntry, BranchKind, archive_branch, checkout_branch, create_branch,
-    create_tracking_branch, delete_branch, list_branches, rename_branch,
+    archive_branch, checkout_branch, create_branch, create_tracking_branch, delete_branch,
+    list_branches, rename_branch, BranchEntry, BranchKind,
 };
-use crate::git::compare::{BranchComparison, DiffSummary, compare_branch_with_head};
-use crate::git::log::{CommitInfo, commits_between_refs, latest_commit_for_branch};
-use crate::git::merge::{MergeOutcome, MergeStrategy, detect_conflicts, merge_branch};
+use crate::git::compare::{compare_branch_with_head, BranchComparison, DiffSummary};
+use crate::git::log::{commits_between_refs, latest_commit_for_branch, CommitInfo};
+use crate::git::merge::{detect_conflicts, merge_branch, MergeOutcome, MergeStrategy};
 use crate::ui::context::RepoContext;
 
 /// Nombre de jours sans commit avant qu'une branche soit consideree obsolete.
@@ -213,11 +213,7 @@ impl BranchPanel {
 
     /// Traite un message et effectue l'operation git correspondante.
     /// Toutes les operations sont synchrones (suffisamment rapides).
-    pub fn update(
-        &mut self,
-        message: Message,
-        repo: Option<&RepoContext>,
-    ) -> iced::Task<Message> {
+    pub fn update(&mut self, message: Message, repo: Option<&RepoContext>) -> iced::Task<Message> {
         match message {
             Message::NewBranchChanged(value) => {
                 self.new_branch = value;
@@ -233,8 +229,7 @@ impl BranchPanel {
                     } else {
                         match create_branch(repo.path(), &name, None) {
                             Ok(()) => {
-                                self.status =
-                                    Some(format!("Branche {name} creee depuis HEAD"));
+                                self.status = Some(format!("Branche {name} creee depuis HEAD"));
                                 self.new_branch.clear();
                                 self.refresh(repo);
                             }
@@ -365,15 +360,12 @@ impl BranchPanel {
         // Titre et description
         main_col = main_col
             .push(text("Branch explorer").size(24))
-            .push(text(
-                "Navigate branches, manage them, and perform git operations.",
-            ).size(14));
+            .push(text("Navigate branches, manage them, and perform git operations.").size(14));
 
         // Sans depot ouvert, message d'aide
         let Some(repo) = repo else {
-            main_col = main_col.push(
-                text("Open a repository to browse and manage its branches.").size(14),
-            );
+            main_col = main_col
+                .push(text("Open a repository to browse and manage its branches.").size(14));
             return main_col.into();
         };
 
@@ -402,8 +394,7 @@ impl BranchPanel {
 
         // Case a cocher "branches obsoletes uniquement"
         main_col = main_col.push(
-            checkbox("Show stale only", self.stale_only)
-                .on_toggle(|_| Message::ToggleStaleOnly),
+            checkbox("Show stale only", self.stale_only).on_toggle(|_| Message::ToggleStaleOnly),
         );
 
         // Disposition en deux colonnes : locales | distantes
@@ -439,19 +430,13 @@ impl BranchPanel {
 
         let create_btn = button(text("Create")).on_press(Message::CreateBranch);
 
-        container(
-            row![text("New branch").size(14), input, create_btn].spacing(8),
-        )
-        .padding(8)
-        .into()
+        container(row![text("New branch").size(14), input, create_btn].spacing(8))
+            .padding(8)
+            .into()
     }
 
     /// Construit la vue d'une colonne de branches (locales ou distantes).
-    fn view_branch_tree<'a>(
-        &'a self,
-        kind: BranchKind,
-        heading: &'a str,
-    ) -> Element<'a, Message> {
+    fn view_branch_tree<'a>(&'a self, kind: BranchKind, heading: &'a str) -> Element<'a, Message> {
         let mut col = column![].spacing(4);
         col = col.push(text(heading).size(20));
 
@@ -564,26 +549,20 @@ impl BranchPanel {
         );
 
         if is_stale {
-            entry_row = entry_row.push(
-                container(text("stale").size(11)).padding([2, 6]),
-            );
+            entry_row = entry_row.push(container(text("stale").size(11)).padding([2, 6]));
         }
 
         entry_row.into()
     }
 
     /// Panneau affichant les details de la branche selectionnee.
-    fn view_selection_panel<'a>(
-        &'a self,
-        _repo: &'a RepoContext,
-    ) -> Element<'a, Message> {
+    fn view_selection_panel<'a>(&'a self, _repo: &'a RepoContext) -> Element<'a, Message> {
         let mut col = column![].spacing(6);
         col = col.push(text("Selection details").size(20));
 
         let Some(branch) = &self.selected_branch else {
-            col = col.push(
-                text("Select a branch to see its details and available actions.").size(14),
-            );
+            col = col
+                .push(text("Select a branch to see its details and available actions.").size(14));
             return col.into();
         };
 
@@ -625,15 +604,12 @@ impl BranchPanel {
         let is_pinned = self.is_branch_pinned(branch);
         let pin_label = if is_pinned { "Unpin" } else { "Pin" };
 
-        col = col.push(
-            button(text(pin_label)).on_press(Message::TogglePin(branch_name.clone())),
-        );
+        col = col.push(button(text(pin_label)).on_press(Message::TogglePin(branch_name.clone())));
 
         // Checkout
         let mut checkout_row = row![].spacing(8);
-        checkout_row = checkout_row.push(
-            button(text("Checkout")).on_press(Message::Checkout(branch_name.clone())),
-        );
+        checkout_row = checkout_row
+            .push(button(text("Checkout")).on_press(Message::Checkout(branch_name.clone())));
         if branch.kind == BranchKind::Remote {
             checkout_row = checkout_row.push(
                 button(text("Checkout & Track"))
@@ -670,14 +646,12 @@ impl BranchPanel {
 
             if !branch.is_head {
                 local_row = local_row.push(
-                    button(text("Delete"))
-                        .on_press(Message::DeleteBranch(branch_name.clone())),
+                    button(text("Delete")).on_press(Message::DeleteBranch(branch_name.clone())),
                 );
             }
 
             local_row = local_row.push(
-                button(text("Archive"))
-                    .on_press(Message::ArchiveBranch(branch_name.clone())),
+                button(text("Archive")).on_press(Message::ArchiveBranch(branch_name.clone())),
             );
 
             col = col.push(local_row);
@@ -807,8 +781,9 @@ impl BranchPanel {
                 }
                 Ok(None) => {}
                 Err(err) => {
-                    self.error =
-                        Some(format!("Echec de lecture de l'historique de branche : {err}"));
+                    self.error = Some(format!(
+                        "Echec de lecture de l'historique de branche : {err}"
+                    ));
                     return;
                 }
             }
@@ -864,8 +839,7 @@ impl BranchPanel {
             Ok(comparison) => self.selected_comparison = Some(comparison),
             Err(err) => {
                 self.selected_comparison = None;
-                self.selected_error =
-                    Some(format!("Echec de la comparaison de branche : {err}"));
+                self.selected_error = Some(format!("Echec de la comparaison de branche : {err}"));
             }
         }
     }
@@ -878,8 +852,7 @@ impl BranchPanel {
             Ok(comparison) => self.compare_diff = comparison.diff,
             Err(err) => {
                 self.compare_diff = None;
-                self.compare_error =
-                    Some(format!("Echec de la comparaison de branche : {err}"));
+                self.compare_error = Some(format!("Echec de la comparaison de branche : {err}"));
             }
         }
 
@@ -887,8 +860,9 @@ impl BranchPanel {
             Ok(commits) => self.compare_commits = commits,
             Err(err) => {
                 self.compare_commits.clear();
-                self.compare_error =
-                    Some(format!("Echec du chargement des commits de comparaison : {err}"));
+                self.compare_error = Some(format!(
+                    "Echec du chargement des commits de comparaison : {err}"
+                ));
             }
         }
     }
@@ -923,10 +897,7 @@ impl BranchPanel {
 
     /// Determine si une branche doit etre affichee selon les filtres actifs.
     fn should_show_branch(&self, branch: &BranchEntry) -> bool {
-        if self.stale_only && !self.is_branch_stale(branch) {
-            return false;
-        }
-        true
+        !self.stale_only || self.is_branch_stale(branch)
     }
 
     /// Verifie si une branche est epinglee.

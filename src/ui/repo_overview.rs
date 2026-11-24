@@ -14,9 +14,9 @@ use crate::ui::theme::Theme;
 use crate::auth::AuthManager;
 use crate::config::NetworkOptions;
 use crate::git::remote::{
-    PullOutcome, RemoteInfo, fetch_remote, list_remotes, pull_branch, push_branch,
+    fetch_remote, list_remotes, pull_branch, push_branch, PullOutcome, RemoteInfo,
 };
-use crate::git::status::{RepoStatus, read_repo_status};
+use crate::git::status::{read_repo_status, RepoStatus};
 use crate::ui::context::RepoContext;
 
 // ── Structures auxiliaires ─────────────────────────────────────────────────
@@ -52,12 +52,6 @@ pub enum Message {
     OpenTerminal,
     /// Ouvrir l'explorateur de fichiers dans le dépôt.
     OpenFileExplorer,
-    /// Résultat d'un fetch (succès ou erreur).
-    FetchResult(Result<String, String>),
-    /// Résultat d'un pull (succès ou erreur).
-    PullResult(Result<String, String>),
-    /// Résultat d'un push (succès ou erreur).
-    PushResult(Result<String, String>),
 }
 
 // ── Panneau principal ──────────────────────────────────────────────────────
@@ -156,25 +150,6 @@ impl RepoOverviewPanel {
                     }
                 }
             }
-            // Résultats asynchrones (pour usage futur si les opérations deviennent async)
-            Message::FetchResult(result) => {
-                self.action_status = Some(match result {
-                    Ok(msg) => msg,
-                    Err(err) => format!("Fetch failed: {err}"),
-                });
-            }
-            Message::PullResult(result) => {
-                self.action_status = Some(match result {
-                    Ok(msg) => msg,
-                    Err(err) => format!("Pull failed: {err}"),
-                });
-            }
-            Message::PushResult(result) => {
-                self.action_status = Some(match result {
-                    Ok(msg) => msg,
-                    Err(err) => format!("Push failed: {err}"),
-                });
-            }
         }
 
         Task::none()
@@ -186,10 +161,7 @@ impl RepoOverviewPanel {
         _theme: &'a Theme,
         repo: Option<&'a RepoContext>,
     ) -> Element<'a, Message> {
-        let mut content = Column::new()
-            .spacing(8)
-            .padding(10)
-            .width(Length::Fill);
+        let mut content = Column::new().spacing(8).padding(10).width(Length::Fill);
 
         // ── En-tête + statut d'action ───────────────────────────────────
         let mut header = Row::new().spacing(12);
@@ -254,12 +226,8 @@ impl RepoOverviewPanel {
     /// Section de la branche courante avec upstream et ahead/behind.
     fn build_branch_section(&self) -> Element<'_, Message> {
         let status = self.status.clone().unwrap_or_default();
-        let branch = status
-            .branch
-            .unwrap_or_else(|| "(detached)".to_string());
-        let upstream = status
-            .upstream
-            .unwrap_or_else(|| "No upstream".to_string());
+        let branch = status.branch.unwrap_or_else(|| "(detached)".to_string());
+        let upstream = status.upstream.unwrap_or_else(|| "No upstream".to_string());
         let ahead = status.ahead.unwrap_or(0);
         let behind = status.behind.unwrap_or(0);
 
@@ -285,11 +253,7 @@ impl RepoOverviewPanel {
             .push(branch_info)
             .push(stats);
 
-        col = col.push(
-            container(branch_row)
-                .width(Length::Fill)
-                .padding(10),
-        );
+        col = col.push(container(branch_row).width(Length::Fill).padding(10));
 
         col.into()
     }
@@ -301,9 +265,7 @@ impl RepoOverviewPanel {
         col = col.push(text("Remotes").size(16));
 
         if self.remotes.is_empty() {
-            col = col.push(
-                text("No remotes configured for this repository.").size(12),
-            );
+            col = col.push(text("No remotes configured for this repository.").size(12));
             return col.into();
         }
 
@@ -472,10 +434,7 @@ impl RepoOverviewPanel {
     /// Résout le remote et la branche à utiliser pour les opérations réseau.
     fn resolve_remote_selection(&self) -> Result<RemoteSelection, String> {
         let status = self.status.clone().unwrap_or_default();
-        let upstream = status
-            .upstream
-            .as_deref()
-            .and_then(split_upstream);
+        let upstream = status.upstream.as_deref().and_then(split_upstream);
         let (remote_name, upstream_branch) = if let Some((remote, branch)) = upstream {
             (remote.to_string(), Some(branch.to_string()))
         } else {
@@ -488,15 +447,15 @@ impl RepoOverviewPanel {
         };
 
         let branch = upstream_branch.or(status.branch);
-        Ok(RemoteSelection { remote_name, branch })
+        Ok(RemoteSelection {
+            remote_name,
+            branch,
+        })
     }
 
     /// Résout le token d'authentification pour un remote donné.
     fn resolve_remote_token(&self, auth: &AuthManager, remote_name: &str) -> Option<String> {
-        let remote = self
-            .remotes
-            .iter()
-            .find(|r| r.name == remote_name)?;
+        let remote = self.remotes.iter().find(|r| r.name == remote_name)?;
         if remote.url == "(no url)" {
             return None;
         }
@@ -596,10 +555,7 @@ fn terminal_commands(path: &Path) -> Vec<ProcessCommand> {
 }
 
 fn split_upstream(upstream: &str) -> Option<(&str, &str)> {
-    let mut parts = upstream.splitn(2, '/');
-    let remote = parts.next()?;
-    let branch = parts.next()?;
-    Some((remote, branch))
+    upstream.split_once('/')
 }
 
 #[cfg(test)]

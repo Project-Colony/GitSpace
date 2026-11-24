@@ -268,9 +268,7 @@ impl NotificationCenter {
             notifications = notifications.push(toast);
         }
 
-        container(notifications)
-            .width(Length::Fixed(340.0))
-            .into()
+        container(notifications).width(Length::Fixed(340.0)).into()
     }
 }
 

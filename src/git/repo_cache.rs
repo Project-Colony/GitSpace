@@ -232,9 +232,7 @@ where
     P: AsRef<Path>,
     F: FnOnce(&Repository) -> Result<R, git2::Error>,
 {
-    LOCAL_CACHE.with(|cache| {
-        cache.borrow().with_repo(path, f)
-    })
+    LOCAL_CACHE.with(|cache| cache.borrow().with_repo(path, f))
 }
 
 /// Invalide l'entree du cache thread-local pour le chemin donne.

@@ -10,8 +10,8 @@ use iced::widget::{
 use iced::{Alignment, Color, Element, Length, Task};
 
 use crate::config::{
-    LoggingOptions, MotionIntensity, Preferences, ThemeMode,
-    MAX_LOG_RETENTION_FILES, MIN_LOG_RETENTION_FILES,
+    LoggingOptions, MotionIntensity, Preferences, ThemeMode, MAX_LOG_RETENTION_FILES,
+    MIN_LOG_RETENTION_FILES,
 };
 use crate::ui::theme::{with_alpha, Theme};
 
@@ -22,8 +22,6 @@ const THEME_MODES: &[ThemeMode] = &[
     ThemeMode::Macchiato,
     ThemeMode::Mocha,
 ];
-
-/// Canaux de release disponibles.
 
 /// Intensites de mouvement disponibles.
 const MOTION_INTENSITIES: &[MotionIntensity] = &[
@@ -320,9 +318,7 @@ impl PreferencesPanel {
                         .add_filter("JSON", &["json"])
                         .pick_file();
                     match path {
-                        Some(p) => {
-                            Preferences::from_path(&p).map_err(|e| e.to_string())
-                        }
+                        Some(p) => Preferences::from_path(&p).map_err(|e| e.to_string()),
                         None => Err("Import annule".to_string()),
                     }
                 }),
@@ -336,8 +332,7 @@ impl PreferencesPanel {
                     Ok(prefs) => {
                         self.preferences = prefs.clone();
                         self.pending_preferences = Some(prefs);
-                        self.import_status =
-                            Some("Preferences importees avec succes".to_string());
+                        self.import_status = Some("Preferences importees avec succes".to_string());
                     }
                     Err(e) => {
                         self.import_status = Some(format!("Erreur d'import : {e}"));
@@ -370,8 +365,7 @@ impl PreferencesPanel {
             Message::ExportResult(result) => {
                 match result {
                     Ok(path) => {
-                        self.export_status =
-                            Some(format!("Preferences exportees dans {path}"));
+                        self.export_status = Some(format!("Preferences exportees dans {path}"));
                     }
                     Err(e) => {
                         self.export_status = Some(format!("Erreur d'export : {e}"));
@@ -389,8 +383,7 @@ impl PreferencesPanel {
             Message::ResetDefaults => {
                 self.preferences = Preferences::default();
                 self.logging = LoggingOptions::default();
-                self.timeout_buffer =
-                    self.preferences.network().network_timeout_secs.to_string();
+                self.timeout_buffer = self.preferences.network().network_timeout_secs.to_string();
                 self.fetch_interval_buffer =
                     self.preferences.auto_fetch_interval_minutes().to_string();
                 self.pending_preferences = Some(self.preferences.clone());
@@ -440,12 +433,13 @@ impl PreferencesPanel {
         .height(Length::Fill);
 
         // Separateur vertical simule par un container colore
-        let separator = container(Space::with_width(1))
-            .height(Length::Fill)
-            .style(move |_: &iced::Theme| container::Style {
-                background: Some(palette.surface_highlight.into()),
-                ..Default::default()
-            });
+        let separator =
+            container(Space::with_width(1))
+                .height(Length::Fill)
+                .style(move |_: &iced::Theme| container::Style {
+                    background: Some(palette.surface_highlight.into()),
+                    ..Default::default()
+                });
 
         let layout = row![sidebar, separator, right_panel]
             .width(Length::Fill)
@@ -481,9 +475,7 @@ impl PreferencesPanel {
         // Boutons de categories
         for cat in PreferencesCategory::ALL {
             let is_selected = self.active_category == cat;
-            sidebar_items = sidebar_items.push(
-                self.view_sidebar_button(theme, cat, is_selected),
-            );
+            sidebar_items = sidebar_items.push(self.view_sidebar_button(theme, cat, is_selected));
         }
 
         // Espace flexible pour pousser le bouton Fermer en bas
@@ -493,30 +485,26 @@ impl PreferencesPanel {
         let close_accent = palette.accent;
         let close_text_color = palette.text_primary;
         let close_surface = palette.surface_highlight;
-        let close_btn = button(
-            text("Fermer")
-                .size(typo.body)
-                .color(close_text_color),
-        )
-        .on_press(Message::Close)
-        .padding([6, 12])
-        .width(Length::Fill)
-        .style(move |_: &iced::Theme, status| {
-            let bg = match status {
-                button::Status::Hovered => with_alpha(close_accent, 0.2),
-                button::Status::Pressed => with_alpha(close_accent, 0.3),
-                _ => with_alpha(close_surface, 0.3),
-            };
-            button::Style {
-                background: Some(bg.into()),
-                border: iced::Border {
-                    radius: 6.0.into(),
+        let close_btn = button(text("Fermer").size(typo.body).color(close_text_color))
+            .on_press(Message::Close)
+            .padding([6, 12])
+            .width(Length::Fill)
+            .style(move |_: &iced::Theme, status| {
+                let bg = match status {
+                    button::Status::Hovered => with_alpha(close_accent, 0.2),
+                    button::Status::Pressed => with_alpha(close_accent, 0.3),
+                    _ => with_alpha(close_surface, 0.3),
+                };
+                button::Style {
+                    background: Some(bg.into()),
+                    border: iced::Border {
+                        radius: 6.0.into(),
+                        ..Default::default()
+                    },
+                    text_color: close_text_color,
                     ..Default::default()
-                },
-                text_color: close_text_color,
-                ..Default::default()
-            }
-        });
+                }
+            });
 
         sidebar_items = sidebar_items.push(close_btn);
         sidebar_items = sidebar_items.push(Space::with_height(theme.spacing.sm));
@@ -568,9 +556,7 @@ impl PreferencesPanel {
                 container(Space::with_width(3)).height(24)
             },
             Space::with_width(6),
-            text(label_text)
-                .size(typo.body)
-                .color(text_color),
+            text(label_text).size(typo.body).color(text_color),
         ]
         .align_y(Alignment::Center);
 
@@ -586,9 +572,7 @@ impl PreferencesPanel {
             .width(Length::Fill)
             .style(move |_: &iced::Theme, status| {
                 let bg = match status {
-                    button::Status::Hovered if !is_selected => {
-                        with_alpha(surface_hl, 0.25)
-                    }
+                    button::Status::Hovered if !is_selected => with_alpha(surface_hl, 0.25),
                     button::Status::Pressed => with_alpha(surface_hl, 0.5),
                     _ => selected_bg,
                 };
@@ -617,53 +601,45 @@ impl PreferencesPanel {
         let text_primary = palette.text_primary;
         let bg_color = palette.background;
 
-        let save_btn = button(
-            text("Sauvegarder")
-                .size(typo.body)
-                .color(bg_color),
-        )
-        .on_press(Message::SavePreferences)
-        .padding([8, 16])
-        .style(move |_: &iced::Theme, status| {
-            let bg = match status {
-                button::Status::Hovered => with_alpha(accent, 0.85),
-                button::Status::Pressed => with_alpha(accent, 0.7),
-                _ => accent,
-            };
-            button::Style {
-                background: Some(bg.into()),
-                border: iced::Border {
-                    radius: 6.0.into(),
+        let save_btn = button(text("Sauvegarder").size(typo.body).color(bg_color))
+            .on_press(Message::SavePreferences)
+            .padding([8, 16])
+            .style(move |_: &iced::Theme, status| {
+                let bg = match status {
+                    button::Status::Hovered => with_alpha(accent, 0.85),
+                    button::Status::Pressed => with_alpha(accent, 0.7),
+                    _ => accent,
+                };
+                button::Style {
+                    background: Some(bg.into()),
+                    border: iced::Border {
+                        radius: 6.0.into(),
+                        ..Default::default()
+                    },
+                    text_color: bg_color,
                     ..Default::default()
-                },
-                text_color: bg_color,
-                ..Default::default()
-            }
-        });
+                }
+            });
 
-        let reset_btn = button(
-            text("Reinitialiser")
-                .size(typo.body)
-                .color(text_primary),
-        )
-        .on_press(Message::ResetDefaults)
-        .padding([8, 16])
-        .style(move |_: &iced::Theme, status| {
-            let bg = match status {
-                button::Status::Hovered => with_alpha(surface_hl, 0.4),
-                button::Status::Pressed => with_alpha(surface_hl, 0.6),
-                _ => with_alpha(surface_hl, 0.2),
-            };
-            button::Style {
-                background: Some(bg.into()),
-                border: iced::Border {
-                    radius: 6.0.into(),
+        let reset_btn = button(text("Reinitialiser").size(typo.body).color(text_primary))
+            .on_press(Message::ResetDefaults)
+            .padding([8, 16])
+            .style(move |_: &iced::Theme, status| {
+                let bg = match status {
+                    button::Status::Hovered => with_alpha(surface_hl, 0.4),
+                    button::Status::Pressed => with_alpha(surface_hl, 0.6),
+                    _ => with_alpha(surface_hl, 0.2),
+                };
+                button::Style {
+                    background: Some(bg.into()),
+                    border: iced::Border {
+                        radius: 6.0.into(),
+                        ..Default::default()
+                    },
+                    text_color: text_primary,
                     ..Default::default()
-                },
-                text_color: text_primary,
-                ..Default::default()
-            }
-        });
+                }
+            });
 
         row![save_btn, Space::with_width(theme.spacing.sm), reset_btn]
             .align_y(Alignment::Center)
@@ -694,11 +670,7 @@ impl PreferencesPanel {
             .on_input(Message::DefaultClonePathChanged)
             .width(Length::Fixed(300.0));
 
-        let browse_btn = styled_secondary_button(
-            theme,
-            "Choisir",
-            Message::BrowseClonePath,
-        );
+        let browse_btn = styled_secondary_button(theme, "Choisir", Message::BrowseClonePath);
 
         let clone_row = row![clone_label, clone_input, browse_btn]
             .spacing(theme.spacing.sm)
@@ -737,16 +709,22 @@ impl PreferencesPanel {
             .spacing(theme.spacing.sm)
             .align_y(Alignment::Center);
 
-        let use_https_cb = checkbox("Preferer HTTPS", network.use_https)
-            .on_toggle(Message::UseHttpsChanged);
-        let allow_ssh_cb = checkbox("Autoriser SSH", network.allow_ssh)
-            .on_toggle(Message::AllowSshChanged);
-        let proto_row = row![use_https_cb, Space::with_width(theme.spacing.md), allow_ssh_cb]
-            .align_y(Alignment::Center);
+        let use_https_cb =
+            checkbox("Preferer HTTPS", network.use_https).on_toggle(Message::UseHttpsChanged);
+        let allow_ssh_cb =
+            checkbox("Autoriser SSH", network.allow_ssh).on_toggle(Message::AllowSshChanged);
+        let proto_row = row![
+            use_https_cb,
+            Space::with_width(theme.spacing.md),
+            allow_ssh_cb
+        ]
+        .align_y(Alignment::Center);
 
-        let auto_fetch_cb =
-            checkbox("Recuperation automatique des remotes", self.preferences.auto_fetch_enabled())
-                .on_toggle(Message::AutoFetchEnabledChanged);
+        let auto_fetch_cb = checkbox(
+            "Recuperation automatique des remotes",
+            self.preferences.auto_fetch_enabled(),
+        )
+        .on_toggle(Message::AutoFetchEnabledChanged);
 
         let mut network_col = column![
             section_header(theme, "Reseau", "Proxy, timeout et protocoles"),
@@ -777,7 +755,11 @@ impl PreferencesPanel {
             heading,
             subtitle,
             Space::with_height(theme.spacing.md),
-            section_header(theme, "Depots", "Chemin de destination par defaut pour les clones"),
+            section_header(
+                theme,
+                "Depots",
+                "Chemin de destination par defaut pour les clones"
+            ),
             Space::with_height(theme.spacing.xs),
             clone_row,
             Space::with_height(theme.spacing.md),
@@ -851,7 +833,11 @@ impl PreferencesPanel {
             Space::with_height(theme.spacing.md),
             horizontal_rule(1),
             Space::with_height(theme.spacing.md),
-            section_header(theme, "Taille des controles", "Ajustez la hauteur des elements"),
+            section_header(
+                theme,
+                "Taille des controles",
+                "Ajustez la hauteur des elements"
+            ),
             Space::with_height(theme.spacing.xs),
             height_row,
         ]
@@ -902,7 +888,11 @@ impl PreferencesPanel {
             heading,
             subtitle,
             Space::with_height(theme.spacing.md),
-            section_header(theme, "Animations", "Controlez l'intensite et le comportement des animations"),
+            section_header(
+                theme,
+                "Animations",
+                "Controlez l'intensite et le comportement des animations"
+            ),
             Space::with_height(theme.spacing.xs),
             motion_row,
             reduced_cb,
@@ -956,17 +946,9 @@ impl PreferencesPanel {
         .on_toggle(Message::AllowEncryptedTokensChanged);
 
         // -- Import / Export --
-        let import_btn = styled_secondary_button(
-            theme,
-            "Importer",
-            Message::ImportSettings,
-        );
+        let import_btn = styled_secondary_button(theme, "Importer", Message::ImportSettings);
 
-        let export_btn = styled_secondary_button(
-            theme,
-            "Exporter",
-            Message::ExportSettings,
-        );
+        let export_btn = styled_secondary_button(theme, "Exporter", Message::ExportSettings);
 
         let mut ie_col = column![
             row![import_btn, Space::with_width(theme.spacing.sm), export_btn]
@@ -993,7 +975,11 @@ impl PreferencesPanel {
             heading,
             subtitle,
             Space::with_height(theme.spacing.md),
-            section_header(theme, "Journalisation", "Nombre de fichiers de log conserves"),
+            section_header(
+                theme,
+                "Journalisation",
+                "Nombre de fichiers de log conserves"
+            ),
             Space::with_height(theme.spacing.xs),
             retention_row,
             Space::with_height(theme.spacing.md),
@@ -1005,7 +991,11 @@ impl PreferencesPanel {
             Space::with_height(theme.spacing.md),
             horizontal_rule(1),
             Space::with_height(theme.spacing.md),
-            section_header(theme, "Import / Export", "Transferez vos preferences au format JSON"),
+            section_header(
+                theme,
+                "Import / Export",
+                "Transferez vos preferences au format JSON"
+            ),
             Space::with_height(theme.spacing.xs),
             ie_col,
         ]
@@ -1018,7 +1008,11 @@ impl PreferencesPanel {
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
 /// En-tete de sous-section avec barre accent a gauche.
-fn section_header<'a, M: 'a>(theme: &'a Theme, title: &'a str, subtitle: &'a str) -> Element<'a, M> {
+fn section_header<'a, M: 'a>(
+    theme: &'a Theme,
+    title: &'a str,
+    subtitle: &'a str,
+) -> Element<'a, M> {
     let palette = &theme.palette;
     let typo = &theme.typography;
     let accent = palette.accent;
@@ -1035,9 +1029,7 @@ fn section_header<'a, M: 'a>(theme: &'a Theme, title: &'a str, subtitle: &'a str
         });
 
     let labels = column![
-        text(title)
-            .size(typo.body)
-            .color(palette.text_primary),
+        text(title).size(typo.body).color(palette.text_primary),
         text(subtitle)
             .size(typo.label)
             .color(palette.text_secondary),

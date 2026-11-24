@@ -21,6 +21,7 @@ pub struct CommitInfo {
     pub author: String,
     pub email: Option<String>,
     pub time: Time,
+    #[allow(dead_code)] // tested, not used by the iced UI yet
     pub parents: Vec<String>,
     pub files_changed: Option<usize>,
     pub additions: Option<usize>,

@@ -145,10 +145,14 @@ impl DevGalleryPanel {
         .spacing(theme.spacing.xs)
         .width(Length::Fill);
 
-        scrollable(container(content).width(Length::Fill).padding(theme.spacing.md))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+        scrollable(
+            container(content)
+                .width(Length::Fill)
+                .padding(theme.spacing.md),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
     }
 
     /// Groupe de demonstration des boutons et cases a cocher.
@@ -160,13 +164,9 @@ impl DevGalleryPanel {
             .size(typo.title)
             .color(palette.text_primary);
 
-        let primary_btn = button(
-            text("Primaire")
-                .size(typo.body)
-                .color(palette.text_primary),
-        )
-        .on_press(Message::PrimaryPressed)
-        .width(Length::Fixed(140.0));
+        let primary_btn = button(text("Primaire").size(typo.body).color(palette.text_primary))
+            .on_press(Message::PrimaryPressed)
+            .width(Length::Fixed(140.0));
 
         let secondary_btn = button(
             text("Secondaire")
@@ -176,11 +176,10 @@ impl DevGalleryPanel {
         .on_press(Message::SecondaryPressed)
         .width(Length::Fixed(140.0));
 
-        let btn_row = row![primary_btn, secondary_btn]
-            .spacing(theme.spacing.sm);
+        let btn_row = row![primary_btn, secondary_btn].spacing(theme.spacing.sm);
 
-        let feature_cb = checkbox("Activer la fonctionnalite", self.toggled)
-            .on_toggle(Message::FeatureToggled);
+        let feature_cb =
+            checkbox("Activer la fonctionnalite", self.toggled).on_toggle(Message::FeatureToggled);
 
         let notif_cb = checkbox("Autoriser les notifications", self.notifications_enabled)
             .on_toggle(Message::NotificationsToggled);
@@ -314,8 +313,12 @@ impl DevGalleryPanel {
             "Notifications : apparition de toast, boutons d'action",
         ];
 
-        let mut col = column![group_title, horizontal_rule(1), Space::with_height(theme.spacing.xs)]
-            .spacing(theme.spacing.xs);
+        let mut col = column![
+            group_title,
+            horizontal_rule(1),
+            Space::with_height(theme.spacing.xs)
+        ]
+        .spacing(theme.spacing.xs);
 
         for item in &items {
             col = col.push(

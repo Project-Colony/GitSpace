@@ -6,9 +6,7 @@
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use iced::futures::{SinkExt, Stream};
-use iced::widget::{
-    button, column, container, row, scrollable, text, text_input, Space,
-};
+use iced::widget::{button, column, container, row, scrollable, text, text_input, Space};
 use iced::{Alignment, Element, Font, Length, Task};
 
 use crate::auth::{AuthManager, DeviceFlow, OAuthProvider, OAuthResult};
@@ -185,9 +183,7 @@ impl AuthPanel {
                     tokio::task::spawn_blocking(move || auth.start_oauth(provider)),
                     |result| match result {
                         Ok(oauth_result) => Message::GitlabOAuthResult(oauth_result),
-                        Err(err) => {
-                            Message::GitlabOAuthResult(OAuthResult::Error(err.to_string()))
-                        }
+                        Err(err) => Message::GitlabOAuthResult(OAuthResult::Error(err.to_string())),
                     },
                 )
             }
@@ -210,18 +206,14 @@ impl AuthPanel {
                 };
                 self.github_sign_in = None;
                 match result {
-                    OAuthResult::Success(token) => {
-                        match self.auth.store_oauth_token(&token) {
-                            Ok(()) => {
-                                self.github_status =
-                                    Some("Connexion GitHub réussie !".to_string());
-                            }
-                            Err(e) => {
-                                self.github_status =
-                                    Some(format!("Erreur de stockage du token : {e}"));
-                            }
+                    OAuthResult::Success(token) => match self.auth.store_oauth_token(&token) {
+                        Ok(()) => {
+                            self.github_status = Some("Connexion GitHub réussie !".to_string());
                         }
-                    }
+                        Err(e) => {
+                            self.github_status = Some(format!("Erreur de stockage du token : {e}"));
+                        }
+                    },
                     OAuthResult::Cancelled => {
                         self.github_status = Some("Connexion annulée".to_string());
                     }
@@ -257,18 +249,14 @@ impl AuthPanel {
             Message::GitlabOAuthResult(result) => {
                 self.gitlab_in_progress = false;
                 match result {
-                    OAuthResult::Success(token) => {
-                        match self.auth.store_oauth_token(&token) {
-                            Ok(()) => {
-                                self.gitlab_status =
-                                    Some("Connexion GitLab réussie !".to_string());
-                            }
-                            Err(e) => {
-                                self.gitlab_status =
-                                    Some(format!("Erreur de stockage du token : {e}"));
-                            }
+                    OAuthResult::Success(token) => match self.auth.store_oauth_token(&token) {
+                        Ok(()) => {
+                            self.gitlab_status = Some("Connexion GitLab réussie !".to_string());
                         }
-                    }
+                        Err(e) => {
+                            self.gitlab_status = Some(format!("Erreur de stockage du token : {e}"));
+                        }
+                    },
                     OAuthResult::Cancelled => {
                         self.gitlab_status = Some("Connexion annulée".to_string());
                     }
@@ -315,8 +303,7 @@ impl AuthPanel {
                 self.manual_validating = false;
                 match result {
                     Ok(()) => {
-                        self.manual_status =
-                            Some("Token validé et enregistré !".to_string());
+                        self.manual_status = Some("Token validé et enregistré !".to_string());
                         self.manual_token.clear();
                     }
                     Err(e) => {
@@ -358,11 +345,10 @@ impl AuthPanel {
             .size(typo.heading)
             .color(palette.text_primary);
 
-        let description = text(
-            "Connectez vos comptes de fournisseurs Git pour un acces fluide aux depots.",
-        )
-        .size(typo.body)
-        .color(palette.text_secondary);
+        let description =
+            text("Connectez vos comptes de fournisseurs Git pour un acces fluide aux depots.")
+                .size(typo.body)
+                .color(palette.text_secondary);
 
         // Section des comptes connectés.
         let accounts_section = self.view_connected_accounts(theme);
@@ -386,10 +372,14 @@ impl AuthPanel {
         .spacing(theme.spacing.xs)
         .width(Length::Fill);
 
-        scrollable(container(content).width(Length::Fill).padding(theme.spacing.md))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+        scrollable(
+            container(content)
+                .width(Length::Fill)
+                .padding(theme.spacing.md),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
     }
 
     /// Construit la section des comptes connectés.
@@ -406,10 +396,7 @@ impl AuthPanel {
             .color(palette.text_secondary);
 
         let hosts = self.auth.known_hosts();
-        let oauth_hosts: Vec<_> = hosts
-            .iter()
-            .filter(|h| !h.starts_with("oauth:"))
-            .collect();
+        let oauth_hosts: Vec<_> = hosts.iter().filter(|h| !h.starts_with("oauth:")).collect();
 
         let mut items = column![].spacing(theme.spacing.xs);
 
@@ -603,12 +590,9 @@ impl AuthPanel {
             .size(typo.label)
             .color(palette.text_secondary);
 
-        let github_input = text_input(
-            "Identifiant OAuth GitHub",
-            &self.custom_github_client_id,
-        )
-        .on_input(Message::GithubClientIdChanged)
-        .width(Length::Fixed(280.0));
+        let github_input = text_input("Identifiant OAuth GitHub", &self.custom_github_client_id)
+            .on_input(Message::GithubClientIdChanged)
+            .width(Length::Fixed(280.0));
 
         let github_row = row![github_label, github_input]
             .spacing(theme.spacing.sm)
@@ -618,20 +602,22 @@ impl AuthPanel {
             .size(typo.label)
             .color(palette.text_secondary);
 
-        let gitlab_input = text_input(
-            "Identifiant OAuth GitLab",
-            &self.custom_gitlab_client_id,
-        )
-        .on_input(Message::GitlabClientIdChanged)
-        .width(Length::Fixed(280.0));
+        let gitlab_input = text_input("Identifiant OAuth GitLab", &self.custom_gitlab_client_id)
+            .on_input(Message::GitlabClientIdChanged)
+            .width(Length::Fixed(280.0));
 
         let gitlab_row = row![gitlab_label, gitlab_input]
             .spacing(theme.spacing.sm)
             .align_y(Alignment::Center);
 
         // Note sur les variables d'environnement.
-        let mut col = column![config_hint, Space::with_height(theme.spacing.xs), github_row, gitlab_row]
-            .spacing(theme.spacing.xs);
+        let mut col = column![
+            config_hint,
+            Space::with_height(theme.spacing.xs),
+            github_row,
+            gitlab_row
+        ]
+        .spacing(theme.spacing.xs);
 
         if GITHUB_CLIENT_ID.is_some() || GITLAB_CLIENT_ID.is_some() {
             col = col.push(
@@ -664,9 +650,7 @@ impl AuthPanel {
         .color(palette.text_secondary);
 
         // Champ hôte.
-        let host_label = text("Hote :")
-            .size(typo.body)
-            .color(palette.text_secondary);
+        let host_label = text("Hote :").size(typo.body).color(palette.text_secondary);
 
         let host_input = text_input("ex. github.com ou gitlab.example.com", &self.manual_host)
             .on_input(Message::ManualHostChanged)
@@ -681,19 +665,17 @@ impl AuthPanel {
             .size(typo.body)
             .color(palette.text_secondary);
 
-        let token_input =
-            text_input("Jeton d'acces personnel", &self.manual_token)
-                .on_input(Message::ManualTokenChanged)
-                .secure(true)
-                .width(Length::Fixed(300.0));
+        let token_input = text_input("Jeton d'acces personnel", &self.manual_token)
+            .on_input(Message::ManualTokenChanged)
+            .secure(true)
+            .width(Length::Fixed(300.0));
 
         let token_row = row![token_label, token_input]
             .spacing(theme.spacing.sm)
             .align_y(Alignment::Center);
 
         // Bouton de validation.
-        let can_save =
-            !self.manual_host.trim().is_empty()
+        let can_save = !self.manual_host.trim().is_empty()
             && !self.manual_token.trim().is_empty()
             && !self.manual_validating;
 
@@ -747,7 +729,9 @@ fn github_device_flow(
             }
             Err(err) => {
                 let _ = output
-                    .send(GithubSignInEvent::Finished(OAuthResult::Error(err.to_string())))
+                    .send(GithubSignInEvent::Finished(OAuthResult::Error(
+                        err.to_string(),
+                    )))
                     .await;
                 return;
             }

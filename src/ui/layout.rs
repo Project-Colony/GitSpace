@@ -227,9 +227,5 @@ pub fn view_tab_bar<'a>(
         ));
     }
 
-    column![
-        container(tabs).width(Length::Fill),
-        horizontal_rule(1),
-    ]
-    .into()
+    column![container(tabs).width(Length::Fill), horizontal_rule(1),].into()
 }

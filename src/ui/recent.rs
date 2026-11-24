@@ -122,9 +122,7 @@ impl RecentList {
             .color(palette.text_secondary);
 
         // Barre de recherche et bouton parcourir.
-        let filter_label = text("Filter")
-            .size(typo.body)
-            .color(palette.text_secondary);
+        let filter_label = text("Filter").size(typo.body).color(palette.text_secondary);
 
         let search_input = text_input("Type to filter by name or path", &self.search)
             .on_input(Message::SearchChanged)
@@ -151,14 +149,25 @@ impl RecentList {
         let body = scrollable(content).width(Length::Fill).height(Length::Fill);
 
         // Assemblage final de la colonne.
-        column![heading, description, Space::with_height(8.0), filter_row, Space::with_height(8.0), body]
-            .spacing(theme.spacing.xs)
-            .width(Length::Fill)
-            .into()
+        column![
+            heading,
+            description,
+            Space::with_height(8.0),
+            filter_row,
+            Space::with_height(8.0),
+            body
+        ]
+        .spacing(theme.spacing.xs)
+        .width(Length::Fill)
+        .into()
     }
 
     /// Construit la liste filtrée des dépôts récents.
-    fn view_repo_list<'a>(&'a self, theme: &'a Theme, config: &'a AppConfig) -> Element<'a, Message> {
+    fn view_repo_list<'a>(
+        &'a self,
+        theme: &'a Theme,
+        config: &'a AppConfig,
+    ) -> Element<'a, Message> {
         let palette = &theme.palette;
         let typo = &theme.typography;
         let query = self.search_applied.to_lowercase();
@@ -218,8 +227,7 @@ impl RecentList {
         .width(Length::Fixed(520.0))
         .on_press(Message::BrowseClicked);
 
-        let mut col = column![hint, Space::with_height(8.0), open_btn]
-            .spacing(theme.spacing.xs);
+        let mut col = column![hint, Space::with_height(8.0), open_btn].spacing(theme.spacing.xs);
 
         // Raccourcis d'accès rapide vers les répertoires courants.
         let common = Self::common_paths();

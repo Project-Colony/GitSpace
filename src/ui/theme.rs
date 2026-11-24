@@ -168,11 +168,9 @@ impl Theme {
             success: color_from_rgb(0xa6, 0xe3, 0xa1),
             danger: color_from_rgb(0xf3, 0x8b, 0xa8),
         };
-        iced::Theme::custom_with_fn(
-            "Catppuccin".to_string(),
-            iced_palette,
-            |palette| iced::theme::palette::Extended::generate(palette),
-        )
+        iced::Theme::custom_with_fn("Catppuccin".to_string(), iced_palette, |palette| {
+            iced::theme::palette::Extended::generate(palette)
+        })
     }
 }
 
@@ -183,5 +181,8 @@ fn color_from_rgb(r: u8, g: u8, b: u8) -> Color {
 
 /// Applique une opacité alpha à une couleur Iced.
 pub fn with_alpha(color: Color, alpha: f32) -> Color {
-    Color { a: alpha.clamp(0.0, 1.0), ..color }
+    Color {
+        a: alpha.clamp(0.0, 1.0),
+        ..color
+    }
 }

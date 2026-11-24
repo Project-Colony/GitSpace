@@ -6,7 +6,7 @@
 use iced::widget::{button, container, row, text, Space};
 use iced::{Alignment, Color, Element, Length};
 
-use crate::ui::theme::{Theme, with_alpha};
+use crate::ui::theme::{with_alpha, Theme};
 
 /// Crée un élément de menu stylisé.
 pub fn menu_item<'a, M: Clone + 'a>(
@@ -35,19 +35,16 @@ pub fn menu_item<'a, M: Clone + 'a>(
 
     let content = row![
         // Indicateur circulaire
-        container(Space::new(7, 7))
-            .style(move |_: &iced::Theme| container::Style {
-                background: Some(icon_color.into()),
-                border: iced::Border {
-                    radius: 4.0.into(),
-                    ..Default::default()
-                },
+        container(Space::new(7, 7)).style(move |_: &iced::Theme| container::Style {
+            background: Some(icon_color.into()),
+            border: iced::Border {
+                radius: 4.0.into(),
                 ..Default::default()
-            }),
+            },
+            ..Default::default()
+        }),
         Space::with_width(10),
-        text(label)
-            .size(theme.typography.body)
-            .color(text_color),
+        text(label).size(theme.typography.body).color(text_color),
     ]
     .align_y(Alignment::Center)
     .padding([4, 8]);
@@ -90,18 +87,14 @@ pub fn tab_button<'a, M: Clone + 'a>(
 
     let accent = theme.palette.accent;
 
-    let content = text(label)
-        .size(theme.typography.body)
-        .color(text_color);
+    let content = text(label).size(theme.typography.body).color(text_color);
 
     button(content)
         .on_press(on_press)
         .padding([6, 16])
         .style(move |_theme: &iced::Theme, status| {
             let bg = match status {
-                button::Status::Hovered if !is_active => {
-                    with_alpha(accent, 0.1)
-                }
+                button::Status::Hovered if !is_active => with_alpha(accent, 0.1),
                 _ => Color::TRANSPARENT,
             };
             button::Style {
@@ -109,7 +102,11 @@ pub fn tab_button<'a, M: Clone + 'a>(
                 border: iced::Border {
                     radius: 4.0.into(),
                     width: if is_active { 2.0 } else { 0.0 },
-                    color: if is_active { accent } else { Color::TRANSPARENT },
+                    color: if is_active {
+                        accent
+                    } else {
+                        Color::TRANSPARENT
+                    },
                 },
                 text_color,
                 ..Default::default()
