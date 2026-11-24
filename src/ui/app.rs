@@ -225,6 +225,9 @@ impl GitSpaceApp {
                     let mut prefs = self.config.preferences().clone();
                     prefs.set_pinned_branches(pinned);
                     self.config.set_preferences(prefs);
+                    // Sinon une validation ulterieure des preferences restaurerait l'ancienne liste.
+                    self.preferences_panel
+                        .set_preferences(self.config.preferences().clone());
                     self.save_config();
                 }
 
