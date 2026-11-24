@@ -74,8 +74,30 @@ impl AuthManager {
         }
     }
 
+    /// Returns the token saved for `host`. An expired OAuth token with a refresh token is
+    /// refreshed first, which blocks on one HTTP request; `None` if that fails.
     pub fn resolve_for_host(&self, host: &str) -> Option<String> {
-        self.storage.get_token(&storage_key(host)).ok().flatten()
+        let key = storage_key(host);
+        if let Some(oauth) = self.get_oauth_token(&key) {
+            if oauth.is_expired() && oauth.refresh_token.is_some() {
+                return self.refresh_oauth_token(&oauth);
+            }
+        }
+        self.storage.get_token(&key).ok().flatten()
+    }
+
+    /// Refreshes an expired OAuth token, saves the new one and returns its access token.
+    fn refresh_oauth_token(&self, token: &OAuthToken) -> Option<String> {
+        let refreshed = token
+            .refresh()
+            .inspect_err(|err| {
+                warn!(target: "gitspace::auth", host = %token.host, error = %err, "failed to refresh the OAuth token");
+            })
+            .ok()?;
+        if let Err(err) = self.store_oauth_token(&refreshed) {
+            warn!(target: "gitspace::auth", host = %token.host, error = %err, "failed to save the refreshed OAuth token");
+        }
+        Some(refreshed.access_token)
     }
 
     pub fn resolve_for_url(&self, url: &str) -> Option<String> {
