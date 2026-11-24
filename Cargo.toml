@@ -2,7 +2,7 @@
 name = "gitspace"
 version = "0.1.2"
 edition = "2021"
-rust-version = "1.99"
+rust-version = "1.100"
 # MSRV-aware resolution: `cargo update` never locks a crate newer than rust-version allows.
 resolver = "3"
 description = "Desktop Git client that gathers your GitHub and GitLab repositories in one panel-based interface"
@@ -32,18 +32,18 @@ chrono = { version = "0.4.45", default-features = false, features = ["clock", "s
 # silent in-memory fallback: an unavailable store is an error.
 keyring = { version = "4.2.0", default-features = false, features = ["v1"] }
 chacha20poly1305 = "0.11.0"
-rand = "0.10.3"
+rand = "0.10.4"
 base64 = "0.23.1"
-url = "2.5.8"
+url = "2.5.9"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["ansi", "env-filter", "fmt", "json", "registry"] }
 tracing-appender = "0.2.5"
 argon2 = { version = "0.6.0", default-features = false, features = ["alloc"] }
 thiserror = "2.0.21"
-zeroize = { version = "1.9.1", features = ["derive"] }
+zeroize = { version = "1.9.2", features = ["derive"] }
 parking_lot = "0.13.0"
 oauth2 = { version = "5.0.0", default-features = false }
-webbrowser = "1.2.6"
+webbrowser = "1.2.7"
 
 [dev-dependencies]
 tempfile = "3.27.0"
@@ -54,3 +54,15 @@ lto = "thin"
 codegen-units = 1
 panic = "abort"
 strip = "symbols"
+
+# Two old objc2 releases that eframe 0.27 pulls in on macOS no longer compile on
+# Rust 1.100: 0.4.1 (through winit 0.29 and icrate) and 0.3.0-beta.3.patch-leaks.3
+# (through accesskit_macos). Forwarding methods of their `Ivar` iterator impls
+# (`nth`, `nth_back`) fail to type-check. Neither line has a fixed release, and
+# newer objc2 lines need an eframe upgrade, which waits for the iced port (#1).
+# Each vendor/ copy is the crates.io release with only those methods removed;
+# the default `Iterator::nth` and `DoubleEndedIterator::nth_back` return the
+# same items. Remove this patch with the egui code.
+[patch.crates-io]
+objc2 = { path = "vendor/objc2-0.4.1" }
+objc2-0-3 = { package = "objc2", path = "vendor/objc2-0.3.0-beta.3.patch-leaks.3" }

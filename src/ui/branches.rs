@@ -741,10 +741,7 @@ impl BranchPanel {
     }
 
     fn should_show_branch(&self, branch: &BranchEntry) -> bool {
-        if self.stale_only && !self.is_branch_stale(branch) {
-            return false;
-        }
-        true
+        !self.stale_only || self.is_branch_stale(branch)
     }
 
     fn is_branch_pinned(&self, branch: &BranchEntry) -> bool {
