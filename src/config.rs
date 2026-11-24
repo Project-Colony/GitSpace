@@ -47,21 +47,6 @@ pub enum ThemeMode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Keybinding {
-    pub action: String,
-    pub binding: String,
-}
-
-impl Default for Keybinding {
-    fn default() -> Self {
-        Self {
-            action: "Open settings".to_string(),
-            binding: "Ctrl+,".to_string(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NetworkOptions {
     #[serde(default = "default_network_timeout")]
     pub network_timeout_secs: u64,
@@ -138,16 +123,12 @@ pub struct Preferences {
     theme: ThemeMode,
     #[serde(default = "default_clone_path")]
     default_clone_path: String,
-    #[serde(default = "default_keybindings")]
-    keybindings: Vec<Keybinding>,
     #[serde(default)]
     network: NetworkOptions,
     #[serde(default)]
     allow_encrypted_tokens: bool,
     #[serde(default = "default_control_height")]
     control_height: f32,
-    #[serde(default = "default_branch_box_height")]
-    branch_box_height: f32,
     #[serde(default)]
     pinned_branches: Vec<String>,
     #[serde(default)]
@@ -170,11 +151,9 @@ impl Default for Preferences {
         Self {
             theme: ThemeMode::Mocha,
             default_clone_path: default_clone_path(),
-            keybindings: default_keybindings(),
             network: NetworkOptions::default(),
             allow_encrypted_tokens: false,
             control_height: default_control_height(),
-            branch_box_height: default_branch_box_height(),
             pinned_branches: Vec::new(),
             reduced_motion: false,
             motion_intensity: default_motion_intensity(),
@@ -389,37 +368,12 @@ fn default_clone_path() -> String {
         .to_string()
 }
 
-fn default_keybindings() -> Vec<Keybinding> {
-    vec![
-        Keybinding {
-            action: "Clone repository".to_string(),
-            binding: "Ctrl+Shift+C".to_string(),
-        },
-        Keybinding {
-            action: "Open recent".to_string(),
-            binding: "Ctrl+O".to_string(),
-        },
-        Keybinding {
-            action: "Stage changes".to_string(),
-            binding: "Ctrl+S".to_string(),
-        },
-        Keybinding::default(),
-    ]
-}
-
 fn default_network_timeout() -> u64 {
     30
 }
 
 fn default_control_height() -> f32 {
     28.0
-}
-
-#[allow(dead_code)]
-pub const MIN_BRANCH_BOX_HEIGHT: f32 = 72.0;
-
-fn default_branch_box_height() -> f32 {
-    92.0
 }
 
 fn default_use_https() -> bool {
@@ -509,16 +463,6 @@ impl Preferences {
 
     pub fn set_control_height(&mut self, height: f32) {
         self.control_height = height.clamp(20.0, 48.0);
-    }
-
-    #[allow(dead_code)]
-    pub fn branch_box_height(&self) -> f32 {
-        self.branch_box_height
-    }
-
-    #[allow(dead_code)]
-    pub fn set_branch_box_height(&mut self, height: f32) {
-        self.branch_box_height = height.max(MIN_BRANCH_BOX_HEIGHT);
     }
 
     pub fn pinned_branches(&self) -> &[String] {

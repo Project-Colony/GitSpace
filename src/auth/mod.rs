@@ -109,11 +109,6 @@ impl AuthManager {
             })
     }
 
-    #[allow(dead_code)]
-    pub fn set_token(&self, host: &str, token: &str) -> Result<(), String> {
-        self.storage.set_token(host, token)
-    }
-
     /// Removes the token saved for `host`, normalized like a lookup. An entry that an older
     /// release saved under the host as typed is removed too.
     pub fn clear_token(&self, host: &str) -> Result<(), String> {
