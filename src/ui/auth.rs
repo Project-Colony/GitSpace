@@ -1,22 +1,26 @@
 //! Panneau d'authentification avec flux OAuth et saisie manuelle de tokens.
 //!
-//! Gère la connexion aux fournisseurs Git (GitHub, GitLab) via OAuth2 PKCE
+//! Gère la connexion à GitHub (device flow), à GitLab (OAuth2 PKCE)
 //! ou via la saisie manuelle d'un jeton d'accès personnel.
 
+use std::sync::mpsc::{self, Receiver, Sender};
+
+use iced::futures::{SinkExt, Stream};
 use iced::widget::{
     button, column, container, row, scrollable, text, text_input, Space,
 };
-use iced::{Alignment, Element, Length, Task};
+use iced::{Alignment, Element, Font, Length, Task};
 
-use crate::auth::{AuthManager, OAuthProvider, OAuthResult};
+use crate::auth::{AuthManager, DeviceFlow, OAuthProvider, OAuthResult};
 use crate::ui::theme::Theme;
 
-/// Identifiants client OAuth configurés au moment de la compilation.
+/// Identifiants client OAuth configurés au moment de la compilation. Quand ils sont définis,
+/// ils remplacent l'identifiant saisi dans l'interface.
 ///
-/// GitHub : https://github.com/settings/developers
-/// GitLab : https://gitlab.com/-/profile/applications
-///
-/// URL de callback : http://127.0.0.1:9876/callback
+/// GitHub (device flow) : une application OAuth sur https://github.com/settings/developers avec
+/// « Enable Device Flow » coché ; l'URL de callback n'est pas utilisée.
+/// GitLab (PKCE) : une application sur https://gitlab.com/-/user_settings/applications avec
+/// « Confidential » décoché et l'URI de redirection http://127.0.0.1:9876/callback.
 const GITHUB_CLIENT_ID: Option<&str> = option_env!("GITSPACE_GITHUB_CLIENT_ID");
 const GITLAB_CLIENT_ID: Option<&str> = option_env!("GITSPACE_GITLAB_CLIENT_ID");
 
@@ -27,8 +31,14 @@ pub enum Message {
     StartGithubOAuth,
     /// Démarrer le flux OAuth GitLab.
     StartGitlabOAuth,
-    /// Résultat du flux OAuth GitHub.
-    GithubOAuthResult(OAuthResult),
+    /// Étape d'une connexion GitHub, avec l'identifiant de la tentative.
+    GithubSignIn(u64, GithubSignInEvent),
+    /// Annuler la connexion GitHub en cours.
+    CancelGithubSignIn,
+    /// Copier le code GitHub dans le presse-papiers.
+    CopyGithubCode,
+    /// Ouvrir la page de vérification GitHub dans le navigateur.
+    OpenGithubVerification,
     /// Résultat du flux OAuth GitLab.
     GitlabOAuthResult(OAuthResult),
     /// Le champ hôte manuel a changé.
@@ -47,6 +57,29 @@ pub enum Message {
     Disconnect(String),
 }
 
+/// Étape envoyée par la tâche de fond d'une connexion GitHub.
+#[derive(Debug, Clone)]
+pub enum GithubSignInEvent {
+    /// GitHub a fourni le code à saisir sur la page de vérification.
+    Code {
+        user_code: String,
+        verification_uri: String,
+    },
+    /// La connexion est terminée, acceptée, refusée, expirée ou annulée.
+    Finished(OAuthResult),
+}
+
+/// Connexion GitHub en cours (device flow).
+#[derive(Debug, Clone)]
+struct GithubSignIn {
+    /// Identifiant de la tentative : les étapes d'une tentative annulée sont ignorées.
+    id: u64,
+    /// Code et page de vérification, une fois reçus de GitHub.
+    code: Option<(String, String)>,
+    /// Le supprimer arrête l'attente du jeton côté tâche de fond.
+    _cancel: Sender<()>,
+}
+
 /// État du panneau d'authentification.
 #[derive(Debug, Clone)]
 pub struct AuthPanel {
@@ -56,8 +89,10 @@ pub struct AuthPanel {
     github_status: Option<String>,
     /// Message de statut pour GitLab.
     gitlab_status: Option<String>,
-    /// Indique si un flux OAuth GitHub est en cours.
-    github_in_progress: bool,
+    /// Connexion GitHub en cours.
+    github_sign_in: Option<GithubSignIn>,
+    /// Identifiant de la prochaine tentative de connexion GitHub.
+    next_github_sign_in: u64,
     /// Indique si un flux OAuth GitLab est en cours.
     gitlab_in_progress: bool,
     /// Hôte saisi manuellement.
@@ -81,7 +116,8 @@ impl AuthPanel {
             auth,
             github_status: None,
             gitlab_status: None,
-            github_in_progress: false,
+            github_sign_in: None,
+            next_github_sign_in: 0,
             gitlab_in_progress: false,
             manual_host: String::new(),
             manual_token: String::new(),
@@ -101,41 +137,37 @@ impl AuthPanel {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::StartGithubOAuth => {
-                // Déterminer l'identifiant client à utiliser.
-                let client_id = if !self.custom_github_client_id.is_empty() {
-                    self.custom_github_client_id.clone()
-                } else if let Some(id) = GITHUB_CLIENT_ID {
+                let client_id = if let Some(id) = GITHUB_CLIENT_ID {
                     id.to_string()
+                } else if !self.custom_github_client_id.trim().is_empty() {
+                    self.custom_github_client_id.trim().to_string()
                 } else {
                     self.github_status =
                         Some("Veuillez configurer un identifiant client GitHub".to_string());
                     return Task::none();
                 };
 
-                self.github_status =
-                    Some("Ouverture du navigateur pour la connexion...".to_string());
-                self.github_in_progress = true;
+                let id = self.next_github_sign_in;
+                self.next_github_sign_in += 1;
+                let (cancel, cancelled) = mpsc::channel();
+                self.github_status = None;
+                self.github_sign_in = Some(GithubSignIn {
+                    id,
+                    code: None,
+                    _cancel: cancel,
+                });
 
-                let auth = self.auth.clone();
-                let provider = OAuthProvider::github(&client_id);
-
-                // Lancer le flux OAuth dans un thread bloquant.
-                Task::perform(
-                    tokio::task::spawn_blocking(move || auth.start_oauth(provider)),
-                    |result| match result {
-                        Ok(oauth_result) => Message::GithubOAuthResult(oauth_result),
-                        Err(err) => {
-                            Message::GithubOAuthResult(OAuthResult::Error(err.to_string()))
-                        }
-                    },
+                Task::run(
+                    github_device_flow(OAuthProvider::github(&client_id), cancelled),
+                    move |event| Message::GithubSignIn(id, event),
                 )
             }
 
             Message::StartGitlabOAuth => {
-                let client_id = if !self.custom_gitlab_client_id.is_empty() {
-                    self.custom_gitlab_client_id.clone()
-                } else if let Some(id) = GITLAB_CLIENT_ID {
+                let client_id = if let Some(id) = GITLAB_CLIENT_ID {
                     id.to_string()
+                } else if !self.custom_gitlab_client_id.trim().is_empty() {
+                    self.custom_gitlab_client_id.trim().to_string()
                 } else {
                     self.gitlab_status =
                         Some("Veuillez configurer un identifiant client GitLab".to_string());
@@ -160,8 +192,23 @@ impl AuthPanel {
                 )
             }
 
-            Message::GithubOAuthResult(result) => {
-                self.github_in_progress = false;
+            Message::GithubSignIn(id, event) => {
+                if self.github_sign_in.as_ref().map(|sign_in| sign_in.id) != Some(id) {
+                    return Task::none();
+                }
+                let result = match event {
+                    GithubSignInEvent::Code {
+                        user_code,
+                        verification_uri,
+                    } => {
+                        if let Some(sign_in) = &mut self.github_sign_in {
+                            sign_in.code = Some((user_code, verification_uri));
+                        }
+                        return Task::none();
+                    }
+                    GithubSignInEvent::Finished(result) => result,
+                };
+                self.github_sign_in = None;
                 match result {
                     OAuthResult::Success(token) => {
                         match self.auth.store_oauth_token(&token) {
@@ -180,6 +227,28 @@ impl AuthPanel {
                     }
                     OAuthResult::Error(e) => {
                         self.github_status = Some(format!("Erreur de connexion : {e}"));
+                    }
+                }
+                Task::none()
+            }
+
+            Message::CancelGithubSignIn => {
+                // Supprimer la tentative ferme son canal d'annulation et arrête l'attente.
+                self.github_sign_in = None;
+                self.github_status = Some("Connexion annulée".to_string());
+                Task::none()
+            }
+
+            Message::CopyGithubCode => match self.github_code() {
+                Some((user_code, _)) => iced::clipboard::write(user_code.to_string()),
+                None => Task::none(),
+            },
+
+            Message::OpenGithubVerification => {
+                if let Some((_, verification_uri)) = self.github_code() {
+                    if let Err(err) = webbrowser::open(verification_uri) {
+                        self.github_status =
+                            Some(format!("Impossible d'ouvrir le navigateur : {err}"));
                     }
                 }
                 Task::none()
@@ -388,6 +457,55 @@ impl AuthPanel {
             .into()
     }
 
+    /// Code GitHub en attente de saisie et sa page de vérification.
+    fn github_code(&self) -> Option<(&str, &str)> {
+        let (user_code, verification_uri) = self.github_sign_in.as_ref()?.code.as_ref()?;
+        Some((user_code, verification_uri))
+    }
+
+    /// Construit le bloc du code GitHub pendant une connexion.
+    fn view_github_sign_in<'a>(&'a self, theme: &'a Theme) -> Option<Element<'a, Message>> {
+        let sign_in = self.github_sign_in.as_ref()?;
+        let palette = &theme.palette;
+        let typo = &theme.typography;
+        let small_button = |label: &'a str, message: Message| {
+            button(text(label).size(typo.label).color(palette.text_primary)).on_press(message)
+        };
+
+        let content: Element<'a, Message> = match &sign_in.code {
+            None => row![
+                text("Demande d'un code de connexion à GitHub...")
+                    .size(typo.body)
+                    .color(palette.text_secondary),
+                small_button("Annuler", Message::CancelGithubSignIn),
+            ]
+            .spacing(theme.spacing.sm)
+            .align_y(Alignment::Center)
+            .into(),
+            Some((user_code, verification_uri)) => column![
+                text(format!("Saisissez ce code sur {verification_uri} :"))
+                    .size(typo.body)
+                    .color(palette.text_secondary),
+                text(user_code.as_str())
+                    .size(typo.heading)
+                    .font(Font::MONOSPACE)
+                    .color(palette.text_primary),
+                row![
+                    small_button("Copier le code", Message::CopyGithubCode),
+                    small_button("Ouvrir dans le navigateur", Message::OpenGithubVerification),
+                    small_button("Annuler", Message::CancelGithubSignIn),
+                ]
+                .spacing(theme.spacing.sm),
+                text("En attente de votre validation sur GitHub...")
+                    .size(typo.label)
+                    .color(palette.text_secondary),
+            ]
+            .spacing(theme.spacing.xs)
+            .into(),
+        };
+        Some(content)
+    }
+
     /// Construit la section des boutons de connexion OAuth.
     fn view_oauth_section<'a>(&'a self, theme: &'a Theme) -> Element<'a, Message> {
         let palette = &theme.palette;
@@ -398,14 +516,14 @@ impl AuthPanel {
             .color(palette.text_primary);
 
         let description = text(
-            "Cliquez pour vous authentifier via votre fournisseur Git. Une fenetre de navigateur s'ouvrira.",
+            "GitHub affiche un code à saisir sur sa page de connexion. GitLab ouvre une fenêtre de navigateur.",
         )
         .size(typo.body)
         .color(palette.text_secondary);
 
         // Bouton GitHub OAuth.
-        let github_available = !self.github_in_progress
-            && (GITHUB_CLIENT_ID.is_some() || !self.custom_github_client_id.is_empty());
+        let github_available = self.github_sign_in.is_none()
+            && (GITHUB_CLIENT_ID.is_some() || !self.custom_github_client_id.trim().is_empty());
 
         let mut github_btn = button(
             text("Connexion GitHub")
@@ -418,7 +536,7 @@ impl AuthPanel {
 
         // Bouton GitLab OAuth.
         let gitlab_available = !self.gitlab_in_progress
-            && (GITLAB_CLIENT_ID.is_some() || !self.custom_gitlab_client_id.is_empty());
+            && (GITLAB_CLIENT_ID.is_some() || !self.custom_gitlab_client_id.trim().is_empty());
 
         let mut gitlab_btn = button(
             text("Connexion GitLab")
@@ -432,8 +550,11 @@ impl AuthPanel {
         let oauth_buttons = row![github_btn, Space::with_width(theme.spacing.md), gitlab_btn]
             .align_y(Alignment::Center);
 
-        // Messages de statut.
+        // Code GitHub puis messages de statut.
         let mut status_col = column![].spacing(theme.spacing.xs);
+        if let Some(sign_in) = self.view_github_sign_in(theme) {
+            status_col = status_col.push(sign_in);
+        }
         if let Some(status) = &self.github_status {
             status_col = status_col.push(
                 text(format!("GitHub : {status}"))
@@ -472,7 +593,8 @@ impl AuthPanel {
 
         let config_hint = text(
             "Pour utiliser OAuth, enregistrez une application OAuth chez votre fournisseur et entrez l'identifiant client.\n\
-             URL de callback : http://127.0.0.1:9876/callback",
+             GitHub : cochez « Enable Device Flow » dans l'application ; l'URL de callback n'est pas utilisée.\n\
+             GitLab : décochez « Confidential » et indiquez l'URI de redirection http://127.0.0.1:9876/callback",
         )
         .size(typo.label)
         .color(palette.text_secondary);
@@ -606,4 +728,39 @@ impl AuthPanel {
 
         col.into()
     }
+}
+
+/// Connexion GitHub par device flow : demande un code, l'envoie à l'interface, puis attend que
+/// l'utilisateur l'accepte ou le refuse, que le code expire ou que `cancelled` soit fermé.
+fn github_device_flow(
+    provider: OAuthProvider,
+    cancelled: Receiver<()>,
+) -> impl Stream<Item = GithubSignInEvent> {
+    iced::stream::channel(2, move |mut output| async move {
+        let flow = match tokio::task::spawn_blocking(move || DeviceFlow::start(provider)).await {
+            Ok(Ok(flow)) => flow,
+            Ok(Err(err)) => {
+                let _ = output
+                    .send(GithubSignInEvent::Finished(OAuthResult::Error(err)))
+                    .await;
+                return;
+            }
+            Err(err) => {
+                let _ = output
+                    .send(GithubSignInEvent::Finished(OAuthResult::Error(err.to_string())))
+                    .await;
+                return;
+            }
+        };
+        let _ = output
+            .send(GithubSignInEvent::Code {
+                user_code: flow.user_code().to_string(),
+                verification_uri: flow.verification_uri().to_string(),
+            })
+            .await;
+        let result = tokio::task::spawn_blocking(move || flow.wait(&cancelled))
+            .await
+            .unwrap_or_else(|err| OAuthResult::Error(err.to_string()));
+        let _ = output.send(GithubSignInEvent::Finished(result)).await;
+    })
 }
