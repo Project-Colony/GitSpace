@@ -1,7 +1,5 @@
 //! Système de notifications toast avec auto-dismiss et limites.
 
-#![allow(dead_code)]
-
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -13,19 +11,8 @@ use crate::ui::theme::Theme;
 /// Nombre maximum de notifications affichées simultanément.
 const MAX_NOTIFICATIONS: usize = 5;
 
-/// Durée par défaut avant auto-dismiss (secondes).
-const DEFAULT_DURATION_SECS: u64 = 12;
-
-/// Durée pour les erreurs (plus longue pour laisser le temps de lire).
+/// Durée d'affichage d'une erreur avant auto-dismiss (secondes).
 const ERROR_DURATION_SECS: u64 = 20;
-
-/// Type de notification pour le style.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NotificationKind {
-    Success,
-    Error,
-    Info,
-}
 
 /// Actions déclenchables depuis les boutons de notification.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,41 +21,31 @@ pub enum NotificationAction {
     CopyLogPath(PathBuf),
 }
 
-/// Une notification toast avec actions optionnelles.
+/// Une notification toast d'erreur avec actions optionnelles.
 #[derive(Debug, Clone)]
 pub struct Notification {
     pub title: String,
     pub message: String,
     pub detail: Option<String>,
-    pub kind: NotificationKind,
-    pub log_path: Option<PathBuf>,
     pub actions: Vec<NotificationAction>,
+    /// Identifiant attribué par le centre, stable quand d'autres toasts disparaissent.
+    id: u64,
     created_at: Instant,
     duration: Duration,
-    dismissed: bool,
 }
 
 impl Notification {
-    /// Crée une notification d'erreur avec durée plus longue.
-    pub fn error<T: Into<String>, D: Into<String>>(title: T, detail: D) -> Self {
-        Self::new(title, detail, NotificationKind::Error)
-            .with_duration(Duration::from_secs(ERROR_DURATION_SECS))
-    }
-
-    /// Crée une notification de succès.
-    pub fn success<T: Into<String>, D: Into<String>>(title: T, detail: D) -> Self {
-        Self::new(title, detail, NotificationKind::Success)
-    }
-
-    /// Crée une notification d'information.
-    pub fn info<T: Into<String>, D: Into<String>>(title: T, detail: D) -> Self {
-        Self::new(title, detail, NotificationKind::Info)
-    }
-
-    /// Attache un chemin de log à la notification.
-    pub fn with_log_path(mut self, path: PathBuf) -> Self {
-        self.log_path = Some(path);
-        self
+    /// Crée une notification d'erreur.
+    pub fn error<T: Into<String>, D: Into<String>>(title: T, message: D) -> Self {
+        Self {
+            title: title.into(),
+            message: message.into(),
+            detail: None,
+            actions: Vec::new(),
+            id: 0,
+            created_at: Instant::now(),
+            duration: Duration::from_secs(ERROR_DURATION_SECS),
+        }
     }
 
     /// Ajoute un bouton d'action à la notification.
@@ -77,54 +54,17 @@ impl Notification {
         self
     }
 
-    /// Définit une durée d'affichage personnalisée.
-    pub fn with_duration(mut self, duration: Duration) -> Self {
-        self.duration = duration;
-        self
-    }
-
-    /// Définit le texte de détail additionnel.
-    pub fn with_detail<D: Into<String>>(mut self, detail: D) -> Self {
-        self.detail = Some(detail.into());
-        self
-    }
-
-    fn new<T: Into<String>, D: Into<String>>(title: T, detail: D, kind: NotificationKind) -> Self {
-        Self {
-            title: title.into(),
-            message: detail.into(),
-            detail: None,
-            kind,
-            log_path: None,
-            actions: Vec::new(),
-            created_at: Instant::now(),
-            duration: Duration::from_secs(DEFAULT_DURATION_SECS),
-            dismissed: false,
-        }
-    }
-
     /// Retourne true si la notification doit être retirée.
     fn is_expired(&self) -> bool {
-        self.dismissed || Instant::now().duration_since(self.created_at) >= self.duration
-    }
-
-    /// Marque la notification comme dismissée.
-    fn dismiss(&mut self) {
-        self.dismissed = true;
-    }
-
-    /// Retourne la progression (0.0 à 1.0) dans la durée de vie de la notification.
-    pub fn progress(&self) -> f32 {
-        let elapsed = Instant::now().duration_since(self.created_at);
-        (elapsed.as_secs_f32() / self.duration.as_secs_f32()).clamp(0.0, 1.0)
+        self.created_at.elapsed() >= self.duration
     }
 }
 
 /// Messages du centre de notifications.
 #[derive(Debug, Clone)]
 pub enum Message {
-    Dismiss(usize),
-    ActionClicked(usize, NotificationAction),
+    Dismiss(u64),
+    ActionClicked(u64, NotificationAction),
     Tick,
 }
 
@@ -132,25 +72,23 @@ pub enum Message {
 #[derive(Default)]
 pub struct NotificationCenter {
     queue: Vec<Notification>,
+    next_id: u64,
 }
 
 impl NotificationCenter {
     /// Crée un nouveau centre de notifications.
     pub fn new() -> Self {
-        Self { queue: Vec::new() }
+        Self::default()
     }
 
     /// Ajoute une notification à la file.
-    pub fn push(&mut self, notification: Notification) {
+    pub fn push(&mut self, mut notification: Notification) {
+        notification.id = self.next_id;
+        self.next_id += 1;
         self.queue.push(notification);
         while self.queue.len() > MAX_NOTIFICATIONS {
             self.queue.remove(0);
         }
-    }
-
-    /// Retourne le nombre de notifications actives.
-    pub fn len(&self) -> usize {
-        self.queue.len()
     }
 
     /// Retourne true s'il n'y a aucune notification.
@@ -158,29 +96,15 @@ impl NotificationCenter {
         self.queue.is_empty()
     }
 
-    /// Dismiss toutes les notifications.
-    pub fn dismiss_all(&mut self) {
-        self.queue.clear();
-    }
-
-    /// Retourne true si des notifications sont visibles (pour la subscription de tick).
-    pub fn has_visible(&self) -> bool {
-        !self.queue.is_empty()
-    }
-
     /// Gère un message de notification. Retourne les actions déclenchées.
     pub fn update(&mut self, message: Message) -> Vec<NotificationAction> {
         match message {
-            Message::Dismiss(idx) => {
-                if let Some(notification) = self.queue.get_mut(idx) {
-                    notification.dismiss();
-                }
+            Message::Dismiss(id) => {
+                self.queue.retain(|n| n.id != id);
                 Vec::new()
             }
-            Message::ActionClicked(idx, action) => {
-                if let Some(notification) = self.queue.get_mut(idx) {
-                    notification.dismiss();
-                }
+            Message::ActionClicked(id, action) => {
+                self.queue.retain(|n| n.id != id);
                 vec![action]
             }
             Message::Tick => {
@@ -196,15 +120,11 @@ impl NotificationCenter {
             return Space::new(0, 0).into();
         }
 
+        let fill_color = Color::from_rgb8(125, 32, 32);
         let mut notifications = column![].spacing(8).width(Length::Fixed(340.0));
 
-        for (idx, notification) in self.queue.iter().enumerate() {
-            let fill_color = match notification.kind {
-                NotificationKind::Success => Color::from_rgb8(26, 102, 64),
-                NotificationKind::Error => Color::from_rgb8(125, 32, 32),
-                NotificationKind::Info => Color::from_rgb8(32, 64, 125),
-            };
-
+        for notification in &self.queue {
+            let id = notification.id;
             let mut content = column![].spacing(4);
 
             // Titre + bouton dismiss
@@ -214,7 +134,7 @@ impl NotificationCenter {
                     .color(Color::WHITE),
                 Space::with_width(Length::Fill),
                 button(text("x").size(12).color(Color::WHITE))
-                    .on_press(Message::Dismiss(idx))
+                    .on_press(Message::Dismiss(id))
                     .padding(2),
             ]
             .align_y(Alignment::Center);
@@ -246,7 +166,7 @@ impl NotificationCenter {
                     };
                     action_row = action_row.push(
                         button(text(label).size(12).color(Color::WHITE))
-                            .on_press(Message::ActionClicked(idx, action.clone()))
+                            .on_press(Message::ActionClicked(id, action.clone()))
                             .padding([2, 6]),
                     );
                 }
@@ -277,43 +197,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn notification_defaults() {
-        let n = Notification::success("Test", "Message");
-        assert_eq!(n.kind, NotificationKind::Success);
-        assert!(!n.is_expired());
-    }
-
-    #[test]
-    fn error_has_longer_duration() {
-        let success = Notification::success("Test", "Message");
-        let error = Notification::error("Test", "Message");
-        assert!(error.duration > success.duration);
+    fn new_notification_is_not_expired() {
+        assert!(!Notification::error("Test", "Message").is_expired());
     }
 
     #[test]
     fn notification_center_respects_limit() {
         let mut center = NotificationCenter::new();
         for i in 0..10 {
-            center.push(Notification::success(format!("Test {i}"), "Message"));
+            center.push(Notification::error(format!("Test {i}"), "Message"));
         }
-        assert_eq!(center.len(), MAX_NOTIFICATIONS);
+        assert_eq!(center.queue.len(), MAX_NOTIFICATIONS);
+        assert_eq!(center.queue[0].title, "Test 5");
     }
 
     #[test]
-    fn dismiss_removes_notification() {
-        let mut n = Notification::success("Test", "Message");
-        assert!(!n.is_expired());
-        n.dismiss();
-        assert!(n.is_expired());
-    }
-
-    #[test]
-    fn dismiss_all_clears_queue() {
+    fn dismiss_removes_the_clicked_notification_at_once() {
         let mut center = NotificationCenter::new();
-        center.push(Notification::success("Test 1", "Message"));
-        center.push(Notification::success("Test 2", "Message"));
-        assert_eq!(center.len(), 2);
-        center.dismiss_all();
-        assert!(center.is_empty());
+        center.push(Notification::error("Test 1", "Message"));
+        center.push(Notification::error("Test 2", "Message"));
+        let second = center.queue[1].id;
+        center.update(Message::Dismiss(second));
+        assert_eq!(center.queue.len(), 1);
+        assert_eq!(center.queue[0].title, "Test 1");
     }
 }

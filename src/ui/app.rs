@@ -407,7 +407,7 @@ impl GitSpaceApp {
         let mut subs = Vec::new();
 
         // Tick pour le dismiss automatique des notifications
-        if self.notifications.has_visible() {
+        if !self.notifications.is_empty() {
             subs.push(iced::time::every(Duration::from_secs(1)).map(|_| Message::NotificationTick));
         }
 
@@ -519,14 +519,11 @@ impl GitSpaceApp {
             clone::Message::SearchResult(Err(err)) => ("Échec de la recherche", err, false),
             _ => return,
         };
-        let log_path = logs_directory();
         let mut notification = Notification::error(title, err.user_message());
         if can_retry {
             notification = notification.with_action(NotificationAction::RetryClone);
         }
-        notification = notification
-            .with_action(NotificationAction::CopyLogPath(log_path.clone()))
-            .with_log_path(log_path);
+        notification = notification.with_action(NotificationAction::CopyLogPath(logs_directory()));
         notification.detail = Some(err.detail().to_string());
         self.notifications.push(notification);
     }
