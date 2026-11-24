@@ -3,9 +3,7 @@ pub mod oauth;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::ErrorKind;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -21,7 +19,7 @@ use tracing::{error, info, warn};
 use url::Url;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-use crate::config::write_atomic;
+use crate::config::write_private;
 
 pub use oauth::{DeviceFlow, OAuthFlow, OAuthProvider, OAuthResult, OAuthToken};
 
@@ -255,18 +253,10 @@ impl TokenStorage {
                 warn!(target: "gitspace::auth", error = %err, "failed to access keyring encryption key");
             })
             .unwrap_or_else(|_| load_or_create_local_key());
-        let path = dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(SERVICE_NAME)
-            .join(TOKEN_FILE_NAME);
-        let host_path = dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(SERVICE_NAME)
-            .join(HOST_FILE_NAME);
         Self {
             key: SecureKey(key),
-            path,
-            host_path,
+            path: config_dir().join(TOKEN_FILE_NAME),
+            host_path: config_dir().join(HOST_FILE_NAME),
             allow_encrypted_fallback,
         }
     }
@@ -413,7 +403,7 @@ impl TokenStorage {
         let blob = encrypt_tokens(map, &self.key.0)?;
         let serialized = serde_json::to_string_pretty(&blob)
             .map_err(|err| format!("Failed to serialize credentials: {err}"))?;
-        write_atomic(&self.path, serialized.as_bytes())
+        write_private(&self.path, serialized.as_bytes())
             .map_err(|err| format!("Failed to write credentials: {err}"))
     }
 
@@ -474,7 +464,7 @@ impl TokenStorage {
     fn write_host_index(&self, index: &HostIndex) -> Result<(), String> {
         let serialized = serde_json::to_string_pretty(index)
             .map_err(|err| format!("Failed to serialize host index: {err}"))?;
-        write_atomic(&self.host_path, serialized.as_bytes())
+        write_private(&self.host_path, serialized.as_bytes())
             .map_err(|err| format!("Failed to write host index: {err}"))
     }
 
@@ -520,57 +510,39 @@ fn decrypt_tokens(blob: &EncryptedTokenFile, key: &[u8; 32]) -> Result<TokenMap,
         .map_err(|err| format!("Failed to parse decrypted credentials: {err}"))
 }
 
-/// Loads or creates a secure local encryption key.
-///
-/// SECURITY: This function generates a cryptographically secure random key
-/// and stores it in a file with restricted permissions (0600).
-/// If a master password is provided via environment variable, it's used to
-/// derive an additional key that's XORed with the stored key for defense in depth.
-fn load_or_create_local_key() -> [u8; 32] {
-    let key_path = dirs::config_dir()
+/// The settings folder that holds the token files.
+fn config_dir() -> PathBuf {
+    dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(SERVICE_NAME)
-        .join(TOKEN_LOCAL_KEY_FILE);
+}
 
-    // Try to load existing key
-    let mut stored_key = match fs::read(&key_path) {
-        Ok(bytes) if bytes.len() == 32 => {
-            let mut key = [0u8; 32];
-            key.copy_from_slice(&bytes);
-            key
-        }
-        Ok(_) => {
-            warn!(target: "gitspace::auth", "invalid local key file size, regenerating");
-            generate_and_store_key(&key_path)
-        }
-        Err(err) if err.kind() == ErrorKind::NotFound => {
-            info!(target: "gitspace::auth", "generating new local encryption key");
-            generate_and_store_key(&key_path)
-        }
-        Err(err) => {
-            // Replacing a key file that exists but cannot be read would make the tokens
-            // encrypted with it unrecoverable. Use a key for this session only: the saved
-            // tokens then fail to decrypt and are left untouched.
-            error!(target: "gitspace::auth", error = %err, "failed to read local key file");
-            Generate::generate()
-        }
+/// Loads or creates the local encryption key, used when the keyring cannot hold the key.
+///
+/// The key is 32 random bytes in `token-local-key.bin`, owner-only on Unix. When
+/// `GITSPACE_TOKEN_MASTER_PASSWORD` is set, a key derived from it is XORed in for defense in
+/// depth. The master password therefore only applies while the keyring is unavailable; a key
+/// kept in the keyring is used as it is.
+fn load_or_create_local_key() -> [u8; 32] {
+    let dir = config_dir();
+    let mut key = load_or_create_secret(&dir.join(TOKEN_LOCAL_KEY_FILE));
+    mix_master_password(&mut key, &dir);
+    key
+}
+
+/// XORs the key derived from `GITSPACE_TOKEN_MASTER_PASSWORD`, if set, into `key`.
+fn mix_master_password(key: &mut [u8; 32], dir: &Path) {
+    let Ok(master_password) = std::env::var(MASTER_PASSWORD_ENV) else {
+        return;
     };
-
-    // If master password is set, derive additional key material for defense in depth
-    if let Ok(master_password) = std::env::var(MASTER_PASSWORD_ENV) {
-        let salt: [u8; 16] = load_or_create_secret(TOKEN_SALT_FILE);
-        let mut derived = [0u8; 32];
-        if derive_master_key(master_password.as_bytes(), &salt, &mut derived) {
-            // XOR the derived key with the stored key for defense in depth
-            for (a, b) in stored_key.iter_mut().zip(derived.iter()) {
-                *a ^= b;
-            }
+    let salt: [u8; 16] = load_or_create_secret(&dir.join(TOKEN_SALT_FILE));
+    let mut derived = [0u8; 32];
+    if derive_master_key(master_password.as_bytes(), &salt, &mut derived) {
+        for (a, b) in key.iter_mut().zip(derived.iter()) {
+            *a ^= b;
         }
-        // Zero the derived key
-        derived.zeroize();
     }
-
-    stored_key
+    derived.zeroize();
 }
 
 /// Derives the key mixed into the local key when a master password is set, into `out`, which
@@ -582,34 +554,6 @@ fn derive_master_key(password: &[u8], salt: &[u8], out: &mut [u8; 32]) -> bool {
     let params = Params::new(65536, 3, 1, None).unwrap_or(Params::DEFAULT);
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     argon2.hash_password_into(password, salt, out).is_ok()
-}
-
-/// Generates a cryptographically secure random key and stores it with restricted permissions.
-fn generate_and_store_key(path: &PathBuf) -> [u8; 32] {
-    let key: [u8; 32] = Generate::generate();
-
-    if let Some(parent) = path.parent() {
-        if let Err(err) = fs::create_dir_all(parent) {
-            error!(target: "gitspace::auth", error = %err, "failed to create key directory");
-            return key;
-        }
-    }
-
-    // Write key file
-    if let Err(err) = fs::write(path, key) {
-        error!(target: "gitspace::auth", error = %err, "failed to write local key file");
-        return key;
-    }
-
-    // Set restrictive permissions (owner read/write only)
-    #[cfg(unix)]
-    {
-        if let Err(err) = fs::set_permissions(path, fs::Permissions::from_mode(0o600)) {
-            warn!(target: "gitspace::auth", error = %err, "failed to set key file permissions");
-        }
-    }
-
-    key
 }
 
 fn load_or_create_keyring_key() -> Result<[u8; 32], String> {
@@ -639,35 +583,39 @@ fn load_or_create_keyring_key() -> Result<[u8; 32], String> {
     }
 }
 
-fn load_or_create_secret<const N: usize>(name: &str) -> [u8; N] {
-    let path = dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(SERVICE_NAME)
-        .join(name);
-
-    let secret: [u8; N] = Generate::generate();
-    match fs::read(&path).map(<[u8; N]>::try_from) {
-        Ok(Ok(saved)) => return saved,
-        Err(err) if err.kind() != ErrorKind::NotFound => {
-            // Same as the local key: never replace a secret that exists but cannot be read.
-            warn!(target: "gitspace::auth", error = %err, path = %path.display(), "unable to read derived-key secret; using one for this session only");
+/// Reads the `N`-byte secret in `path`, or creates the file, owner-only on Unix, when it does
+/// not exist.
+///
+/// A file that exists but cannot be read or has the wrong size is never replaced: the tokens
+/// encrypted with it would become unrecoverable. A secret for this session only is used
+/// instead, so those tokens fail to decrypt and are left untouched.
+fn load_or_create_secret<const N: usize>(path: &Path) -> [u8; N] {
+    match fs::read(path) {
+        Ok(bytes) => match <[u8; N]>::try_from(bytes.as_slice()) {
+            Ok(saved) => return saved,
+            Err(_) => error!(
+                target: "gitspace::auth",
+                path = %path.display(),
+                size = bytes.len(),
+                expected = N,
+                "secret file has the wrong size; using a secret for this session only and leaving the file as it is"
+            ),
+        },
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            let secret: [u8; N] = Generate::generate();
+            if let Err(err) = write_private(path, &secret) {
+                error!(target: "gitspace::auth", error = %err, path = %path.display(), "failed to save a new secret file; it is used for this session only");
+            }
             return secret;
         }
-        _ => {}
+        Err(err) => error!(
+            target: "gitspace::auth",
+            error = %err,
+            path = %path.display(),
+            "failed to read secret file; using a secret for this session only"
+        ),
     }
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    if let Err(err) = fs::write(&path, secret) {
-        warn!(target: "gitspace::auth", error = %err, path = %path.display(), "unable to persist derived-key secret");
-    } else {
-        // Set restrictive permissions (owner read/write only)
-        #[cfg(unix)]
-        {
-            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
-        }
-    }
-    secret
+    Generate::generate()
 }
 
 /// Turns a user-entered host into the `https://host[:port]` base URL that tokens are sent to.
@@ -897,6 +845,48 @@ mod tests {
         other_key.set_allow_encrypted_fallback(true);
         assert!(other_key.scrub_fallback("github.com").is_err());
         assert_eq!(fs::read(&storage.path).expect("read tokens"), before);
+    }
+
+    #[test]
+    fn wrong_size_secret_is_never_overwritten() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("gitspace").join(TOKEN_LOCAL_KEY_FILE);
+
+        let created: [u8; 32] = load_or_create_secret(&path);
+        assert_eq!(load_or_create_secret::<32>(&path), created);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&path).expect("metadata").permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+
+        // A truncated write: a session key is used and the file stays as it is.
+        fs::write(&path, &created[..10]).expect("truncate");
+        let session: [u8; 32] = load_or_create_secret(&path);
+        assert_ne!(session, created);
+        assert_eq!(fs::read(&path).expect("read"), &created[..10]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn token_files_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = storage_in(dir.path());
+        storage
+            .persist_fallback("github.com", "token")
+            .expect("save");
+        // A file left 0644 by an older release is made owner-only on the next write.
+        fs::set_permissions(&storage.path, fs::Permissions::from_mode(0o644)).expect("chmod");
+        storage
+            .persist_fallback("gitlab.com", "token")
+            .expect("save");
+        storage.record_host("github.com").expect("record");
+        for path in [&storage.path, &storage.host_path] {
+            let mode = fs::metadata(path).expect("metadata").permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "{}", path.display());
+        }
     }
 
     #[test]

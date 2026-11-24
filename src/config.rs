@@ -298,6 +298,16 @@ fn backup_path(path: &Path) -> PathBuf {
 /// crash or a full disk never leaves a truncated file behind. The replaced file keeps its
 /// permissions.
 pub(crate) fn write_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
+    write_atomic_with(path, contents, false)
+}
+
+/// [`write_atomic`] for keys and tokens: on Unix the file is owner-only (0600) from the moment
+/// it is created, whatever the mode of the file it replaces.
+pub(crate) fn write_private(path: &Path, contents: &[u8]) -> io::Result<()> {
+    write_atomic_with(path, contents, true)
+}
+
+fn write_atomic_with(path: &Path, contents: &[u8], private: bool) -> io::Result<()> {
     // Write through a symlink (dotfile managers) instead of replacing the link itself.
     let resolved;
     let path = if fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink()) {
@@ -316,26 +326,32 @@ pub(crate) fn write_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
         name.to_string_lossy(),
         rand::random::<u32>()
     ));
-    let result = write_then_rename(&tmp, path, contents);
+    let result = write_then_rename(&tmp, path, contents, private);
     if result.is_err() {
         let _ = fs::remove_file(&tmp);
     }
     result
 }
 
-fn write_then_rename(tmp: &Path, path: &Path, contents: &[u8]) -> io::Result<()> {
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(tmp)?;
+fn write_then_rename(tmp: &Path, path: &Path, contents: &[u8], private: bool) -> io::Result<()> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    if private {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(tmp)?;
     // Keep the target's mode bits. Unix only: on Windows the only bit is read-only, which
     // would make both the rename and the cleanup of the temporary file fail.
     #[cfg(unix)]
-    {
+    if !private {
         if let Ok(metadata) = fs::metadata(path) {
             file.set_permissions(metadata.permissions())?;
         }
     }
+    #[cfg(not(unix))]
+    let _ = private;
     file.write_all(contents)?;
     file.sync_all()?;
     drop(file);
