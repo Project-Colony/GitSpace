@@ -55,6 +55,9 @@ pub enum Message {
 
     // Auto-fetch timer tick
     AutoFetchTick,
+
+    /// Ctrl+N (Cmd+N on macOS): show the tab at position N of the tab strip.
+    TabShortcut(usize),
 }
 
 // ─── Modele principal ──────────────────────────────────────────────────────
@@ -307,6 +310,13 @@ impl GitSpaceApp {
 
             // ── Auto-fetch ─────────────────────────────────────────────
             Message::AutoFetchTick => self.maybe_start_auto_fetch(),
+
+            Message::TabShortcut(index) => {
+                if let Some(tab) = self.tab_order.get(index) {
+                    self.active_tab = *tab;
+                }
+                Task::none()
+            }
         }
     }
 
@@ -466,6 +476,8 @@ impl GitSpaceApp {
             subs.push(iced::time::every(interval).map(|_| Message::AutoFetchTick));
         }
 
+        subs.push(iced::keyboard::on_key_press(tab_shortcut));
+
         Subscription::batch(subs)
     }
 
@@ -609,5 +621,34 @@ impl GitSpaceApp {
         self.repo_overview
             .auto_fetch(repo, &self.auth_manager)
             .map(Message::RepoOverview)
+    }
+}
+
+/// Maps Ctrl+1 to Ctrl+9 (Cmd on macOS) to a tab position, counted from 0.
+fn tab_shortcut(key: iced::keyboard::Key, modifiers: iced::keyboard::Modifiers) -> Option<Message> {
+    let iced::keyboard::Key::Character(c) = key else {
+        return None;
+    };
+    let digit = c.parse::<usize>().ok().filter(|d| (1..=9).contains(d))?;
+    (modifiers.command() && !modifiers.alt() && !modifiers.shift())
+        .then(|| Message::TabShortcut(digit - 1))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iced::keyboard::{Key, Modifiers};
+
+    #[test]
+    fn ctrl_digit_selects_a_tab_position() {
+        let key = |c: &str| Key::Character(c.into());
+        assert!(matches!(
+            tab_shortcut(key("3"), Modifiers::COMMAND),
+            Some(Message::TabShortcut(2))
+        ));
+        assert!(tab_shortcut(key("3"), Modifiers::empty()).is_none());
+        assert!(tab_shortcut(key("0"), Modifiers::COMMAND).is_none());
+        assert!(tab_shortcut(key("a"), Modifiers::COMMAND).is_none());
+        assert!(tab_shortcut(key("3"), Modifiers::COMMAND | Modifiers::SHIFT).is_none());
     }
 }
