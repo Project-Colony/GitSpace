@@ -11,6 +11,10 @@ const CONFIG_FILE_NAME: &str = "config.json";
 const APP_CONFIG_DIR: &str = "gitspace";
 pub const MIN_LOG_RETENTION_FILES: usize = 1;
 pub const MAX_LOG_RETENTION_FILES: usize = 30;
+/// Auto-fetch interval bounds, in minutes. Zero would make `iced::time::every` panic, and the
+/// upper bound of one day keeps the conversion to seconds far from overflowing.
+const MIN_AUTO_FETCH_INTERVAL_MINUTES: u64 = 1;
+const MAX_AUTO_FETCH_INTERVAL_MINUTES: u64 = 24 * 60;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppConfig {
@@ -40,21 +44,6 @@ pub enum ThemeMode {
     #[serde(alias = "Dark")]
     #[default]
     Mocha,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Keybinding {
-    pub action: String,
-    pub binding: String,
-}
-
-impl Default for Keybinding {
-    fn default() -> Self {
-        Self {
-            action: "Open settings".to_string(),
-            binding: "Ctrl+,".to_string(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -134,16 +123,12 @@ pub struct Preferences {
     theme: ThemeMode,
     #[serde(default = "default_clone_path")]
     default_clone_path: String,
-    #[serde(default = "default_keybindings")]
-    keybindings: Vec<Keybinding>,
     #[serde(default)]
     network: NetworkOptions,
     #[serde(default)]
     allow_encrypted_tokens: bool,
     #[serde(default = "default_control_height")]
     control_height: f32,
-    #[serde(default = "default_branch_box_height")]
-    branch_box_height: f32,
     #[serde(default)]
     pinned_branches: Vec<String>,
     #[serde(default)]
@@ -166,11 +151,9 @@ impl Default for Preferences {
         Self {
             theme: ThemeMode::Mocha,
             default_clone_path: default_clone_path(),
-            keybindings: default_keybindings(),
             network: NetworkOptions::default(),
             allow_encrypted_tokens: false,
             control_height: default_control_height(),
-            branch_box_height: default_branch_box_height(),
             pinned_branches: Vec::new(),
             reduced_motion: false,
             motion_intensity: default_motion_intensity(),
@@ -298,6 +281,16 @@ fn backup_path(path: &Path) -> PathBuf {
 /// crash or a full disk never leaves a truncated file behind. The replaced file keeps its
 /// permissions.
 pub(crate) fn write_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
+    write_atomic_with(path, contents, false)
+}
+
+/// [`write_atomic`] for keys and tokens: on Unix the file is owner-only (0600) from the moment
+/// it is created, whatever the mode of the file it replaces.
+pub(crate) fn write_private(path: &Path, contents: &[u8]) -> io::Result<()> {
+    write_atomic_with(path, contents, true)
+}
+
+fn write_atomic_with(path: &Path, contents: &[u8], private: bool) -> io::Result<()> {
     // Write through a symlink (dotfile managers) instead of replacing the link itself.
     let resolved;
     let path = if fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink()) {
@@ -316,26 +309,32 @@ pub(crate) fn write_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
         name.to_string_lossy(),
         rand::random::<u32>()
     ));
-    let result = write_then_rename(&tmp, path, contents);
+    let result = write_then_rename(&tmp, path, contents, private);
     if result.is_err() {
         let _ = fs::remove_file(&tmp);
     }
     result
 }
 
-fn write_then_rename(tmp: &Path, path: &Path, contents: &[u8]) -> io::Result<()> {
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(tmp)?;
+fn write_then_rename(tmp: &Path, path: &Path, contents: &[u8], private: bool) -> io::Result<()> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    if private {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(tmp)?;
     // Keep the target's mode bits. Unix only: on Windows the only bit is read-only, which
     // would make both the rename and the cleanup of the temporary file fail.
     #[cfg(unix)]
-    {
+    if !private {
         if let Ok(metadata) = fs::metadata(path) {
             file.set_permissions(metadata.permissions())?;
         }
     }
+    #[cfg(not(unix))]
+    let _ = private;
     file.write_all(contents)?;
     file.sync_all()?;
     drop(file);
@@ -369,37 +368,12 @@ fn default_clone_path() -> String {
         .to_string()
 }
 
-fn default_keybindings() -> Vec<Keybinding> {
-    vec![
-        Keybinding {
-            action: "Clone repository".to_string(),
-            binding: "Ctrl+Shift+C".to_string(),
-        },
-        Keybinding {
-            action: "Open recent".to_string(),
-            binding: "Ctrl+O".to_string(),
-        },
-        Keybinding {
-            action: "Stage changes".to_string(),
-            binding: "Ctrl+S".to_string(),
-        },
-        Keybinding::default(),
-    ]
-}
-
 fn default_network_timeout() -> u64 {
     30
 }
 
 fn default_control_height() -> f32 {
     28.0
-}
-
-#[allow(dead_code)]
-pub const MIN_BRANCH_BOX_HEIGHT: f32 = 72.0;
-
-fn default_branch_box_height() -> f32 {
-    92.0
 }
 
 fn default_use_https() -> bool {
@@ -424,6 +398,13 @@ fn default_auto_fetch_enabled() -> bool {
 
 fn default_auto_fetch_interval_minutes() -> u64 {
     5
+}
+
+fn clamp_auto_fetch_interval(minutes: u64) -> u64 {
+    minutes.clamp(
+        MIN_AUTO_FETCH_INTERVAL_MINUTES,
+        MAX_AUTO_FETCH_INTERVAL_MINUTES,
+    )
 }
 
 impl Preferences {
@@ -484,16 +465,6 @@ impl Preferences {
         self.control_height = height.clamp(20.0, 48.0);
     }
 
-    #[allow(dead_code)]
-    pub fn branch_box_height(&self) -> f32 {
-        self.branch_box_height
-    }
-
-    #[allow(dead_code)]
-    pub fn set_branch_box_height(&mut self, height: f32) {
-        self.branch_box_height = height.max(MIN_BRANCH_BOX_HEIGHT);
-    }
-
     pub fn pinned_branches(&self) -> &[String] {
         &self.pinned_branches
     }
@@ -534,36 +505,53 @@ impl Preferences {
         self.auto_fetch_enabled = auto_fetch_enabled;
     }
 
+    /// Clamped on read too: config.json and imported files are not checked when loaded.
     pub fn auto_fetch_interval_minutes(&self) -> u64 {
-        self.auto_fetch_interval_minutes
+        clamp_auto_fetch_interval(self.auto_fetch_interval_minutes)
     }
 
     pub fn set_auto_fetch_interval_minutes(&mut self, minutes: u64) {
-        self.auto_fetch_interval_minutes = minutes.max(1);
+        self.auto_fetch_interval_minutes = clamp_auto_fetch_interval(minutes);
     }
 
     pub fn save_to_path<P: AsRef<Path>>(&self, path: P) -> std::io::Result<()> {
-        let contents = serde_json::to_string_pretty(self).unwrap_or_else(|_| "{}".to_string());
-        if let Some(parent) = path.as_ref().parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(path, contents)
+        let contents = serde_json::to_vec_pretty(self).map_err(io::Error::other)?;
+        write_atomic(path.as_ref(), &contents)
     }
 
+    /// Reads preferences saved by [`Self::save_to_path`], or the `preferences` object of a
+    /// whole `config.json`. A file with none of the preference fields is refused: read as is,
+    /// it would silently reset every preference to its default.
     pub fn from_path<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
+        let invalid = |message: String| io::Error::new(ErrorKind::InvalidData, message);
         let contents = fs::read_to_string(path)?;
-        serde_json::from_str(&contents).map_err(|err| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("Failed to parse preferences: {err}"),
-            )
-        })
+        let mut value: serde_json::Value = serde_json::from_str(&contents)
+            .map_err(|err| invalid(format!("Failed to parse preferences: {err}")))?;
+        if let Some(preferences) = value.get_mut("preferences").map(serde_json::Value::take) {
+            value = preferences;
+        }
+        let known = serde_json::to_value(Self::default()).map_err(io::Error::other)?;
+        let has_preferences = match (&value, &known) {
+            (serde_json::Value::Object(fields), serde_json::Value::Object(known)) => {
+                fields.keys().any(|key| known.contains_key(key))
+            }
+            _ => false,
+        };
+        if !has_preferences {
+            return Err(invalid(
+                "The file does not contain GitSpace preferences".to_string(),
+            ));
+        }
+        serde_json::from_value(value)
+            .map_err(|err| invalid(format!("Failed to parse preferences: {err}")))
     }
 }
 
 impl LoggingOptions {
+    /// Clamped on read too: config.json is not checked when loaded.
     pub fn retention_files(&self) -> usize {
         self.retention_files
+            .clamp(MIN_LOG_RETENTION_FILES, MAX_LOG_RETENTION_FILES)
     }
 
     pub fn set_retention_files(&mut self, retention_files: usize) {
@@ -604,6 +592,64 @@ mod tests {
         assert_eq!(preferences.pinned_branches(), ["main"]);
         assert_eq!(config.logging().retention_files(), 12);
         assert!(!backup_path(&path).exists());
+    }
+
+    #[test]
+    fn out_of_range_numbers_in_the_file_are_clamped() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(CONFIG_FILE_NAME);
+        for (minutes, files, expected_minutes, expected_files) in [
+            (0, 0, 1, 1),
+            (u64::MAX, usize::MAX, 24 * 60, 30),
+            (10, 5, 10, 5),
+        ] {
+            fs::write(
+                &path,
+                format!(
+                    r#"{{"preferences": {{"auto_fetch_interval_minutes": {minutes}}},
+                        "logging": {{"retention_files": {files}}}}}"#
+                ),
+            )
+            .expect("write config");
+            let config = AppConfig::load_from(&path);
+            let interval = config.preferences().auto_fetch_interval_minutes();
+            assert_eq!(interval, expected_minutes);
+            assert!(interval.checked_mul(60).is_some());
+            assert_eq!(config.logging().retention_files(), expected_files);
+        }
+    }
+
+    #[test]
+    fn preferences_import_reads_an_export_or_a_whole_config() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("exports").join("preferences.json");
+        let mut preferences = Preferences::default();
+        preferences.set_theme_mode(ThemeMode::Latte);
+        preferences.set_pinned_branches(vec!["main".to_string()]);
+        preferences.save_to_path(&path).expect("export");
+        assert_eq!(Preferences::from_path(&path).expect("import"), preferences);
+
+        // The whole config.json keeps the preferences under "preferences".
+        let mut config = AppConfig::default();
+        config.set_preferences(preferences.clone());
+        let config_path = dir.path().join(CONFIG_FILE_NAME);
+        config.save_to(&config_path).expect("save config");
+        assert_eq!(
+            Preferences::from_path(&config_path).expect("import config"),
+            preferences
+        );
+
+        for contents in [
+            "{}",
+            "[]",
+            "3",
+            r#"{"unrelated": true}"#,
+            r#"{"preferences": {}}"#,
+        ] {
+            fs::write(&path, contents).expect("write");
+            let err = Preferences::from_path(&path).expect_err(contents);
+            assert_eq!(err.kind(), ErrorKind::InvalidData, "{contents}");
+        }
     }
 
     #[test]
