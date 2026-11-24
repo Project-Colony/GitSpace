@@ -178,7 +178,8 @@ pub fn checkout_branch<P: AsRef<Path>>(repo_path: P, name: &str) -> Result<(), E
             Err(_) => repo.revparse_ext(name)?,
         };
 
-        repo.checkout_tree(&object, Some(CheckoutBuilder::default().force()))?;
+        // Safe checkout: libgit2 fails instead of overwriting a modified file.
+        repo.checkout_tree(&object, Some(&mut CheckoutBuilder::new()))?;
         if let Some(reference) = reference {
             if let Ok(name) = reference.name() {
                 repo.set_head(name)?;

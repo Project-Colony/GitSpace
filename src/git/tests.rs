@@ -448,11 +448,80 @@ fn stashes_round_trip_changes() {
     assert_eq!(stashes.len(), 1);
     assert!(stashes[0].message.contains("test stash"));
 
-    apply_stash(working_dir.to_str().unwrap(), 0).expect("apply stash");
-    drop_stash(working_dir.to_str().unwrap(), 0).expect("drop stash");
+    apply_stash(working_dir.to_str().unwrap(), 0, &stashes[0].id).expect("apply stash");
+    drop_stash(working_dir.to_str().unwrap(), 0, &stashes[0].id).expect("drop stash");
 
     let restored = fs::read_to_string(&file_path).expect("read file");
     assert_eq!(restored, "modified");
+}
+
+#[test]
+fn stash_drop_refuses_a_changed_stash_list() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    let path = root.to_str().unwrap();
+    write_commit(&repo, "a.txt", "base", "initial");
+    fs::write(root.join("a.txt"), "first").unwrap();
+    create_stash(path, "first", false).expect("stash");
+    let first = list_stashes(path).unwrap().remove(0);
+
+    // Another stash pushes the first one to index 1.
+    fs::write(root.join("a.txt"), "second").unwrap();
+    create_stash(path, "second", false).expect("stash");
+
+    let err = drop_stash(path, first.index, &first.id).expect_err("stale index");
+    assert!(err.message().contains("refresh"), "{}", err.message());
+    assert_eq!(list_stashes(path).unwrap().len(), 2);
+    assert!(apply_stash(path, first.index, &first.id).is_err());
+}
+
+#[test]
+fn stash_apply_keeps_edits_in_other_files() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    let path = root.to_str().unwrap();
+    write_commit(&repo, "a.txt", "a", "add a");
+    write_commit(&repo, "b.txt", "b", "add b");
+    fs::write(root.join("a.txt"), "stashed").unwrap();
+    create_stash(path, "a", false).expect("stash");
+    fs::write(root.join("b.txt"), "unsaved").unwrap();
+
+    let stash = list_stashes(path).unwrap().remove(0);
+    apply_stash(path, stash.index, &stash.id).expect("apply");
+
+    assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "stashed");
+    assert_eq!(fs::read_to_string(root.join("b.txt")).unwrap(), "unsaved");
+}
+
+#[test]
+fn stash_uses_the_configured_signature() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    let mut config = repo.config().unwrap();
+    config.set_str("user.name", "Ada").unwrap();
+    config.set_str("user.email", "ada@example.com").unwrap();
+    write_commit(&repo, "a.txt", "a", "initial");
+    fs::write(root.join("a.txt"), "changed").unwrap();
+
+    create_stash(root.to_str().unwrap(), "sig", false).expect("stash");
+    let stash = repo.refname_to_id("refs/stash").unwrap();
+    let commit = repo.find_commit(stash).unwrap();
+    assert_eq!(commit.author().email().unwrap(), "ada@example.com");
+}
+
+#[test]
+fn checkout_refuses_to_overwrite_a_modified_file() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    let first = write_commit(&repo, "a.txt", "one", "initial");
+    repo.branch("other", &repo.find_commit(first).unwrap(), false)
+        .unwrap();
+    write_commit(&repo, "a.txt", "two", "change");
+    fs::write(root.join("a.txt"), "dirty").unwrap();
+
+    assert!(branch::checkout_branch(root, "other").is_err());
+    assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "dirty");
+    assert_eq!(repo.head().unwrap().shorthand().unwrap(), "main");
 }
 
 #[test]
