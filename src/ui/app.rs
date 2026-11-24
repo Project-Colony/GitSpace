@@ -11,11 +11,12 @@ use iced::{Element, Length, Subscription, Task};
 
 use crate::auth::AuthManager;
 use crate::config::{AppConfig, LoggingOptions, Preferences};
+use crate::error::logs_directory;
 use crate::git::remote::fetch_remote;
 use crate::ui::{
     auth::AuthPanel,
     branches::BranchPanel,
-    clone::ClonePanel,
+    clone::{self, ClonePanel},
     context::RepoContext,
     dev_gallery::DevGalleryPanel,
     history::HistoryPanel,
@@ -103,7 +104,7 @@ impl GitSpaceApp {
     pub fn new() -> (Self, Task<Message>) {
         let config = AppConfig::load();
         let preferences = config.preferences().clone();
-        let logging = config.logging().clone();
+        let logging = *config.logging();
         let default_clone_path = preferences.default_clone_path().to_string();
         let theme = Theme::from_mode(preferences.theme_mode());
         let auth_manager =
@@ -122,10 +123,7 @@ impl GitSpaceApp {
         };
 
         let app = Self {
-            clone_panel: ClonePanel::new(
-                default_clone_path,
-                preferences.network().clone(),
-            ),
+            clone_panel: ClonePanel::new(default_clone_path, preferences.network().clone()),
             recent_list: RecentList::new(),
             repo_overview: RepoOverviewPanel::new(preferences.network().clone()),
             history_panel: HistoryPanel::new(),
@@ -172,11 +170,8 @@ impl GitSpaceApp {
                         }
                     }
                     LayoutMessage::CopyPath => {
-                        // Copie geree par le systeme d'exploitation via arboard
                         if let Some(repo) = &self.current_repo {
-                            if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                                let _ = clipboard.set_text(repo.path());
-                            }
+                            return iced::clipboard::write(repo.path().to_string());
                         }
                     }
                 }
@@ -185,8 +180,8 @@ impl GitSpaceApp {
 
             // ── Clone ──────────────────────────────────────────────────
             Message::Clone(msg) => {
-                let (task, cloned_path) =
-                    self.clone_panel.update(msg, &self.auth_manager);
+                self.notify_clone_failure(&msg);
+                let (task, cloned_path) = self.clone_panel.update(msg, &self.auth_manager);
                 let load_task = if let Some(path) = cloned_path {
                     self.load_repo_context_async(path.to_string_lossy().to_string())
                 } else {
@@ -197,8 +192,7 @@ impl GitSpaceApp {
 
             // ── Recent ─────────────────────────────────────────────────
             Message::Recent(msg) => {
-                let (task, selected) =
-                    self.recent_list.update(msg);
+                let (task, selected) = self.recent_list.update(msg);
                 let load_task = if let Some(path) = selected {
                     self.load_repo_context_async(path)
                 } else {
@@ -209,11 +203,9 @@ impl GitSpaceApp {
 
             // ── Repo overview ──────────────────────────────────────────
             Message::RepoOverview(msg) => {
-                let task = self.repo_overview.update(
-                    msg,
-                    self.current_repo.as_ref(),
-                    &self.auth_manager,
-                );
+                let task =
+                    self.repo_overview
+                        .update(msg, self.current_repo.as_ref(), &self.auth_manager);
                 task.map(Message::RepoOverview)
             }
 
@@ -273,12 +265,12 @@ impl GitSpaceApp {
             // ── Notifications ──────────────────────────────────────────
             Message::Notification(msg) => {
                 let actions = self.notifications.update(msg);
-                self.handle_notification_actions(actions);
-                Task::none()
+                self.handle_notification_actions(actions)
             }
 
             Message::NotificationTick => {
-                self.notifications.update(crate::ui::notifications::Message::Tick);
+                self.notifications
+                    .update(crate::ui::notifications::Message::Tick);
                 Task::none()
             }
 
@@ -296,9 +288,7 @@ impl GitSpaceApp {
             }
 
             // ── Auto-fetch ─────────────────────────────────────────────
-            Message::AutoFetchTick(_now) => {
-                self.maybe_start_auto_fetch()
-            }
+            Message::AutoFetchTick(_now) => self.maybe_start_auto_fetch(),
 
             Message::AutoFetchResult(outcome) => {
                 self.auto_fetch_in_progress = false;
@@ -318,11 +308,7 @@ impl GitSpaceApp {
         if self.preferences_panel.is_open() {
             if let Some(prefs_view) = self.preferences_panel.view(theme) {
                 let overlay = self.notification_overlay(theme);
-                return column![
-                    prefs_view.map(Message::Preferences),
-                    overlay,
-                ]
-                .into();
+                return column![prefs_view.map(Message::Preferences), overlay,].into();
             }
         }
 
@@ -334,8 +320,8 @@ impl GitSpaceApp {
             .map(Message::Layout);
 
         // Barre d'onglets
-        let tab_bar = layout::view_tab_bar(theme, &self.tab_order, self.active_tab)
-            .map(Message::Layout);
+        let tab_bar =
+            layout::view_tab_bar(theme, &self.tab_order, self.active_tab).map(Message::Layout);
 
         // Contenu de l'onglet actif
         let content = self.view_active_tab(theme);
@@ -344,26 +330,20 @@ impl GitSpaceApp {
         let notification_overlay = self.notification_overlay(theme);
 
         // Assemblage : header en haut, puis sidebar + (tabs + content) en dessous
-        let main_area = column![
-            tab_bar,
-            content,
-        ]
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .padding(iced::Padding { top: 0.0, right: 16.0, bottom: 16.0, left: 16.0 });
+        let main_area = column![tab_bar, content,]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .padding(iced::Padding {
+                top: 0.0,
+                right: 16.0,
+                bottom: 16.0,
+                left: 16.0,
+            });
 
-        let body = row![
-            sidebar,
-            main_area,
-        ]
-        .height(Length::Fill);
+        let body = row![sidebar, main_area,].height(Length::Fill);
 
         // Superposer les notifications en haut a droite
-        let page = column![
-            header,
-            body,
-        ]
-        .height(Length::Fill);
+        let page = column![header, body,].height(Length::Fill);
 
         // Utiliser un container pour le fond + overlay notifications
         let base = container(page)
@@ -378,17 +358,20 @@ impl GitSpaceApp {
             base.into()
         } else {
             // Placer les notifications en overlay via une colonne empilee
-            column![
-                iced::widget::stack![
-                    base,
-                    container(notification_overlay)
-                        .width(Length::Fill)
-                        .align_x(iced::alignment::Horizontal::Right)
-                        .padding(iced::Padding { top: 60.0, right: 16.0, bottom: 0.0, left: 0.0 }),
-                ]
-                .width(Length::Fill)
-                .height(Length::Fill),
+            column![iced::widget::stack![
+                base,
+                container(notification_overlay)
+                    .width(Length::Fill)
+                    .align_x(iced::alignment::Horizontal::Right)
+                    .padding(iced::Padding {
+                        top: 60.0,
+                        right: 16.0,
+                        bottom: 0.0,
+                        left: 0.0
+                    }),
             ]
+            .width(Length::Fill)
+            .height(Length::Fill),]
             .into()
         }
     }
@@ -442,9 +425,7 @@ impl GitSpaceApp {
 
         // Tick pour le dismiss automatique des notifications
         if self.notifications.has_visible() {
-            subs.push(
-                iced::time::every(Duration::from_secs(1)).map(|_| Message::NotificationTick),
-            );
+            subs.push(iced::time::every(Duration::from_secs(1)).map(|_| Message::NotificationTick));
         }
 
         // Timer auto-fetch
@@ -452,9 +433,8 @@ impl GitSpaceApp {
             && self.current_repo.is_some()
             && !self.auto_fetch_in_progress
         {
-            let interval = Duration::from_secs(
-                self.config.preferences().auto_fetch_interval_minutes() * 60,
-            );
+            let interval =
+                Duration::from_secs(self.config.preferences().auto_fetch_interval_minutes() * 60);
             subs.push(iced::time::every(interval).map(Message::AutoFetchTick));
         }
 
@@ -480,12 +460,10 @@ impl GitSpaceApp {
         Task::perform(
             async move {
                 let p = path.clone();
-                let context = tokio::task::spawn_blocking(move || {
-                    RepoContext::from_path(&p)
-                })
-                .await
-                .ok()
-                .flatten();
+                let context = tokio::task::spawn_blocking(move || RepoContext::from_path(&p))
+                    .await
+                    .ok()
+                    .flatten();
                 (path, context)
             },
             |(path, context)| Message::RepoContextLoaded(path, context),
@@ -533,19 +511,41 @@ impl GitSpaceApp {
     }
 
     /// Traite les actions declenchees depuis les notifications.
-    fn handle_notification_actions(&mut self, actions: Vec<NotificationAction>) {
+    fn handle_notification_actions(&mut self, actions: Vec<NotificationAction>) -> Task<Message> {
+        let mut tasks = Vec::new();
         for action in actions {
             match action {
                 NotificationAction::RetryClone => {
-                    // Re-declenchement du clone via le panneau
+                    let (task, _) = self
+                        .clone_panel
+                        .update(clone::Message::RetryClone, &self.auth_manager);
+                    tasks.push(task.map(Message::Clone));
                 }
                 NotificationAction::CopyLogPath(path) => {
-                    if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                        let _ = clipboard.set_text(path.display().to_string());
-                    }
+                    tasks.push(iced::clipboard::write(path.display().to_string()));
                 }
             }
         }
+        Task::batch(tasks)
+    }
+
+    /// Signale un échec de clonage ou de recherche, avec le chemin des logs.
+    fn notify_clone_failure(&mut self, message: &clone::Message) {
+        let (title, err, can_retry) = match message {
+            clone::Message::CloneResult(Err(err)) => ("Échec du clonage", err, true),
+            clone::Message::SearchResult(Err(err)) => ("Échec de la recherche", err, false),
+            _ => return,
+        };
+        let log_path = logs_directory();
+        let mut notification = Notification::error(title, err.user_message());
+        if can_retry {
+            notification = notification.with_action(NotificationAction::RetryClone);
+        }
+        notification = notification
+            .with_action(NotificationAction::CopyLogPath(log_path.clone()))
+            .with_log_path(log_path);
+        notification.detail = Some(err.detail().to_string());
+        self.notifications.push(notification);
     }
 
     /// Demarre l'auto-fetch si les conditions sont remplies.
@@ -570,7 +570,10 @@ impl GitSpaceApp {
             return Task::none();
         }
 
-        let context = match self.repo_overview.auto_fetch_context(repo, &self.auth_manager) {
+        let context = match self
+            .repo_overview
+            .auto_fetch_context(repo, &self.auth_manager)
+        {
             Ok(ctx) => ctx,
             Err(err) => {
                 self.repo_overview
@@ -623,15 +626,12 @@ impl GitSpaceApp {
                         self.repo_overview.reload_repo_state(repo);
                     }
                 }
-                self.repo_overview.set_action_status(Some(format!(
-                    "Auto-fetch {} termine",
-                    outcome.remote_name
-                )));
+                self.repo_overview
+                    .set_action_status(Some(format!("Auto-fetch {} termine", outcome.remote_name)));
             }
             Err(err) => {
-                self.repo_overview.set_action_status(Some(format!(
-                    "Auto-fetch echoue: {err}"
-                )));
+                self.repo_overview
+                    .set_action_status(Some(format!("Auto-fetch echoue: {err}")));
                 self.notifications.push(Notification::error(
                     "Auto-fetch echoue",
                     format!("{} ({})", err, outcome.remote_name),

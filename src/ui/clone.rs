@@ -8,18 +8,21 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use iced::widget::{button, column, container, pick_list, progress_bar, row, text, text_input, Space};
+use iced::futures::{SinkExt, Stream};
+use iced::widget::{
+    button, column, container, pick_list, progress_bar, row, text, text_input, Space,
+};
 use iced::{Alignment, Element, Length, Task};
-use reqwest::StatusCode;
-use reqwest::Client;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, USER_AGENT};
+use reqwest::Client;
+use reqwest::StatusCode;
 use serde::Deserialize;
 use url::Url;
 
 use crate::auth::AuthManager;
 use crate::config::NetworkOptions;
 use crate::error::AppError;
-use crate::git::clone::{CloneProgress, CloneRequest, clone_repository};
+use crate::git::clone::{clone_repository, CloneProgress, CloneRequest};
 use crate::ui::theme::Theme;
 
 // ---------------------------------------------------------------------------
@@ -125,7 +128,7 @@ pub enum Message {
     ChooseDestinationResult(Option<String>),
     /// Démarrer le clonage.
     StartClone,
-    /// Progression du clonage (réservé pour usage futur).
+    /// Progression du clonage.
     CloneProgress(CloneProgress),
     /// Résultat du clonage asynchrone.
     CloneResult(Result<(), AppError>),
@@ -262,7 +265,7 @@ impl ClonePanel {
                     async move {
                         search_repositories(provider, &query, token.as_deref(), network).await
                     },
-                    |result| Message::SearchResult(result),
+                    Message::SearchResult,
                 );
                 (task, None)
             }
@@ -345,8 +348,7 @@ impl ClonePanel {
                 self.cloning = false;
                 match result {
                     Ok(()) => {
-                        self.clone_status =
-                            Some("Clonage terminé avec succès".into());
+                        self.clone_status = Some("Clonage terminé avec succès".into());
                         let cloned_path = self.active_destination.take();
                         (Task::none(), cloned_path)
                     }
@@ -389,7 +391,7 @@ impl ClonePanel {
                     async move {
                         search_repositories(provider, &query, token.as_deref(), network).await
                     },
-                    |result| Message::SearchResult(result),
+                    Message::SearchResult,
                 );
                 (task, None)
             }
@@ -404,25 +406,7 @@ impl ClonePanel {
         self.clone_status = Some("Démarrage du clonage...".into());
         self.cloning = true;
 
-        // Le clonage est bloquant — on le lance dans un thread dédié.
-        // La progression en temps réel n'est pas disponible dans cette version ;
-        // le résultat final est renvoyé une fois le clonage terminé.
-        Task::perform(
-            async move {
-                tokio::task::spawn_blocking(move || {
-                    clone_repository(request, |_progress| {
-                        // Progression ignorée pour l'instant — pas de canal temps réel.
-                    })
-                })
-                .await
-            },
-            |join_result| match join_result {
-                Ok(result) => Message::CloneResult(result),
-                Err(err) => Message::CloneResult(Err(AppError::Network(
-                    format!("Tâche de clonage interrompue : {err}"),
-                ))),
-            },
-        )
+        Task::run(clone_with_progress(request), std::convert::identity)
     }
 
     /// Met à jour l'URL et la destination d'après le dépôt sélectionné.
@@ -518,10 +502,7 @@ impl ClonePanel {
         .spacing(4)
         .width(Length::Fill);
 
-        container(content)
-            .padding(16)
-            .width(Length::Fill)
-            .into()
+        container(content).padding(16).width(Length::Fill).into()
     }
 
     /// Affiche les cartes de sélection du fournisseur (GitHub / GitLab).
@@ -621,9 +602,16 @@ impl ClonePanel {
         // Liste déroulante des résultats — mappe la sélection vers SelectRepo(index)
         let results_section = self.view_results_pick_list(theme);
 
-        column![heading, help_text, Space::with_height(6), search_row, Space::with_height(8), results_section]
-            .spacing(2)
-            .into()
+        column![
+            heading,
+            help_text,
+            Space::with_height(6),
+            search_row,
+            Space::with_height(8),
+            results_section
+        ]
+        .spacing(2)
+        .into()
     }
 
     /// Widget pick_list pour les résultats de recherche.
@@ -675,10 +663,9 @@ impl ClonePanel {
             .size(theme.typography.title)
             .color(theme.palette.text_primary);
 
-        let dest_input =
-            text_input("Où cloner le dépôt ?", &self.destination)
-                .on_input(Message::DestinationChanged)
-                .width(400);
+        let dest_input = text_input("Où cloner le dépôt ?", &self.destination)
+            .on_input(Message::DestinationChanged)
+            .width(400);
 
         let choose_btn = button(text("Choisir")).on_press(Message::ChooseDestination);
 
@@ -691,8 +678,9 @@ impl ClonePanel {
 
     /// Affiche le bouton de clonage, aligné à droite.
     fn view_action_bar<'a>(&self, _theme: &'a Theme) -> Element<'a, Message> {
-        let can_clone =
-            !self.repo_url.trim().is_empty() && !self.destination.trim().is_empty() && !self.cloning;
+        let can_clone = !self.repo_url.trim().is_empty()
+            && !self.destination.trim().is_empty()
+            && !self.cloning;
 
         let clone_btn = if can_clone {
             button(text("Cloner le dépôt")).on_press(Message::StartClone)
@@ -753,7 +741,7 @@ fn repo_name_from_url(repo_url: &str) -> Option<String> {
     if let Ok(url) = Url::parse(trimmed) {
         if let Some(segment) = url
             .path_segments()
-            .and_then(|segments| segments.filter(|s| !s.is_empty()).last())
+            .and_then(|mut segments| segments.rfind(|s| !s.is_empty()))
         {
             let name = segment.trim_end_matches(".git");
             if !name.is_empty() {
@@ -997,9 +985,11 @@ async fn search_gitlab(
                 // error_for_status() renvoie Err quand le statut n'est pas un succès
                 match response.error_for_status() {
                     Err(err) => return Err(AppError::from(err)),
-                    Ok(_) => return Err(AppError::Network(
-                        "Réponse inattendue du serveur GitLab".to_string(),
-                    )),
+                    Ok(_) => {
+                        return Err(AppError::Network(
+                            "Réponse inattendue du serveur GitLab".to_string(),
+                        ))
+                    }
                 }
             }
             break;
@@ -1081,4 +1071,24 @@ async fn fetch_github_repos(
     }
 
     Ok(all_repos)
+}
+
+/// Clone bloquant lancé dans un thread dédié, qui envoie sa progression puis son résultat.
+fn clone_with_progress(request: CloneRequest) -> impl Stream<Item = Message> {
+    iced::stream::channel(16, move |mut output| async move {
+        let mut progress = output.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            // shortcut: an update is dropped when the UI is 16 behind; the next one replaces it.
+            clone_repository(request, move |update| {
+                let _ = progress.try_send(Message::CloneProgress(update));
+            })
+        })
+        .await
+        .unwrap_or_else(|err| {
+            Err(AppError::Network(format!(
+                "Tâche de clonage interrompue : {err}"
+            )))
+        });
+        let _ = output.send(Message::CloneResult(result)).await;
+    })
 }
