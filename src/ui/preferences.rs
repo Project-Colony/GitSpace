@@ -10,8 +10,7 @@ use iced::widget::{
 use iced::{Alignment, Color, Element, Length, Task};
 
 use crate::config::{
-    LoggingOptions, MotionIntensity, Preferences, ThemeMode, MAX_LOG_RETENTION_FILES,
-    MIN_LOG_RETENTION_FILES,
+    LoggingOptions, Preferences, ThemeMode, MAX_LOG_RETENTION_FILES, MIN_LOG_RETENTION_FILES,
 };
 use crate::ui::theme::{with_alpha, Theme};
 
@@ -23,13 +22,6 @@ const THEME_MODES: &[ThemeMode] = &[
     ThemeMode::Mocha,
 ];
 
-/// Intensites de mouvement disponibles.
-const MOTION_INTENSITIES: &[MotionIntensity] = &[
-    MotionIntensity::Low,
-    MotionIntensity::Medium,
-    MotionIntensity::High,
-];
-
 // ─── Categories ───────────────────────────────────────────────────────────
 
 /// Categorie de la sidebar preferences.
@@ -37,24 +29,17 @@ const MOTION_INTENSITIES: &[MotionIntensity] = &[
 pub enum PreferencesCategory {
     General,
     Appearance,
-    Accessibility,
     GitSpace,
 }
 
 impl PreferencesCategory {
-    pub const ALL: [Self; 4] = [
-        Self::General,
-        Self::Appearance,
-        Self::Accessibility,
-        Self::GitSpace,
-    ];
+    pub const ALL: [Self; 3] = [Self::General, Self::Appearance, Self::GitSpace];
 
     /// Libelle affiche dans la sidebar.
     pub fn label(&self) -> &'static str {
         match self {
             Self::General => "General",
             Self::Appearance => "Apparences",
-            Self::Accessibility => "Accessibilite",
             Self::GitSpace => "GitSpace",
         }
     }
@@ -62,10 +47,9 @@ impl PreferencesCategory {
     /// Icone affichee devant le libelle.
     pub fn icon(&self) -> &'static str {
         match self {
-            Self::General => "\u{2699}",       // ⚙
-            Self::Appearance => "\u{1f3a8}",   // 🎨
-            Self::Accessibility => "\u{267f}", // ♿
-            Self::GitSpace => "\u{1f680}",     // 🚀
+            Self::General => "\u{2699}",     // ⚙
+            Self::Appearance => "\u{1f3a8}", // 🎨
+            Self::GitSpace => "\u{1f680}",   // 🚀
         }
     }
 }
@@ -105,16 +89,6 @@ pub enum Message {
     // -- Apparences --
     /// Mode de theme modifie.
     ThemeModeChanged(ThemeMode),
-    /// Hauteur des controles modifiee.
-    ControlHeightChanged(f32),
-
-    // -- Accessibilite --
-    /// Intensite de mouvement modifiee.
-    MotionIntensityChanged(MotionIntensity),
-    /// Mouvement reduit active/desactive.
-    ReducedMotionChanged(bool),
-    /// Mode performance active/desactive.
-    PerformanceModeChanged(bool),
 
     // -- GitSpace --
     /// Nombre de fichiers de log conserves modifie.
@@ -123,18 +97,22 @@ pub enum Message {
     AllowEncryptedTokensChanged(bool),
     /// Importer les parametres.
     ImportSettings,
-    /// Resultat de l'import.
-    ImportResult(Result<Preferences, String>),
+    /// Resultat de l'import (`None` si l'utilisateur a annule).
+    ImportResult(Result<Option<Preferences>, String>),
     /// Exporter les parametres.
     ExportSettings,
-    /// Resultat de l'export.
-    ExportResult(Result<String, String>),
+    /// Resultat de l'export : chemin ecrit, ou `None` si l'utilisateur a annule.
+    ExportResult(Result<Option<String>, String>),
 
     // -- Actions globales --
     /// Sauvegarder les preferences.
     SavePreferences,
-    /// Reinitialiser les preferences par defaut.
+    /// Demander la reinitialisation des preferences par defaut.
     ResetDefaults,
+    /// Confirmer la reinitialisation.
+    ConfirmReset,
+    /// Annuler la reinitialisation.
+    CancelReset,
 }
 
 // ─── Etat ─────────────────────────────────────────────────────────────────
@@ -145,6 +123,10 @@ pub struct PreferencesPanel {
     preferences: Preferences,
     /// Options de journalisation courantes.
     logging: LoggingOptions,
+    /// Dernieres preferences appliquees, restaurees a la fermeture sans sauvegarde.
+    applied: Preferences,
+    /// Derniere journalisation appliquee.
+    applied_logging: LoggingOptions,
     /// Preferences en attente d'application par l'app.
     pending_preferences: Option<Preferences>,
     /// Journalisation en attente d'application.
@@ -152,6 +134,10 @@ pub struct PreferencesPanel {
     /// Statut import/export.
     import_status: Option<String>,
     export_status: Option<String>,
+    /// Erreur d'import ou d'export.
+    io_error: Option<String>,
+    /// La reinitialisation attend une confirmation.
+    confirm_reset: bool,
     /// Le panneau est-il ouvert ?
     open: bool,
     /// Categorie active de la sidebar.
@@ -168,12 +154,16 @@ impl PreferencesPanel {
         let timeout_buffer = preferences.network().network_timeout_secs.to_string();
         let fetch_interval_buffer = preferences.auto_fetch_interval_minutes().to_string();
         Self {
+            applied: preferences.clone(),
+            applied_logging: logging,
             preferences,
             logging,
             pending_preferences: None,
             pending_logging: None,
             import_status: None,
             export_status: None,
+            io_error: None,
+            confirm_reset: false,
             open: false,
             active_category: PreferencesCategory::General,
             timeout_buffer,
@@ -181,11 +171,28 @@ impl PreferencesPanel {
         }
     }
 
-    /// Met a jour les preferences depuis l'exterieur.
+    /// Enregistre les preferences appliquees par l'application. Les modifications en cours
+    /// restent a l'ecran tant que le panneau est ouvert.
     pub fn set_preferences(&mut self, preferences: Preferences) {
-        self.timeout_buffer = preferences.network().network_timeout_secs.to_string();
-        self.fetch_interval_buffer = preferences.auto_fetch_interval_minutes().to_string();
-        self.preferences = preferences;
+        self.applied = preferences;
+        if !self.open {
+            self.discard_edits();
+        }
+    }
+
+    /// Remplace la copie editee par les dernieres valeurs appliquees.
+    fn discard_edits(&mut self) {
+        self.preferences = self.applied.clone();
+        self.logging = self.applied_logging;
+        self.timeout_buffer = self.preferences.network().network_timeout_secs.to_string();
+        self.fetch_interval_buffer = self.preferences.auto_fetch_interval_minutes().to_string();
+        self.confirm_reset = false;
+    }
+
+    /// Transmet `preferences` a l'application et les retient comme appliquees.
+    fn apply(&mut self, preferences: Preferences) {
+        self.applied = preferences.clone();
+        self.pending_preferences = Some(preferences);
     }
 
     /// Le panneau est-il ouvert ?
@@ -193,8 +200,9 @@ impl PreferencesPanel {
         self.open
     }
 
-    /// Bascule l'ouverture du panneau.
+    /// Bascule l'ouverture du panneau. Les modifications non sauvegardees sont abandonnees.
     pub fn toggle(&mut self) {
+        self.discard_edits();
         self.open = !self.open;
     }
 
@@ -218,6 +226,7 @@ impl PreferencesPanel {
                 Task::none()
             }
             Message::Close => {
+                self.discard_edits();
                 self.open = false;
                 Task::none()
             }
@@ -279,27 +288,11 @@ impl PreferencesPanel {
 
             // -- Apparences --
             Message::ThemeModeChanged(mode) => {
+                // Le theme s'applique tout de suite, sans les autres modifications en cours.
                 self.preferences.set_theme_mode(mode);
-                // Applique immediatement le changement de theme
-                self.pending_preferences = Some(self.preferences.clone());
-                Task::none()
-            }
-            Message::ControlHeightChanged(height) => {
-                self.preferences.set_control_height(height);
-                Task::none()
-            }
-
-            // -- Accessibilite --
-            Message::MotionIntensityChanged(intensity) => {
-                self.preferences.set_motion_intensity(intensity);
-                Task::none()
-            }
-            Message::ReducedMotionChanged(val) => {
-                self.preferences.set_reduced_motion(val);
-                Task::none()
-            }
-            Message::PerformanceModeChanged(val) => {
-                self.preferences.set_performance_mode(val);
+                let mut applied = self.applied.clone();
+                applied.set_theme_mode(mode);
+                self.apply(applied);
                 Task::none()
             }
 
@@ -317,10 +310,8 @@ impl PreferencesPanel {
                     let path = rfd::FileDialog::new()
                         .add_filter("JSON", &["json"])
                         .pick_file();
-                    match path {
-                        Some(p) => Preferences::from_path(&p).map_err(|e| e.to_string()),
-                        None => Err("Import annule".to_string()),
-                    }
+                    path.map(|p| Preferences::from_path(&p).map_err(|e| e.to_string()))
+                        .transpose()
                 }),
                 |result| match result {
                     Ok(inner) => Message::ImportResult(inner),
@@ -329,13 +320,16 @@ impl PreferencesPanel {
             ),
             Message::ImportResult(result) => {
                 match result {
-                    Ok(prefs) => {
-                        self.preferences = prefs.clone();
-                        self.pending_preferences = Some(prefs);
+                    Ok(Some(prefs)) => {
+                        self.apply(prefs);
+                        self.discard_edits();
+                        self.io_error = None;
                         self.import_status = Some("Preferences importees avec succes".to_string());
                     }
+                    Ok(None) => {}
                     Err(e) => {
-                        self.import_status = Some(format!("Erreur d'import : {e}"));
+                        self.import_status = None;
+                        self.io_error = Some(format!("Erreur d'import : {e}"));
                     }
                 }
                 Task::none()
@@ -348,13 +342,13 @@ impl PreferencesPanel {
                             .add_filter("JSON", &["json"])
                             .set_file_name("gitspace-preferences.json")
                             .save_file();
-                        match path {
-                            Some(p) => prefs
+                        path.map(|p| {
+                            prefs
                                 .save_to_path(&p)
                                 .map(|_| p.display().to_string())
-                                .map_err(|e| e.to_string()),
-                            None => Err("Export annule".to_string()),
-                        }
+                                .map_err(|e| e.to_string())
+                        })
+                        .transpose()
                     }),
                     |result| match result {
                         Ok(inner) => Message::ExportResult(inner),
@@ -364,11 +358,14 @@ impl PreferencesPanel {
             }
             Message::ExportResult(result) => {
                 match result {
-                    Ok(path) => {
+                    Ok(Some(path)) => {
+                        self.io_error = None;
                         self.export_status = Some(format!("Preferences exportees dans {path}"));
                     }
+                    Ok(None) => {}
                     Err(e) => {
-                        self.export_status = Some(format!("Erreur d'export : {e}"));
+                        self.export_status = None;
+                        self.io_error = Some(format!("Erreur d'export : {e}"));
                     }
                 }
                 Task::none()
@@ -376,18 +373,24 @@ impl PreferencesPanel {
 
             // -- Actions globales --
             Message::SavePreferences => {
-                self.pending_preferences = Some(self.preferences.clone());
+                self.apply(self.preferences.clone());
+                self.applied_logging = self.logging;
                 self.pending_logging = Some(self.logging);
                 Task::none()
             }
             Message::ResetDefaults => {
-                self.preferences = Preferences::default();
-                self.logging = LoggingOptions::default();
-                self.timeout_buffer = self.preferences.network().network_timeout_secs.to_string();
-                self.fetch_interval_buffer =
-                    self.preferences.auto_fetch_interval_minutes().to_string();
-                self.pending_preferences = Some(self.preferences.clone());
-                self.pending_logging = Some(self.logging);
+                self.confirm_reset = true;
+                Task::none()
+            }
+            Message::CancelReset => {
+                self.confirm_reset = false;
+                Task::none()
+            }
+            Message::ConfirmReset => {
+                self.apply(Preferences::default());
+                self.applied_logging = LoggingOptions::default();
+                self.pending_logging = Some(self.applied_logging);
+                self.discard_edits();
                 Task::none()
             }
         }
@@ -410,7 +413,6 @@ impl PreferencesPanel {
         let content_area = match self.active_category {
             PreferencesCategory::General => self.view_general(theme),
             PreferencesCategory::Appearance => self.view_appearance(theme),
-            PreferencesCategory::Accessibility => self.view_accessibility(theme),
             PreferencesCategory::GitSpace => self.view_gitspace(theme),
         };
 
@@ -481,30 +483,17 @@ impl PreferencesPanel {
         // Espace flexible pour pousser le bouton Fermer en bas
         sidebar_items = sidebar_items.push(Space::with_height(Length::Fill));
 
-        // Bouton Fermer
-        let close_accent = palette.accent;
-        let close_text_color = palette.text_primary;
-        let close_surface = palette.surface_highlight;
-        let close_btn = button(text("Fermer").size(typo.body).color(close_text_color))
+        // Bouton Fermer (abandonne les modifications non sauvegardees)
+        let close_btn = button(text("Fermer").size(typo.body).color(palette.text_primary))
             .on_press(Message::Close)
             .padding([6, 12])
             .width(Length::Fill)
-            .style(move |_: &iced::Theme, status| {
-                let bg = match status {
-                    button::Status::Hovered => with_alpha(close_accent, 0.2),
-                    button::Status::Pressed => with_alpha(close_accent, 0.3),
-                    _ => with_alpha(close_surface, 0.3),
-                };
-                button::Style {
-                    background: Some(bg.into()),
-                    border: iced::Border {
-                        radius: 6.0.into(),
-                        ..Default::default()
-                    },
-                    text_color: close_text_color,
-                    ..Default::default()
-                }
-            });
+            .style(rounded_style(
+                with_alpha(palette.surface_highlight, 0.3),
+                with_alpha(palette.accent, 0.2),
+                with_alpha(palette.accent, 0.3),
+                palette.text_primary,
+            ));
 
         sidebar_items = sidebar_items.push(close_btn);
         sidebar_items = sidebar_items.push(Space::with_height(theme.spacing.sm));
@@ -566,84 +555,89 @@ impl PreferencesPanel {
             Color::TRANSPARENT
         };
 
+        let hovered = if is_selected {
+            selected_bg
+        } else {
+            with_alpha(surface_hl, 0.25)
+        };
+
         button(content)
             .on_press(Message::SelectCategory(category))
             .padding([6, 8])
             .width(Length::Fill)
-            .style(move |_: &iced::Theme, status| {
-                let bg = match status {
-                    button::Status::Hovered if !is_selected => with_alpha(surface_hl, 0.25),
-                    button::Status::Pressed => with_alpha(surface_hl, 0.5),
-                    _ => selected_bg,
-                };
-                button::Style {
-                    background: Some(bg.into()),
-                    border: iced::Border {
-                        radius: 6.0.into(),
-                        ..Default::default()
-                    },
-                    text_color,
-                    ..Default::default()
-                }
-            })
+            .style(rounded_style(
+                selected_bg,
+                hovered,
+                with_alpha(surface_hl, 0.5),
+                text_color,
+            ))
             .into()
     }
 
     // ─── Boutons d'actions bas du contenu ──────────────────────────────
 
-    /// Boutons Sauvegarder et Reinitialiser en bas du contenu.
+    /// Boutons Sauvegarder et Reinitialiser en bas du contenu. La reinitialisation demande
+    /// une confirmation.
     fn view_content_actions<'a>(&'a self, theme: &'a Theme) -> Element<'a, Message> {
         let palette = &theme.palette;
         let typo = &theme.typography;
-
         let accent = palette.accent;
         let surface_hl = palette.surface_highlight;
-        let text_primary = palette.text_primary;
-        let bg_color = palette.background;
 
-        let save_btn = button(text("Sauvegarder").size(typo.body).color(bg_color))
-            .on_press(Message::SavePreferences)
-            .padding([8, 16])
-            .style(move |_: &iced::Theme, status| {
-                let bg = match status {
-                    button::Status::Hovered => with_alpha(accent, 0.85),
-                    button::Status::Pressed => with_alpha(accent, 0.7),
-                    _ => accent,
-                };
-                button::Style {
-                    background: Some(bg.into()),
-                    border: iced::Border {
-                        radius: 6.0.into(),
-                        ..Default::default()
-                    },
-                    text_color: bg_color,
-                    ..Default::default()
-                }
-            });
+        let save_btn = button(
+            text("Sauvegarder")
+                .size(typo.body)
+                .color(palette.background),
+        )
+        .on_press(Message::SavePreferences)
+        .padding([8, 16])
+        .style(rounded_style(
+            accent,
+            with_alpha(accent, 0.85),
+            with_alpha(accent, 0.7),
+            palette.background,
+        ));
 
-        let reset_btn = button(text("Reinitialiser").size(typo.body).color(text_primary))
-            .on_press(Message::ResetDefaults)
-            .padding([8, 16])
-            .style(move |_: &iced::Theme, status| {
-                let bg = match status {
-                    button::Status::Hovered => with_alpha(surface_hl, 0.4),
-                    button::Status::Pressed => with_alpha(surface_hl, 0.6),
-                    _ => with_alpha(surface_hl, 0.2),
-                };
-                button::Style {
-                    background: Some(bg.into()),
-                    border: iced::Border {
-                        radius: 6.0.into(),
-                        ..Default::default()
-                    },
-                    text_color: text_primary,
-                    ..Default::default()
-                }
-            });
+        let mut actions = row![save_btn]
+            .spacing(theme.spacing.sm)
+            .align_y(Alignment::Center);
 
-        row![save_btn, Space::with_width(theme.spacing.sm), reset_btn]
-            .align_y(Alignment::Center)
-            .into()
+        if self.confirm_reset {
+            actions = actions
+                .push(
+                    text("Remettre toutes les preferences par defaut ?")
+                        .size(typo.body)
+                        .color(palette.text_primary),
+                )
+                .push(styled_secondary_button(
+                    theme,
+                    "Confirmer",
+                    Message::ConfirmReset,
+                ))
+                .push(styled_secondary_button(
+                    theme,
+                    "Annuler",
+                    Message::CancelReset,
+                ));
+        } else {
+            actions = actions.push(
+                button(
+                    text("Reinitialiser")
+                        .size(typo.body)
+                        .color(palette.text_primary),
+                )
+                .on_press(Message::ResetDefaults)
+                .padding([8, 16])
+                .style(rounded_style(
+                    with_alpha(surface_hl, 0.2),
+                    with_alpha(surface_hl, 0.4),
+                    with_alpha(surface_hl, 0.6),
+                    palette.text_primary,
+                )),
+            );
+        }
+
+        actions.into()
     }
 
     // ─── Contenu : General ────────────────────────────────────────────
@@ -774,7 +768,7 @@ impl PreferencesPanel {
 
     // ─── Contenu : Apparences ─────────────────────────────────────────
 
-    /// Section Apparences : selection du theme, hauteur des controles.
+    /// Section Apparences : selection du theme.
     fn view_appearance<'a>(&'a self, theme: &'a Theme) -> Element<'a, Message> {
         let palette = &theme.palette;
         let typo = &theme.typography;
@@ -803,26 +797,6 @@ impl PreferencesPanel {
             .spacing(theme.spacing.sm)
             .align_y(Alignment::Center);
 
-        // Hauteur des controles
-        let height_label = text("Hauteur des controles")
-            .size(typo.body)
-            .color(palette.text_secondary);
-
-        let height_slider = slider(
-            20.0..=48.0,
-            self.preferences.control_height(),
-            Message::ControlHeightChanged,
-        )
-        .width(Length::Fixed(200.0));
-
-        let height_value = text(format!("{:.0}px", self.preferences.control_height()))
-            .size(typo.label)
-            .color(palette.text_secondary);
-
-        let height_row = row![height_label, height_slider, height_value]
-            .spacing(theme.spacing.sm)
-            .align_y(Alignment::Center);
-
         column![
             heading,
             subtitle,
@@ -830,73 +804,6 @@ impl PreferencesPanel {
             section_header(theme, "Theme", "Choisissez un theme Catppuccin"),
             Space::with_height(theme.spacing.xs),
             theme_row,
-            Space::with_height(theme.spacing.md),
-            horizontal_rule(1),
-            Space::with_height(theme.spacing.md),
-            section_header(
-                theme,
-                "Taille des controles",
-                "Ajustez la hauteur des elements"
-            ),
-            Space::with_height(theme.spacing.xs),
-            height_row,
-        ]
-        .spacing(theme.spacing.sm)
-        .width(Length::Fill)
-        .into()
-    }
-
-    // ─── Contenu : Accessibilite ──────────────────────────────────────
-
-    /// Section Accessibilite : mouvement reduit, intensite, mode performance.
-    fn view_accessibility<'a>(&'a self, theme: &'a Theme) -> Element<'a, Message> {
-        let palette = &theme.palette;
-        let typo = &theme.typography;
-
-        let heading = text("Accessibilite")
-            .size(typo.heading)
-            .color(palette.text_primary);
-
-        let subtitle = text("Options d'accessibilite et de mouvement")
-            .size(typo.body)
-            .color(palette.text_secondary);
-
-        // Intensite de mouvement
-        let motion_label = text("Intensite des animations")
-            .size(typo.body)
-            .color(palette.text_secondary);
-
-        let motion_pick = pick_list(
-            MOTION_INTENSITIES,
-            Some(self.preferences.motion_intensity()),
-            Message::MotionIntensityChanged,
-        )
-        .width(Length::Fixed(160.0));
-
-        let motion_row = row![motion_label, motion_pick]
-            .spacing(theme.spacing.sm)
-            .align_y(Alignment::Center);
-
-        // Checkboxes
-        let reduced_cb = checkbox("Reduire les animations", self.preferences.reduced_motion())
-            .on_toggle(Message::ReducedMotionChanged);
-
-        let perf_cb = checkbox("Mode performance", self.preferences.performance_mode())
-            .on_toggle(Message::PerformanceModeChanged);
-
-        column![
-            heading,
-            subtitle,
-            Space::with_height(theme.spacing.md),
-            section_header(
-                theme,
-                "Animations",
-                "Controlez l'intensite et le comportement des animations"
-            ),
-            Space::with_height(theme.spacing.xs),
-            motion_row,
-            reduced_cb,
-            perf_cb,
         ]
         .spacing(theme.spacing.sm)
         .width(Length::Fill)
@@ -969,6 +876,9 @@ impl PreferencesPanel {
                     .size(typo.label)
                     .color(palette.text_secondary),
             );
+        }
+        if let Some(error) = &self.io_error {
+            ie_col = ie_col.push(text(error.as_str()).size(typo.body).style(text::danger));
         }
 
         column![
@@ -1048,28 +958,85 @@ fn styled_secondary_button<'a>(
     on_press: Message,
 ) -> Element<'a, Message> {
     let palette = &theme.palette;
-    let typo = &theme.typography;
-    let text_color = palette.text_primary;
     let surface_hl = palette.surface_highlight;
 
-    button(text(label).size(typo.body).color(text_color))
-        .on_press(on_press)
-        .padding([6, 12])
-        .style(move |_: &iced::Theme, status| {
-            let bg = match status {
-                button::Status::Hovered => with_alpha(surface_hl, 0.5),
-                button::Status::Pressed => with_alpha(surface_hl, 0.7),
-                _ => with_alpha(surface_hl, 0.3),
-            };
-            button::Style {
-                background: Some(bg.into()),
-                border: iced::Border {
-                    radius: 6.0.into(),
-                    ..Default::default()
-                },
-                text_color,
-                ..Default::default()
+    button(
+        text(label)
+            .size(theme.typography.body)
+            .color(palette.text_primary),
+    )
+    .on_press(on_press)
+    .padding([6, 12])
+    .style(rounded_style(
+        with_alpha(surface_hl, 0.3),
+        with_alpha(surface_hl, 0.5),
+        with_alpha(surface_hl, 0.7),
+        palette.text_primary,
+    ))
+    .into()
+}
+
+/// Style de bouton a coins arrondis, avec un fond par etat (repos, survol, appui).
+fn rounded_style(
+    idle: Color,
+    hovered: Color,
+    pressed: Color,
+    text_color: Color,
+) -> impl Fn(&iced::Theme, button::Status) -> button::Style {
+    move |_, status| button::Style {
+        background: Some(
+            match status {
+                button::Status::Hovered => hovered,
+                button::Status::Pressed => pressed,
+                _ => idle,
             }
-        })
-        .into()
+            .into(),
+        ),
+        border: iced::Border {
+            radius: 6.0.into(),
+            ..Default::default()
+        },
+        text_color,
+        ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn open_panel() -> PreferencesPanel {
+        let mut panel = PreferencesPanel::new(Preferences::default(), LoggingOptions::default());
+        panel.toggle();
+        panel
+    }
+
+    #[test]
+    fn theme_change_applies_only_the_theme() {
+        let mut panel = open_panel();
+        let _ = panel.update(Message::AutoFetchEnabledChanged(true));
+        let _ = panel.update(Message::ThemeModeChanged(ThemeMode::Latte));
+
+        let applied = panel.take_changes().expect("theme applied");
+        assert_eq!(applied.theme_mode(), ThemeMode::Latte);
+        assert!(!applied.auto_fetch_enabled());
+        // The app hands the applied value back; the unsaved edit stays on screen.
+        panel.set_preferences(applied);
+        assert!(panel.preferences.auto_fetch_enabled());
+    }
+
+    #[test]
+    fn close_discards_unsaved_edits_and_reset_waits_for_confirmation() {
+        let mut panel = open_panel();
+        let _ = panel.update(Message::AutoFetchEnabledChanged(true));
+        let _ = panel.update(Message::Close);
+        assert!(!panel.preferences.auto_fetch_enabled());
+        assert!(panel.take_changes().is_none());
+
+        panel.toggle();
+        let _ = panel.update(Message::ResetDefaults);
+        assert!(panel.take_changes().is_none());
+        let _ = panel.update(Message::ConfirmReset);
+        assert_eq!(panel.take_changes(), Some(Preferences::default()));
+    }
 }
