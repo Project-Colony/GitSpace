@@ -10,9 +10,8 @@ on a background thread behind a `poll_promise::Promise`, so the window keeps dra
 they wait on the network. Fetch, pull and push started from Repo Overview do not yet: they
 run on the UI thread, and the window stops responding until they finish.
 
-The look is GitSpace's own: four Catppuccin palettes in `src/ui/theme.rs`, motion tokens and
-the reduced-motion switch in `src/ui/animation.rs`, the bundled JetBrains Mono Nerd Font in
-`src/ui/fonts.rs`, and hand-drawn menu items in `src/ui/menu.rs`.
+The look is GitSpace's own: four Catppuccin palettes in `src/ui/theme.rs`, the bundled
+JetBrains Mono Nerd Font in `src/ui/fonts.rs`, and hand-drawn menu items in `src/ui/menu.rs`.
 
 ## Why egui was chosen
 

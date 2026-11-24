@@ -18,7 +18,6 @@ use crate::ui::{
     branches::BranchPanel,
     clone::{self, ClonePanel},
     context::RepoContext,
-    dev_gallery::DevGalleryPanel,
     history::HistoryPanel,
     layout::{self, LayoutMessage, MainTab},
     notifications::{Notification, NotificationAction, NotificationCenter},
@@ -46,7 +45,6 @@ pub enum Message {
     Branches(crate::ui::branches::Message),
     Auth(crate::ui::auth::Message),
     Preferences(crate::ui::preferences::Message),
-    DevGallery(crate::ui::dev_gallery::Message),
 
     // Notifications
     Notification(crate::ui::notifications::Message),
@@ -83,7 +81,6 @@ pub struct GitSpaceApp {
     branches_panel: BranchPanel,
     auth_panel: AuthPanel,
     preferences_panel: PreferencesPanel,
-    dev_gallery_panel: DevGalleryPanel,
 
     // Etat global
     config: AppConfig,
@@ -114,13 +111,7 @@ impl GitSpaceApp {
             .first()
             .and_then(|entry| RepoContext::from_path(&entry.path));
 
-        let tab_order = {
-            let mut tabs = MainTab::ALL.to_vec();
-            if !cfg!(debug_assertions) {
-                tabs.retain(|tab| *tab != MainTab::DevGallery);
-            }
-            tabs
-        };
+        let tab_order = MainTab::ALL.to_vec();
 
         let app = Self {
             clone_panel: ClonePanel::new(default_clone_path, preferences.network().clone()),
@@ -131,7 +122,6 @@ impl GitSpaceApp {
             stage_panel: StagePanel::new(),
             auth_panel: AuthPanel::new(auth_manager.clone()),
             preferences_panel: PreferencesPanel::new(preferences, logging),
-            dev_gallery_panel: DevGalleryPanel::new(),
             theme,
             config,
             current_repo,
@@ -254,12 +244,6 @@ impl GitSpaceApp {
                 let panel_task = self.preferences_panel.update(msg);
                 let extra_task = self.handle_preferences_changes();
                 Task::batch([panel_task.map(Message::Preferences), extra_task])
-            }
-
-            // ── Dev gallery ────────────────────────────────────────────
-            Message::DevGallery(msg) => {
-                let task = self.dev_gallery_panel.update(msg);
-                task.map(Message::DevGallery)
             }
 
             // ── Notifications ──────────────────────────────────────────
@@ -401,7 +385,6 @@ impl GitSpaceApp {
                 .view(theme, self.current_repo.as_ref())
                 .map(Message::Branches),
             MainTab::Auth => self.auth_panel.view(theme).map(Message::Auth),
-            MainTab::DevGallery => self.dev_gallery_panel.view(theme).map(Message::DevGallery),
         }
     }
 

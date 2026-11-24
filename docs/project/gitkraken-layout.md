@@ -35,8 +35,6 @@ This page describes the shell as it is built today, in `src/ui/layout.rs` and
 ## Tabs
 
 In their default order: Clone, Open, Repo Overview, Stage, History, Branches and Auth.
-Debug builds add a Dev Gallery tab at the end, a gallery of the menus, buttons and inputs
-with their animations, for development.
 
 - **Click** a tab to show it. The active tab is underlined in the theme's accent colour.
 - **Ctrl+1 to Ctrl+8** (Cmd on macOS) jump to the tab in that position of the current order.

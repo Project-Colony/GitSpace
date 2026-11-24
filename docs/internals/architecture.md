@@ -29,10 +29,8 @@ panels report through `take_*` methods, and runs auto-fetch when it is due.
 One file per tab: `clone.rs` (search and clone), `recent.rs` (the Open tab), `repo_overview.rs`,
 `stage.rs`, `history.rs`, `branches.rs`, `auth.rs`, and `preferences.rs` for the full-window
 Preferences. `settings.rs` is an older settings panel that the tab strip no longer shows.
-Shared pieces: `theme.rs` (the Catppuccin palettes), `animation.rs` (motion tokens and reduced
-motion), `menu.rs` (menu items and their hover animation), `fonts.rs` (the bundled JetBrains
-Mono Nerd Font), `notifications.rs` (toasts) and `perf.rs` (frame timings, logged when
-`GITSPACE_PROFILE_UI` is set). `dev_gallery.rs` is a widget gallery shown in debug builds only.
+Shared pieces: `theme.rs` (the Catppuccin palettes), `menu.rs` (menu items and tab buttons),
+`fonts.rs` (the bundled JetBrains Mono Nerd Font) and `notifications.rs` (toasts).
 
 Network work that can take a while (clone, repository search, token checks, OAuth, auto-fetch)
 runs on a thread behind a `poll_promise::Promise` that the frame polls. Fetch, pull and push

@@ -17,11 +17,10 @@ pub enum MainTab {
     History,
     Branches,
     Auth,
-    DevGallery,
 }
 
 impl MainTab {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 7] = [
         Self::Clone,
         Self::Open,
         Self::RepoOverview,
@@ -29,7 +28,6 @@ impl MainTab {
         Self::History,
         Self::Branches,
         Self::Auth,
-        Self::DevGallery,
     ];
 
     pub fn label(&self) -> &'static str {
@@ -41,7 +39,6 @@ impl MainTab {
             Self::History => "History",
             Self::Branches => "Branches",
             Self::Auth => "Auth",
-            Self::DevGallery => "Dev Gallery",
         }
     }
 }
