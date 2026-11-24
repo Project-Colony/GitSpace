@@ -58,8 +58,10 @@ strip = "symbols"
 # Two old objc2 releases that eframe 0.27 pulls in on macOS no longer compile on
 # Rust 1.100: 0.4.1 (through winit 0.29 and icrate) and 0.3.0-beta.3.patch-leaks.3
 # (through accesskit_macos). Forwarding methods of their `Ivar` iterator impls
-# (`nth`, `nth_back`) fail to type-check. Neither line has a fixed release, and
-# newer objc2 lines need an eframe upgrade, which waits for the iced port (#1).
+# fail to type-check: `nth` and `nth_back` in 0.4.1, and `nth_back` in
+# 0.3.0-beta.3.patch-leaks.3, which has no `nth` forwarder. Neither line has a
+# fixed release, and newer objc2 lines need an eframe upgrade, which waits for
+# the iced port (#1).
 # Each vendor/ copy is the crates.io release with only those methods removed;
 # the default `Iterator::nth` and `DoubleEndedIterator::nth_back` return the
 # same items. Remove this patch with the egui code.
