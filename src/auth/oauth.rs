@@ -42,6 +42,10 @@ const SLOW_DOWN_STEP: Duration = Duration::from_secs(5);
 /// Longest wait between polls while the token endpoint cannot be reached.
 const MAX_POLL_BACKOFF: Duration = Duration::from_secs(60);
 
+/// Answer to a request on the callback port that is not this sign-in's redirect.
+const BAD_REQUEST: &str =
+    "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+
 const CODE_EXPIRED: &str = "The code expired before it was approved. Start the sign-in again.";
 
 /// OAuth provider configuration.
@@ -313,22 +317,26 @@ impl OAuthFlow {
             // Try to accept connection
             match listener.accept() {
                 Ok((mut stream, _)) => {
-                    let mut buffer = [0; 4096];
+                    // On macOS and Windows the accepted socket inherits non-blocking mode from
+                    // the listener, and read() would fail with WouldBlock.
+                    stream.set_nonblocking(false).ok();
                     stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
-
-                    if let Ok(size) = stream.read(&mut buffer) {
-                        let request = String::from_utf8_lossy(&buffer[..size]);
-
-                        // Parse the callback
-                        if let Some(result) = parse_callback(&request, &expected_state) {
-                            // Send response to browser
+                    let mut buffer = [0; 4096];
+                    let Ok(size) = stream.read(&mut buffer) else {
+                        continue;
+                    };
+                    let request = String::from_utf8_lossy(&buffer[..size]);
+                    match parse_callback(&request, &expected_state) {
+                        Callback::Ignored => {
+                            let _ = stream.write_all(BAD_REQUEST.as_bytes());
+                        }
+                        Callback::Answer(result) => {
                             let response = match &result {
                                 Ok(_) => create_success_response(&self.provider.name),
                                 Err(err) => create_error_response(err),
                             };
                             let _ = stream.write_all(response.as_bytes());
                             let _ = stream.flush();
-
                             return result;
                         }
                     }
@@ -603,46 +611,72 @@ fn send(client: &Client, request: HttpRequest) -> Result<HttpResponse, io::Error
     builder.body(body).map_err(io::Error::other)
 }
 
-/// Parses the OAuth callback request.
-fn parse_callback(request: &str, expected_state: &str) -> Option<Result<String, String>> {
-    // Parse GET request
-    let first_line = request.lines().next()?;
-    if !first_line.starts_with("GET /callback") {
-        return None;
-    }
+/// What a request on the callback port is.
+#[derive(Debug, PartialEq)]
+enum Callback {
+    /// Not this sign-in's redirect: another path, or a missing or wrong state. It gets a 400
+    /// answer and the wait goes on.
+    Ignored,
+    /// The provider's redirect, with the authorization code or the error it reports.
+    Answer(Result<String, String>),
+}
 
-    // Extract query parameters
-    let path = first_line.split_whitespace().nth(1)?;
-    let query_start = path.find('?')?;
-    let query = &path[query_start + 1..];
-
-    let params: HashMap<_, _> = query
-        .split('&')
-        .filter_map(|param| {
-            let mut parts = param.splitn(2, '=');
-            Some((parts.next()?, parts.next().unwrap_or("")))
-        })
+/// Reads one request on the callback port.
+///
+/// The state is checked before anything else: any web page can send a request to the loopback
+/// port, so only one that carries the state of this sign-in may end it.
+fn parse_callback(request: &str, expected_state: &str) -> Callback {
+    let Some(query) = request
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("GET /callback?"))
+        .and_then(|rest| rest.split_whitespace().next())
+    else {
+        return Callback::Ignored;
+    };
+    let params: HashMap<String, String> = url::form_urlencoded::parse(query.as_bytes())
+        .into_owned()
         .collect();
 
-    // Check for error
+    match params.get("state") {
+        Some(state) if !expected_state.is_empty() && state == expected_state => {}
+        _ => {
+            warn!(
+                target: "gitspace::auth::oauth",
+                "Ignoring an OAuth callback without the expected state"
+            );
+            return Callback::Ignored;
+        }
+    }
+
     if let Some(error) = params.get("error") {
-        let description = params.get("error_description").unwrap_or(&"Unknown error");
-        return Some(Err(format!("{}: {}", error, description)));
+        let description = params
+            .get("error_description")
+            .map_or("Unknown error", String::as_str);
+        return Callback::Answer(Err(format!("{error}: {description}")));
     }
-
-    // Verify state (CSRF protection)
-    let state = params.get("state").unwrap_or(&"");
-    if *state != expected_state {
-        warn!(
-            target: "gitspace::auth::oauth",
-            "CSRF state mismatch in OAuth callback"
-        );
-        return Some(Err("Security error: state mismatch".to_string()));
+    match params.get("code") {
+        Some(code) => Callback::Answer(Ok(code.clone())),
+        None => Callback::Answer(Err(
+            "The sign-in callback has no authorization code".to_string()
+        )),
     }
+}
 
-    // Extract authorization code
-    let code = params.get("code")?;
-    Some(Ok((*code).to_string()))
+/// Escapes `text` for an HTML page.
+fn escape_html(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&#39;"),
+            _ => escaped.push(c),
+        }
+    }
+    escaped
 }
 
 /// Creates an HTML success response for the browser.
@@ -712,7 +746,7 @@ fn create_error_response(error: &str) -> String {
     </div>
 </body>
 </html>"#,
-        error
+        escape_html(error)
     );
 
     format!(
@@ -845,7 +879,7 @@ mod tests {
     fn parse_callback_extracts_code() {
         let request = "GET /callback?code=abc123&state=xyz HTTP/1.1\r\nHost: localhost\r\n\r\n";
         let result = parse_callback(request, "xyz");
-        assert_eq!(result, Some(Ok("abc123".to_string())));
+        assert_eq!(result, Callback::Answer(Ok("abc123".to_string())));
     }
 
     #[test]
@@ -853,14 +887,42 @@ mod tests {
         let request =
             "GET /callback?error=access_denied&error_description=User+denied&state=xyz HTTP/1.1\r\n";
         let result = parse_callback(request, "xyz");
-        assert!(matches!(result, Some(Err(_))));
+        assert_eq!(
+            result,
+            Callback::Answer(Err("access_denied: User denied".to_string()))
+        );
     }
 
     #[test]
-    fn parse_callback_rejects_wrong_state() {
-        let request = "GET /callback?code=abc123&state=wrong HTTP/1.1\r\n";
-        let result = parse_callback(request, "expected");
-        assert!(matches!(result, Some(Err(_))));
+    fn parse_callback_ignores_requests_without_the_state() {
+        for request in [
+            "GET /callback?code=abc123&state=wrong HTTP/1.1\r\n",
+            "GET /callback?code=abc123 HTTP/1.1\r\n",
+            // A stray page cannot end the sign-in with an error either.
+            "GET /callback?error=access_denied HTTP/1.1\r\n",
+            "GET /callback?error=access_denied&state=wrong HTTP/1.1\r\n",
+            "GET /favicon.ico HTTP/1.1\r\n",
+            "GET /callback HTTP/1.1\r\n",
+            "",
+        ] {
+            assert_eq!(
+                parse_callback(request, "expected"),
+                Callback::Ignored,
+                "{request}"
+            );
+        }
+        // No expected state means no request can match.
+        let request = "GET /callback?code=abc123&state= HTTP/1.1\r\n";
+        assert_eq!(parse_callback(request, ""), Callback::Ignored);
+    }
+
+    #[test]
+    fn error_page_escapes_the_provider_error() {
+        let page = create_error_response("<script>alert('x')</script> & \"more\"");
+        assert!(!page.contains("<script>"));
+        assert!(
+            page.contains("&lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt; &amp; &quot;more&quot;")
+        );
     }
 
     #[test]
