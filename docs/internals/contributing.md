@@ -12,7 +12,7 @@ cargo test --all-targets --all-features
 ```
 
 CI runs these on Linux, macOS and Windows with the latest stable Rust, adds a
-`cargo check --target x86_64-apple-darwin` on macOS, and runs `cargo check` on Rust 1.99,
+`cargo check --target x86_64-apple-darwin` on macOS, and runs `cargo check` on Rust 1.100,
 the `rust-version` in `Cargo.toml`. A change that needs a newer Rust raises `rust-version` on
 purpose and says so in its pull request. `Cargo.toml` sets `resolver = "3"`, so
 `cargo update` only locks crate versions that build on that Rust.
