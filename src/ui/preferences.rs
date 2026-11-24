@@ -10,7 +10,7 @@ use iced::widget::{
 use iced::{Alignment, Color, Element, Length, Task};
 
 use crate::config::{
-    LoggingOptions, MotionIntensity, Preferences, ReleaseChannel, ThemeMode,
+    LoggingOptions, MotionIntensity, Preferences, ThemeMode,
     MAX_LOG_RETENTION_FILES, MIN_LOG_RETENTION_FILES,
 };
 use crate::ui::theme::{with_alpha, Theme};
@@ -24,7 +24,6 @@ const THEME_MODES: &[ThemeMode] = &[
 ];
 
 /// Canaux de release disponibles.
-const RELEASE_CHANNELS: &[ReleaseChannel] = &[ReleaseChannel::Stable, ReleaseChannel::Preview];
 
 /// Intensites de mouvement disponibles.
 const MOTION_INTENSITIES: &[MotionIntensity] = &[
@@ -124,14 +123,6 @@ pub enum Message {
     RetentionFilesChanged(f32),
     /// Stockage chiffre autorise/desautorise.
     AllowEncryptedTokensChanged(bool),
-    /// Verification automatique des mises a jour modifiee.
-    AutoCheckUpdatesChanged(bool),
-    /// Canal de release modifie.
-    ReleaseChannelChanged(ReleaseChannel),
-    /// Feed de mise a jour personnalise modifie.
-    UpdateFeedOverrideChanged(String),
-    /// Verifier les mises a jour maintenant.
-    CheckForUpdates,
     /// Importer les parametres.
     ImportSettings,
     /// Resultat de l'import.
@@ -160,10 +151,6 @@ pub struct PreferencesPanel {
     pending_preferences: Option<Preferences>,
     /// Journalisation en attente d'application.
     pending_logging: Option<LoggingOptions>,
-    /// Demande de verification de mise a jour.
-    update_request: bool,
-    /// Statut de mise a jour affiche.
-    update_status: Option<String>,
     /// Statut import/export.
     import_status: Option<String>,
     export_status: Option<String>,
@@ -187,8 +174,6 @@ impl PreferencesPanel {
             logging,
             pending_preferences: None,
             pending_logging: None,
-            update_request: false,
-            update_status: None,
             import_status: None,
             export_status: None,
             open: false,
@@ -223,20 +208,6 @@ impl PreferencesPanel {
     /// Recupere les changements de journalisation en attente.
     pub fn take_logging_changes(&mut self) -> Option<LoggingOptions> {
         self.pending_logging.take()
-    }
-
-    /// Indique si une verification de mise a jour a ete demandee.
-    pub fn take_update_request(&mut self) -> bool {
-        if self.update_request {
-            self.update_request = false;
-            return true;
-        }
-        false
-    }
-
-    /// Definit le statut de mise a jour affiche.
-    pub fn set_update_status<S: Into<String>>(&mut self, status: S) {
-        self.update_status = Some(status.into());
     }
 
     // ─── Update ───────────────────────────────────────────────────────
@@ -341,23 +312,6 @@ impl PreferencesPanel {
             }
             Message::AllowEncryptedTokensChanged(val) => {
                 self.preferences.set_allow_encrypted_tokens(val);
-                Task::none()
-            }
-            Message::AutoCheckUpdatesChanged(val) => {
-                self.preferences.set_auto_check_updates(val);
-                Task::none()
-            }
-            Message::ReleaseChannelChanged(channel) => {
-                self.preferences.set_release_channel(channel);
-                Task::none()
-            }
-            Message::UpdateFeedOverrideChanged(val) => {
-                self.preferences.set_update_feed_override(Some(val));
-                Task::none()
-            }
-            Message::CheckForUpdates => {
-                self.update_request = true;
-                self.update_status = Some("Verification des mises a jour...".to_string());
                 Task::none()
             }
             Message::ImportSettings => Task::perform(
@@ -1001,58 +955,6 @@ impl PreferencesPanel {
         )
         .on_toggle(Message::AllowEncryptedTokensChanged);
 
-        // -- Mises a jour --
-        let auto_update_cb = checkbox(
-            "Verifier automatiquement les mises a jour",
-            self.preferences.auto_check_updates(),
-        )
-        .on_toggle(Message::AutoCheckUpdatesChanged);
-
-        let channel_label = text("Canal de release")
-            .size(typo.body)
-            .color(palette.text_secondary);
-
-        let channel_pick = pick_list(
-            RELEASE_CHANNELS,
-            Some(self.preferences.release_channel()),
-            Message::ReleaseChannelChanged,
-        )
-        .width(Length::Fixed(140.0));
-
-        let channel_row = row![channel_label, channel_pick]
-            .spacing(theme.spacing.sm)
-            .align_y(Alignment::Center);
-
-        let feed_label = text("Feed URL personnalise")
-            .size(typo.body)
-            .color(palette.text_secondary);
-        let feed_value = self
-            .preferences
-            .update_feed_override()
-            .unwrap_or_default()
-            .to_string();
-        let feed_input = text_input("https://example.com/feed.json", &feed_value)
-            .on_input(Message::UpdateFeedOverrideChanged)
-            .width(Length::Fixed(300.0));
-        let feed_row = row![feed_label, feed_input]
-            .spacing(theme.spacing.sm)
-            .align_y(Alignment::Center);
-
-        let check_btn = styled_secondary_button(
-            theme,
-            "Verifier maintenant",
-            Message::CheckForUpdates,
-        );
-
-        let mut update_row = row![check_btn].spacing(theme.spacing.sm).align_y(Alignment::Center);
-        if let Some(status) = &self.update_status {
-            update_row = update_row.push(
-                text(status.as_str())
-                    .size(typo.label)
-                    .color(palette.text_secondary),
-            );
-        }
-
         // -- Import / Export --
         let import_btn = styled_secondary_button(
             theme,
@@ -1100,15 +1002,6 @@ impl PreferencesPanel {
             section_header(theme, "Confidentialite", "Stockage securise des tokens"),
             Space::with_height(theme.spacing.xs),
             encrypted_cb,
-            Space::with_height(theme.spacing.md),
-            horizontal_rule(1),
-            Space::with_height(theme.spacing.md),
-            section_header(theme, "Mises a jour", "Verification et canal de release"),
-            Space::with_height(theme.spacing.xs),
-            auto_update_cb,
-            channel_row,
-            feed_row,
-            update_row,
             Space::with_height(theme.spacing.md),
             horizontal_rule(1),
             Space::with_height(theme.spacing.md),

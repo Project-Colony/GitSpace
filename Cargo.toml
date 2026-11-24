@@ -1,7 +1,10 @@
 [package]
-name = "GitSpace"
-version = "0.1.0"
+name = "gitspace"
+version = "0.1.2"
 edition = "2021"
+rust-version = "1.100"
+# MSRV-aware resolution: `cargo update` never locks a crate newer than rust-version allows.
+resolver = "3"
 description = "Desktop Git client that gathers your GitHub and GitLab repositories in one panel-based interface"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/Project-Colony/GitSpace"
@@ -13,43 +16,37 @@ fake-repos = []
 mock-providers = []
 
 [dependencies]
-iced = { version = "0.13", features = ["tokio", "advanced"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
-git2 = "0.18"
-reqwest = { version = "0.12", features = ["blocking", "json"] }
-rfd = "0.15"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-dirs = "5.0"
-open = "5.3"
-arboard = "3.4"
-chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-keyring = "2.3"
-chacha20poly1305 = { version = "0.10", features = ["std"] }
-rand = "0.8"
-sha2 = "0.10"
-base64 = "0.22"
-hostname = "0.3"
-url = "2.5"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["ansi", "env-filter", "fmt", "json", "registry"] }
-tracing-appender = "0.2"
-argon2 = { version = "0.5", default-features = false, features = ["std"] }
-hmac = "0.12"
-ed25519-dalek = { version = "2", features = ["pkcs8"] }
-pem = "3"
-rsa = { version = "0.9", features = ["pem", "sha2"] }
-spki = { version = "0.7", features = ["alloc"] }
-x509-cert = { version = "0.2", features = ["pem"] }
-thiserror = "1.0"
-zeroize = { version = "1.7", features = ["derive"] }
-parking_lot = "0.12"
-oauth2 = "4.4"
-tiny_http = "0.12"
-webbrowser = "1.0"
+iced = { version = "0.13.1", features = ["tokio", "advanced"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+git2 = { version = "0.21.0", features = ["https", "ssh", "vendored-openssl"] }
+reqwest = { version = "0.13.5", features = ["blocking", "form", "json", "query"] }
+rfd = "0.18.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+dirs = "7.0.0"
+open = "5.4.5"
+arboard = "3.7.0"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+# `v1` picks the platform store at compile time: Keychain on macOS, Credential
+# Manager on Windows, Secret Service (pure Rust crypto) elsewhere. There is no
+# silent in-memory fallback: an unavailable store is an error.
+keyring = { version = "4.2.0", default-features = false, features = ["v1"] }
+chacha20poly1305 = "0.11.0"
+rand = "0.10.4"
+base64 = "0.23.1"
+url = "2.5.9"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["ansi", "env-filter", "fmt", "json", "registry"] }
+tracing-appender = "0.2.5"
+argon2 = { version = "0.6.0", default-features = false, features = ["alloc"] }
+thiserror = "2.0.21"
+zeroize = { version = "1.9.2", features = ["derive"] }
+parking_lot = "0.13.0"
+oauth2 = { version = "5.0.0", default-features = false }
+webbrowser = "1.2.7"
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = "3.27.0"
 
 [profile.release]
 opt-level = "z"
@@ -57,3 +54,4 @@ lto = "thin"
 codegen-units = 1
 panic = "abort"
 strip = "symbols"
+

@@ -10,14 +10,13 @@ use git2::{
 use crate::config::NetworkOptions;
 use crate::git::branch;
 use crate::git::branch::{
-    BranchKind, list_branches, list_tracking_branches, rename_branch, set_upstream,
-    unset_upstream,
+    list_branches, list_tracking_branches, rename_branch, set_upstream, unset_upstream, BranchKind,
 };
-use crate::git::discovery::{find_repo_root, is_git_repo, list_submodules, list_worktrees};
 use crate::git::diff::{commit_diff, diff_file, staged_diff, working_tree_diff};
-use crate::git::log::{CommitFilter, read_commit_log};
+use crate::git::discovery::{find_repo_root, is_git_repo, list_submodules, list_worktrees};
+use crate::git::log::{read_commit_log, CommitFilter};
 use crate::git::remote::{
-    PullOutcome, fetch_remote, list_remotes, pull_branch, prune_remotes, push_branch,
+    fetch_remote, list_remotes, prune_remotes, pull_branch, push_branch, PullOutcome,
 };
 use crate::git::stash::{apply_stash, create_stash, drop_stash, list_stashes};
 use crate::git::status::{read_repo_status, read_working_tree_status};
@@ -99,19 +98,15 @@ fn branch_lifecycle_is_managed() {
     branch::create_branch(root, "feature/test", None).expect("create branch");
     let mut branches = list_branches(root).expect("list branches");
     branches.sort_by(|a, b| a.name.cmp(&b.name));
-    assert!(
-        branches
-            .iter()
-            .any(|entry| entry.name == "feature/test" && entry.kind == BranchKind::Local)
-    );
+    assert!(branches
+        .iter()
+        .any(|entry| entry.name == "feature/test" && entry.kind == BranchKind::Local));
 
     rename_branch(root, "feature/test", "feature/renamed").expect("rename");
     let branches = list_branches(root).expect("list branches");
-    assert!(
-        branches
-            .iter()
-            .any(|entry| entry.name == "feature/renamed" && entry.kind == BranchKind::Local)
-    );
+    assert!(branches
+        .iter()
+        .any(|entry| entry.name == "feature/renamed" && entry.kind == BranchKind::Local));
 
     branch::delete_branch(root, "feature/renamed").expect("delete");
     let remaining = list_branches(root).expect("list branches");
@@ -140,7 +135,9 @@ fn upstreams_are_set_and_listed() {
 
     unset_upstream(root, "feature/upstream").expect("unset upstream");
     let tracking = list_tracking_branches(root).expect("list tracking");
-    assert!(!tracking.iter().any(|entry| entry.local == "feature/upstream"));
+    assert!(!tracking
+        .iter()
+        .any(|entry| entry.local == "feature/upstream"));
 }
 
 #[test]
@@ -262,11 +259,8 @@ fn fetch_push_pull_and_prune_work_with_local_remote() {
     let remote_dir = tempfile::tempdir().expect("create remote dir");
     let _remote_repo = Repository::init_bare(remote_dir.path()).expect("init bare");
 
-    repo.remote(
-        "origin",
-        remote_dir.path().to_str().expect("remote path"),
-    )
-    .expect("add remote");
+    repo.remote("origin", remote_dir.path().to_str().expect("remote path"))
+        .expect("add remote");
 
     let network = NetworkOptions::default();
     push_branch(
@@ -281,10 +275,7 @@ fn fetch_push_pull_and_prune_work_with_local_remote() {
     let fetch_dir = tempfile::tempdir().expect("create fetch dir");
     let fetch_repo = Repository::init(fetch_dir.path()).expect("init fetch repo");
     fetch_repo
-        .remote(
-            "origin",
-            remote_dir.path().to_str().expect("remote path"),
-        )
+        .remote("origin", remote_dir.path().to_str().expect("remote path"))
         .expect("add remote");
 
     fetch_remote(fetch_dir.path(), "origin", &network, None).expect("fetch");
@@ -394,19 +385,17 @@ fn worktrees_and_submodules_are_listed() {
     let submodule_path = repo.path().parent().unwrap().join("vendor/submodule");
     fs::create_dir_all(&submodule_path).expect("create submodule path");
 
+    // Forward slashes: a backslash starts an escape in git config values.
+    let submodule_url = sub_repo_dir.path().to_string_lossy().replace('\\', "/");
     let gitmodules = format!(
-        "[submodule \"vendor/submodule\"]\n\tpath = vendor/submodule\n\turl = {}\n",
-        sub_repo_dir.path().to_str().expect("submodule url")
+        "[submodule \"vendor/submodule\"]\n\tpath = vendor/submodule\n\turl = {submodule_url}\n",
     );
     write_commit(&repo, ".gitmodules", &gitmodules, "add submodule");
 
     let submodules = list_submodules(repo.path().parent().unwrap()).expect("list submodules");
     assert_eq!(submodules.len(), 1);
     assert_eq!(submodules[0].path, "vendor/submodule");
-    assert_eq!(
-        submodules[0].url.as_deref(),
-        Some(sub_repo_dir.path().to_str().expect("submodule url"))
-    );
+    assert_eq!(submodules[0].url.as_deref(), Some(submodule_url.as_str()));
 
     let worktree_parent = tempfile::tempdir().expect("worktree dir");
     let worktree_dir = worktree_parent.path().join("worktree");
@@ -415,6 +404,9 @@ fn worktrees_and_submodules_are_listed() {
         .expect("create worktree");
 
     let worktrees = list_worktrees(repo.path().parent().unwrap()).expect("list worktrees");
-    let worktree_path = worktree_dir.to_string_lossy().to_string();
-    assert!(worktrees.iter().any(|path| path == &worktree_path));
+    // libgit2 stores the resolved path (/private/var on macOS, forward slashes on Windows).
+    let expected = fs::canonicalize(&worktree_dir).expect("canonical worktree path");
+    assert!(worktrees
+        .iter()
+        .any(|path| fs::canonicalize(path).ok().as_ref() == Some(&expected)));
 }

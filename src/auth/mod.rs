@@ -2,26 +2,28 @@ pub mod oauth;
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io::ErrorKind;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::Duration;
 
 use argon2::{Algorithm, Argon2, Params, Version};
-use base64::{Engine as _, engine::general_purpose};
-use chacha20poly1305::aead::{Aead, KeyInit};
-use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
+use base64::{engine::general_purpose, Engine as _};
+use chacha20poly1305::aead::{Aead, Generate, KeyInit};
+use chacha20poly1305::{ChaCha20Poly1305, Nonce};
 use keyring::Entry;
-use rand::RngCore;
-use rand::rngs::OsRng;
 use reqwest::Client;
-use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, USER_AGENT};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 use url::Url;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-pub use oauth::{OAuthFlow, OAuthProvider, OAuthResult, OAuthToken};
+use crate::config::write_atomic;
+
+pub use oauth::{DeviceFlow, OAuthFlow, OAuthProvider, OAuthResult, OAuthToken};
 
 const SERVICE_NAME: &str = "gitspace";
 const TOKEN_FILE_NAME: &str = "tokens.enc";
@@ -38,10 +40,10 @@ const MAX_TOKEN_LENGTH: usize = 512;
 /// HTTP client timeout for token validation.
 const VALIDATION_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Client HTTP réutilisable pour la validation des tokens.
+/// Reusable HTTP client for token validation.
 static HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
 
-/// Récupère ou crée le client HTTP partagé pour la validation des tokens.
+/// Gets or creates the shared HTTP client for token validation.
 fn get_http_client() -> &'static Client {
     HTTP_CLIENT.get_or_init(|| {
         Client::builder()
@@ -100,11 +102,10 @@ impl AuthManager {
         self.storage.known_hosts()
     }
 
-    /// Valide un token auprès du fournisseur distant (async).
     pub async fn validate_token(&self, host: &str, token: &str) -> Result<(), String> {
         let trimmed = token.trim();
 
-        // Validation basique du format
+        // Basic format validation
         if trimmed.is_empty() {
             return Err("Token cannot be empty".to_string());
         }
@@ -123,12 +124,12 @@ impl AuthManager {
             ));
         }
 
-        // Vérification des caractères invalides (ASCII imprimables uniquement)
+        // Check for invalid characters (tokens should be printable ASCII)
         if !trimmed.chars().all(|c| c.is_ascii_graphic()) {
             return Err("Token contains invalid characters".to_string());
         }
 
-        let normalized_host = normalize_host(host);
+        let normalized_host = normalize_host(host)?;
         let client = get_http_client();
 
         if normalized_host.contains("github") {
@@ -140,7 +141,6 @@ impl AuthManager {
         }
     }
 
-    /// Valide puis stocke le token (async).
     pub async fn validate_and_store(&self, host: &str, token: &str) -> Result<(), String> {
         self.validate_token(host, token).await?;
         self.storage.set_token(host, token)
@@ -184,7 +184,8 @@ impl AuthManager {
         self.get_oauth_token(host).is_some()
     }
 
-    /// Starts an OAuth flow for the given provider.
+    /// Starts an authorization code flow with PKCE for the given provider (GitLab).
+    /// GitHub signs in with [`DeviceFlow`] instead.
     ///
     /// This will open the browser for authentication and block until complete.
     pub fn start_oauth(&self, provider: OAuthProvider) -> OAuthResult {
@@ -268,7 +269,15 @@ impl TokenStorage {
         }
 
         let result = if self.allow_encrypted_fallback {
-            self.persist_fallback(host, token)
+            self.persist_fallback(host, token).or_else(|err| {
+                if keyring_result.is_ok() {
+                    // The keyring copy is saved and read first, so the token is not lost.
+                    warn!(target: "gitspace::auth", error = %err, "token saved in the native keyring only; the encrypted fallback was not updated");
+                    Ok(())
+                } else {
+                    Err(err)
+                }
+            })
         } else if keyring_result.is_err() {
             Err("Native keyring unavailable and encrypted storage is disabled".to_string())
         } else {
@@ -308,7 +317,7 @@ impl TokenStorage {
             warn!(target: "gitspace::auth", error = %err, "failed to clear token from native keyring");
         }
         let mut result = if self.allow_encrypted_fallback {
-            let mut map = self.read_fallback()?;
+            let mut map = self.read_fallback_for_update()?;
             map.tokens.remove(host);
             self.write_fallback(&map)
         } else {
@@ -365,7 +374,7 @@ impl TokenStorage {
     fn remove_from_keyring(&self, host: &str) -> Result<(), String> {
         let entry = Entry::new(SERVICE_NAME, host)
             .map_err(|err| format!("Failed to access keyring: {err}"))?;
-        match entry.delete_password() {
+        match entry.delete_credential() {
             Ok(()) => Ok(()),
             Err(keyring::Error::NoEntry) => Ok(()),
             Err(err) => Err(format!("Failed to remove keyring entry: {err}")),
@@ -373,36 +382,46 @@ impl TokenStorage {
     }
 
     fn persist_fallback(&self, host: &str, token: &str) -> Result<(), String> {
-        let mut tokens = self.read_fallback().unwrap_or_default();
+        let mut tokens = self.read_fallback_for_update()?;
         tokens.tokens.insert(host.to_string(), token.to_string());
         self.write_fallback(&tokens)
     }
 
     fn write_fallback(&self, map: &TokenMap) -> Result<(), String> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|err| format!("Failed to prepare credential directory: {err}"))?;
-        }
         let blob = encrypt_tokens(map, &self.key.0)?;
         let serialized = serde_json::to_string_pretty(&blob)
             .map_err(|err| format!("Failed to serialize credentials: {err}"))?;
-        fs::write(&self.path, serialized)
+        write_atomic(&self.path, serialized.as_bytes())
             .map_err(|err| format!("Failed to write credentials: {err}"))
     }
 
+    /// Reads the saved tokens before a rewrite. A file that exists but cannot be read or
+    /// decrypted (keyring locked, master password changed or unset) is an error, never an
+    /// empty map: rewriting it would drop every other saved token.
+    fn read_fallback_for_update(&self) -> Result<TokenMap, String> {
+        self.read_fallback().map_err(|err| {
+            format!(
+                "{err}. {} was left untouched so the other saved tokens are kept. Unlock the \
+                 system keyring or use the same {MASTER_PASSWORD_ENV} as when the tokens were \
+                 saved, then restart GitSpace, or move the file aside to start over",
+                self.path.display()
+            )
+        })
+    }
+
     fn read_fallback(&self) -> Result<TokenMap, String> {
-        if !self.path.exists() {
-            return Ok(TokenMap::default());
-        }
-        let data = fs::read_to_string(&self.path)
-            .map_err(|err| format!("Failed to read credential file: {err}"))?;
+        let data = match fs::read_to_string(&self.path) {
+            Ok(data) => data,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(TokenMap::default()),
+            Err(err) => return Err(format!("Failed to read credential file: {err}")),
+        };
         let blob: EncryptedTokenFile = serde_json::from_str(&data)
             .map_err(|err| format!("Failed to parse credential file: {err}"))?;
         decrypt_tokens(&blob, &self.key.0)
     }
 
     fn record_host(&self, host: &str) -> Result<(), String> {
-        let mut index = self.read_host_index().unwrap_or_default();
+        let mut index = self.read_host_index()?;
         if !index.hosts.iter().any(|value| value == host) {
             index.hosts.push(host.to_string());
             index.hosts.sort();
@@ -412,7 +431,7 @@ impl TokenStorage {
     }
 
     fn remove_host(&self, host: &str) -> Result<(), String> {
-        let mut index = self.read_host_index().unwrap_or_default();
+        let mut index = self.read_host_index()?;
         let original_len = index.hosts.len();
         index.hosts.retain(|value| value != host);
         if index.hosts.len() != original_len {
@@ -422,22 +441,18 @@ impl TokenStorage {
     }
 
     fn read_host_index(&self) -> Result<HostIndex, String> {
-        if !self.host_path.exists() {
-            return Ok(HostIndex::default());
-        }
-        let data = fs::read_to_string(&self.host_path)
-            .map_err(|err| format!("Failed to read host index: {err}"))?;
+        let data = match fs::read_to_string(&self.host_path) {
+            Ok(data) => data,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(HostIndex::default()),
+            Err(err) => return Err(format!("Failed to read host index: {err}")),
+        };
         serde_json::from_str(&data).map_err(|err| format!("Failed to parse host index: {err}"))
     }
 
     fn write_host_index(&self, index: &HostIndex) -> Result<(), String> {
-        if let Some(parent) = self.host_path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|err| format!("Failed to prepare host directory: {err}"))?;
-        }
         let serialized = serde_json::to_string_pretty(index)
             .map_err(|err| format!("Failed to serialize host index: {err}"))?;
-        fs::write(&self.host_path, serialized)
+        write_atomic(&self.host_path, serialized.as_bytes())
             .map_err(|err| format!("Failed to write host index: {err}"))
     }
 
@@ -447,15 +462,14 @@ impl TokenStorage {
 }
 
 fn encrypt_tokens(map: &TokenMap, key: &[u8; 32]) -> Result<EncryptedTokenFile, String> {
-    let cipher = ChaCha20Poly1305::new(Key::from_slice(key));
-    let mut nonce = [0u8; 12];
-    OsRng.fill_bytes(&mut nonce);
-    let nonce_obj = Nonce::from_slice(&nonce);
+    let cipher = ChaCha20Poly1305::new(key.into());
+    // Drawn from the operating system's RNG for every write, so a key never reuses a nonce.
+    let nonce = Nonce::generate();
 
     let serialized =
         serde_json::to_string(map).map_err(|err| format!("Failed to serialize tokens: {err}"))?;
     let encrypted = cipher
-        .encrypt(nonce_obj, serialized.as_bytes())
+        .encrypt(&nonce, serialized.as_bytes())
         .map_err(|err| format!("Failed to encrypt tokens: {err}"))?;
 
     Ok(EncryptedTokenFile {
@@ -465,17 +479,18 @@ fn encrypt_tokens(map: &TokenMap, key: &[u8; 32]) -> Result<EncryptedTokenFile, 
 }
 
 fn decrypt_tokens(blob: &EncryptedTokenFile, key: &[u8; 32]) -> Result<TokenMap, String> {
-    let cipher = ChaCha20Poly1305::new(Key::from_slice(key));
+    let cipher = ChaCha20Poly1305::new(key.into());
     let nonce_bytes = general_purpose::STANDARD
         .decode(&blob.nonce)
         .map_err(|err| format!("Failed to decode nonce: {err}"))?;
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    let nonce = Nonce::try_from(nonce_bytes.as_slice())
+        .map_err(|_| format!("Invalid nonce length: {} bytes", nonce_bytes.len()))?;
     let cipher_bytes = general_purpose::STANDARD
         .decode(&blob.ciphertext)
         .map_err(|err| format!("Failed to decode ciphertext: {err}"))?;
 
     let plaintext = cipher
-        .decrypt(nonce, cipher_bytes.as_ref())
+        .decrypt(&nonce, cipher_bytes.as_ref())
         .map_err(|err| format!("Failed to decrypt credentials: {err}"))?;
     let content = String::from_utf8(plaintext)
         .map_err(|err| format!("Invalid credential encoding: {err}"))?;
@@ -496,33 +511,34 @@ fn load_or_create_local_key() -> [u8; 32] {
         .join(TOKEN_LOCAL_KEY_FILE);
 
     // Try to load existing key
-    let mut stored_key = if let Ok(bytes) = fs::read(&key_path) {
-        if bytes.len() == 32 {
+    let mut stored_key = match fs::read(&key_path) {
+        Ok(bytes) if bytes.len() == 32 => {
             let mut key = [0u8; 32];
             key.copy_from_slice(&bytes);
             key
-        } else {
+        }
+        Ok(_) => {
             warn!(target: "gitspace::auth", "invalid local key file size, regenerating");
             generate_and_store_key(&key_path)
         }
-    } else {
-        info!(target: "gitspace::auth", "generating new local encryption key");
-        generate_and_store_key(&key_path)
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            info!(target: "gitspace::auth", "generating new local encryption key");
+            generate_and_store_key(&key_path)
+        }
+        Err(err) => {
+            // Replacing a key file that exists but cannot be read would make the tokens
+            // encrypted with it unrecoverable. Use a key for this session only: the saved
+            // tokens then fail to decrypt and are left untouched.
+            error!(target: "gitspace::auth", error = %err, "failed to read local key file");
+            Generate::generate()
+        }
     };
 
     // If master password is set, derive additional key material for defense in depth
     if let Ok(master_password) = std::env::var(MASTER_PASSWORD_ENV) {
-        let salt = load_or_create_secret(TOKEN_SALT_FILE, 16);
-        // OWASP recommended: 64 MB memory, 3 iterations, 1 thread
-        // m_cost is in KiB, so 65536 = 64 MB
-        let params = Params::new(65536, 3, 1, None).unwrap_or_else(|_| Params::DEFAULT);
-        let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
-
+        let salt: [u8; 16] = load_or_create_secret(TOKEN_SALT_FILE);
         let mut derived = [0u8; 32];
-        if argon2
-            .hash_password_into(master_password.as_bytes(), &salt, &mut derived)
-            .is_ok()
-        {
+        if derive_master_key(master_password.as_bytes(), &salt, &mut derived) {
             // XOR the derived key with the stored key for defense in depth
             for (a, b) in stored_key.iter_mut().zip(derived.iter()) {
                 *a ^= b;
@@ -535,10 +551,20 @@ fn load_or_create_local_key() -> [u8; 32] {
     stored_key
 }
 
+/// Derives the key mixed into the local key when a master password is set, into `out`, which
+/// the caller zeroes. Changing the algorithm or parameters makes every token saved under a
+/// master password unreadable.
+fn derive_master_key(password: &[u8], salt: &[u8], out: &mut [u8; 32]) -> bool {
+    // OWASP recommended: 64 MB memory, 3 iterations, 1 thread
+    // m_cost is in KiB, so 65536 = 64 MB
+    let params = Params::new(65536, 3, 1, None).unwrap_or(Params::DEFAULT);
+    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+    argon2.hash_password_into(password, salt, out).is_ok()
+}
+
 /// Generates a cryptographically secure random key and stores it with restricted permissions.
 fn generate_and_store_key(path: &PathBuf) -> [u8; 32] {
-    let mut key = [0u8; 32];
-    OsRng.fill_bytes(&mut key);
+    let key: [u8; 32] = Generate::generate();
 
     if let Some(parent) = path.parent() {
         if let Err(err) = fs::create_dir_all(parent) {
@@ -548,7 +574,7 @@ fn generate_and_store_key(path: &PathBuf) -> [u8; 32] {
     }
 
     // Write key file
-    if let Err(err) = fs::write(path, &key) {
+    if let Err(err) = fs::write(path, key) {
         error!(target: "gitspace::auth", error = %err, "failed to write local key file");
         return key;
     }
@@ -580,8 +606,7 @@ fn load_or_create_keyring_key() -> Result<[u8; 32], String> {
             Ok(key)
         }
         Err(keyring::Error::NoEntry) => {
-            let mut key = [0u8; 32];
-            OsRng.fill_bytes(&mut key);
+            let key: [u8; 32] = Generate::generate();
             let encoded = general_purpose::STANDARD.encode(key);
             entry
                 .set_password(&encoded)
@@ -592,24 +617,26 @@ fn load_or_create_keyring_key() -> Result<[u8; 32], String> {
     }
 }
 
-fn load_or_create_secret(name: &str, len: usize) -> Vec<u8> {
+fn load_or_create_secret<const N: usize>(name: &str) -> [u8; N] {
     let path = dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(SERVICE_NAME)
         .join(name);
 
-    if let Ok(bytes) = fs::read(&path) {
-        if bytes.len() == len {
-            return bytes;
+    let secret: [u8; N] = Generate::generate();
+    match fs::read(&path).map(<[u8; N]>::try_from) {
+        Ok(Ok(saved)) => return saved,
+        Err(err) if err.kind() != ErrorKind::NotFound => {
+            // Same as the local key: never replace a secret that exists but cannot be read.
+            warn!(target: "gitspace::auth", error = %err, path = %path.display(), "unable to read derived-key secret; using one for this session only");
+            return secret;
         }
+        _ => {}
     }
-
-    let mut secret = vec![0u8; len];
-    OsRng.fill_bytes(&mut secret);
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
-    if let Err(err) = fs::write(&path, &secret) {
+    if let Err(err) = fs::write(&path, secret) {
         warn!(target: "gitspace::auth", error = %err, path = %path.display(), "unable to persist derived-key secret");
     } else {
         // Set restrictive permissions (owner read/write only)
@@ -621,23 +648,27 @@ fn load_or_create_secret(name: &str, len: usize) -> Vec<u8> {
     secret
 }
 
-fn normalize_host(host: &str) -> String {
+/// Turns a user-entered host into the `https://host[:port]` base URL that tokens are sent to.
+///
+/// A host without a scheme gets `https://`. Any other scheme, `http://` included, is refused so
+/// a token is never sent in clear text.
+fn normalize_host(host: &str) -> Result<String, String> {
     let trimmed = host.trim().trim_end_matches('/');
-    let with_scheme = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+    let with_scheme = if trimmed.contains("://") {
         trimmed.to_string()
     } else {
-        format!("https://{}", trimmed)
+        format!("https://{trimmed}")
     };
-    if let Ok(parsed) = Url::parse(&with_scheme) {
-        if let Some(host) = parsed.host_str() {
-            let scheme = parsed.scheme();
-            return format!("{}://{}", scheme, host);
-        }
+    let parsed =
+        Url::parse(&with_scheme).map_err(|err| format!("Invalid host \"{trimmed}\": {err}"))?;
+    if parsed.scheme() != "https" {
+        return Err(
+            "The host must use https: GitSpace never sends a token over plain HTTP.".to_string(),
+        );
     }
-    with_scheme
+    Ok(parsed.origin().ascii_serialization())
 }
 
-/// Valide un token GitHub via l'API utilisateur.
 async fn validate_github(client: &Client, host: &str, token: &str) -> Result<(), String> {
     let api_base = if host.contains("api.github.com") {
         host.to_string()
@@ -663,7 +694,6 @@ async fn validate_github(client: &Client, host: &str, token: &str) -> Result<(),
     }
 }
 
-/// Valide un token GitLab via l'API utilisateur.
 async fn validate_gitlab(client: &Client, host: &str, token: &str) -> Result<(), String> {
     let url = format!("{}/api/v4/user", host.trim_end_matches('/'));
     let mut headers = HeaderMap::new();
@@ -707,4 +737,150 @@ pub fn extract_host(target: &str) -> Option<String> {
         .next()
         .filter(|segment| !segment.is_empty())
         .map(|h| h.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn token_encryption_round_trips_with_fresh_nonces() {
+        let key: [u8; 32] = Generate::generate();
+        let mut map = TokenMap::default();
+        map.tokens.insert("github.com".into(), "secret".into());
+
+        let first = encrypt_tokens(&map, &key).expect("encrypt");
+        let second = encrypt_tokens(&map, &key).expect("encrypt");
+        assert_ne!(first.nonce, second.nonce);
+
+        let decrypted = decrypt_tokens(&first, &key).expect("decrypt");
+        assert_eq!(decrypted.tokens, map.tokens);
+    }
+
+    // Known answers computed with OpenSSL, independently of the crates in Cargo.toml: a
+    // crate update that changed either result would lock users out of their saved tokens.
+
+    #[test]
+    fn saved_token_file_decrypts_with_a_known_key() {
+        let key: [u8; 32] = std::array::from_fn(|i| i as u8);
+        let blob = EncryptedTokenFile {
+            nonce: "ZGVmZ2hpamtsbW5v".into(),
+            ciphertext: "TzPPpfPAGCHZ5G5dleCs+wWkvFfwPcmX5Fie3aVZopy91+2BwUk9Fu2wvoKDxobquaZzixP/xoVED+ssLExO+hF9".into(),
+        };
+        let tokens = decrypt_tokens(&blob, &key).expect("decrypt").tokens;
+        assert_eq!(tokens["github.com"], "gho_known_answer_token");
+
+        let short_nonce = EncryptedTokenFile {
+            nonce: "AAAA".into(),
+            ..blob
+        };
+        let err = decrypt_tokens(&short_nonce, &key).expect_err("a 3-byte nonce is invalid");
+        assert!(err.contains("nonce"), "{err}");
+    }
+
+    #[test]
+    fn master_password_derives_a_known_key() {
+        let salt: [u8; 16] = std::array::from_fn(|i| i as u8);
+        let password: [u8; 20] = std::array::from_fn(|i| b'a' + i as u8);
+        let mut derived = [0u8; 32];
+        assert!(derive_master_key(&password, &salt, &mut derived));
+        assert_eq!(
+            derived,
+            [
+                0xb5, 0xdd, 0x0e, 0x57, 0xa7, 0x51, 0xbf, 0xd0, 0x66, 0xa3, 0x6b, 0x14, 0x61, 0x4e,
+                0x1f, 0x7d, 0xd3, 0xfb, 0x03, 0x1a, 0x01, 0xe0, 0x21, 0x8f, 0xf7, 0xaa, 0x9b, 0x74,
+                0x0f, 0xdc, 0xdb, 0xf9,
+            ]
+        );
+    }
+
+    /// A storage in `dir` with a fresh random key, so two calls never share a key.
+    fn storage_in(dir: &std::path::Path) -> TokenStorage {
+        TokenStorage {
+            key: SecureKey(Generate::generate()),
+            path: dir.join(TOKEN_FILE_NAME),
+            host_path: dir.join(HOST_FILE_NAME),
+            allow_encrypted_fallback: true,
+        }
+    }
+
+    #[test]
+    fn undecryptable_token_file_is_not_overwritten() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let original = storage_in(dir.path());
+        original
+            .persist_fallback("github.com", "first-token")
+            .expect("first save");
+        original
+            .persist_fallback("gitlab.com", "second-token")
+            .expect("second save");
+        let before = fs::read(&original.path).expect("read tokens");
+
+        // Same file, other key: the keyring was locked or the master password changed.
+        let other_key = storage_in(dir.path());
+        let err = other_key
+            .persist_fallback("example.com", "third-token")
+            .expect_err("an undecryptable file must not be rewritten");
+        assert!(err.contains("left untouched"), "{err}");
+        assert!(other_key.read_fallback_for_update().is_err());
+
+        assert_eq!(fs::read(&original.path).expect("read tokens"), before);
+        let tokens = original.read_fallback().expect("decrypt").tokens;
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens["gitlab.com"], "second-token");
+    }
+
+    #[test]
+    fn missing_token_file_starts_empty() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = storage_in(&dir.path().join("gitspace"));
+        storage
+            .persist_fallback("github.com", "token")
+            .expect("save into a new directory");
+        assert_eq!(
+            storage.read_fallback().expect("decrypt").tokens["github.com"],
+            "token"
+        );
+    }
+
+    #[test]
+    fn unreadable_host_index_is_not_overwritten() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let storage = storage_in(dir.path());
+        fs::write(&storage.host_path, "not json").expect("write index");
+        assert!(storage.record_host("github.com").is_err());
+        assert!(storage.remove_host("github.com").is_err());
+        assert_eq!(
+            fs::read_to_string(&storage.host_path).expect("read index"),
+            "not json"
+        );
+    }
+
+    #[test]
+    fn normalize_host_only_allows_https() {
+        assert_eq!(
+            normalize_host(" gitlab.example.com/ ").as_deref(),
+            Ok("https://gitlab.example.com")
+        );
+        assert_eq!(
+            normalize_host("https://git.example.com:8443/group").as_deref(),
+            Ok("https://git.example.com:8443")
+        );
+        assert!(normalize_host("http://gitlab.example.com").is_err());
+        assert!(normalize_host("HTTP://gitlab.example.com").is_err());
+        assert!(normalize_host("ssh://gitlab.example.com").is_err());
+    }
+
+    #[tokio::test]
+    async fn plain_http_host_is_refused_before_any_request() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let auth = AuthManager {
+            storage: storage_in(dir.path()),
+        };
+        let err = auth
+            .validate_token("http://gitlab.example.com", "glpat-0123456789abcdef")
+            .await
+            .expect_err("plain HTTP host");
+        assert!(err.contains("https"), "{err}");
+    }
 }

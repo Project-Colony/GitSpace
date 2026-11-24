@@ -32,7 +32,8 @@ pub fn merge_branch<P: AsRef<Path>>(
         MergeStrategy::Rebase => ("rebase", vec![target]),
     };
 
-    let output = run_git_command_with_timeout(repo_path_ref, command, &args, GIT_OPERATION_TIMEOUT)?;
+    let output =
+        run_git_command_with_timeout(repo_path_ref, command, &args, GIT_OPERATION_TIMEOUT)?;
 
     let conflicts = detect_conflicts(repo_path_ref).map_err(|err| err.to_string())?;
 
@@ -96,7 +97,11 @@ trait EmptyStringExt {
 
 impl EmptyStringExt for String {
     fn if_empty_then(self, alt: impl FnOnce() -> String) -> String {
-        if self.is_empty() { alt() } else { self }
+        if self.is_empty() {
+            alt()
+        } else {
+            self
+        }
     }
 }
 

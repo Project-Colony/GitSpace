@@ -13,7 +13,7 @@ pub fn list_stashes(repo_path: &str) -> Result<Vec<StashEntry>, git2::Error> {
 
     repo.stash_foreach(|index, name, _oid| {
         entries.push(StashEntry {
-            index: index as usize,
+            index,
             message: name.to_string(),
         });
         true

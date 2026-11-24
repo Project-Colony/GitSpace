@@ -27,7 +27,6 @@ use crate::ui::{
     stage::StagePanel,
     theme::Theme,
 };
-use crate::update;
 
 // ─── Message principal ─────────────────────────────────────────────────────
 
@@ -55,7 +54,6 @@ pub enum Message {
     RepoContextLoaded(String, Option<RepoContext>),
 
     // Mises a jour automatiques
-    UpdateCheckResult(update::UpdateResult),
 
     // Auto-fetch
     AutoFetchResult(AutoFetchOutcome),
@@ -93,8 +91,6 @@ pub struct GitSpaceApp {
     notifications: NotificationCenter,
 
     // Mise a jour
-    update_checked: bool,
-    update_checking: bool,
 
     // Auto-fetch
     auto_fetch_last: Option<Instant>,
@@ -145,21 +141,12 @@ impl GitSpaceApp {
             active_tab: MainTab::Clone,
             tab_order,
             notifications: NotificationCenter::new(),
-            update_checked: false,
-            update_checking: false,
             auto_fetch_last: None,
             auto_fetch_in_progress: false,
             auto_fetch_repo: None,
         };
 
-        // Verifier les mises a jour au demarrage si active
-        let startup_task = if app.config.preferences().auto_check_updates() {
-            trigger_update_check(&app.config)
-        } else {
-            Task::none()
-        };
-
-        (app, startup_task)
+        (app, Task::none())
     }
 
     // ─── Update ────────────────────────────────────────────────────────
@@ -305,14 +292,6 @@ impl GitSpaceApp {
                     self.repo_overview.refresh(repo);
                     self.stage_panel.refresh_if_needed(repo);
                 }
-                Task::none()
-            }
-
-            // ── Update check ───────────────────────────────────────────
-            Message::UpdateCheckResult(result) => {
-                self.update_checking = false;
-                self.update_checked = true;
-                self.handle_update_result(result);
                 Task::none()
             }
 
@@ -522,10 +501,6 @@ impl GitSpaceApp {
         if let Some(logging) = self.preferences_panel.take_logging_changes() {
             self.apply_logging(logging);
         }
-        if self.preferences_panel.take_update_request() && !self.update_checking {
-            self.update_checking = true;
-            return trigger_update_check(&self.config);
-        }
         Task::none()
     }
 
@@ -549,48 +524,12 @@ impl GitSpaceApp {
         self.preferences_panel.set_preferences(preferences);
 
         self.save_config();
-        self.update_checked = false;
     }
 
     /// Applique les options de logging mises a jour.
     fn apply_logging(&mut self, logging: LoggingOptions) {
         self.config.set_logging(logging);
         self.save_config();
-    }
-
-    /// Traite le resultat d'une verification de mise a jour.
-    fn handle_update_result(&mut self, result: update::UpdateResult) {
-        match result {
-            Ok(Some(release)) => {
-                let mut notification = Notification::success(
-                    format!("Mise a jour {} disponible", release.version),
-                    format!(
-                        "Une version {:?} est prete au telechargement.",
-                        release.channel
-                    ),
-                );
-                notification.detail = release.notes.clone();
-                notification =
-                    notification.with_action(NotificationAction::OpenRelease(release.url.clone()));
-                self.notifications.push(notification);
-
-                let status = format!(
-                    "Mise a jour {} disponible ({:?})",
-                    release.version, release.channel
-                );
-                self.preferences_panel.set_update_status(&status);
-            }
-            Ok(None) => {
-                let status = "Vous utilisez la derniere version.";
-                self.preferences_panel.set_update_status(status);
-            }
-            Err(err) => {
-                let status = format!("Erreur de verification: {err}");
-                self.preferences_panel.set_update_status(&status);
-                self.notifications
-                    .push(Notification::error("Erreur de mise a jour", err.to_string()));
-            }
-        }
     }
 
     /// Traite les actions declenchees depuis les notifications.
@@ -604,9 +543,6 @@ impl GitSpaceApp {
                     if let Ok(mut clipboard) = arboard::Clipboard::new() {
                         let _ = clipboard.set_text(path.display().to_string());
                     }
-                }
-                NotificationAction::OpenRelease(url) => {
-                    let _ = open::that(&url);
                 }
             }
         }
@@ -706,23 +642,6 @@ impl GitSpaceApp {
 }
 
 // ─── Helpers hors impl ─────────────────────────────────────────────────────
-
-/// Lance une verification de mise a jour en tache asynchrone.
-fn trigger_update_check(config: &AppConfig) -> Task<Message> {
-    let channel = config.preferences().release_channel();
-    let feed_override = config
-        .preferences()
-        .update_feed_override()
-        .map(str::to_string);
-    let network = config.preferences().network().clone();
-
-    Task::perform(
-        async move {
-            update::check_for_updates(channel, feed_override.as_deref(), &network).await
-        },
-        Message::UpdateCheckResult,
-    )
-}
 
 /// Resultat d'une operation d'auto-fetch.
 #[derive(Debug, Clone)]

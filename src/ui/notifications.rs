@@ -32,7 +32,6 @@ pub enum NotificationKind {
 pub enum NotificationAction {
     RetryClone,
     CopyLogPath(PathBuf),
-    OpenRelease(String),
 }
 
 /// Une notification toast avec actions optionnelles.
@@ -244,7 +243,6 @@ impl NotificationCenter {
                     let label = match action {
                         NotificationAction::RetryClone => "Réessayer",
                         NotificationAction::CopyLogPath(_) => "Copier le chemin log",
-                        NotificationAction::OpenRelease(_) => "Ouvrir la release",
                     };
                     action_row = action_row.push(
                         button(text(label).size(12).color(Color::WHITE))

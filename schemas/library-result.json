@@ -1,8 +1,0 @@
-{
-  "id": "req-0300",
-  "status": "ok",
-  "payload": {
-    "os": "Linux 6.8.0-1021-azure #22~22.04.1-Ubuntu SMP",
-    "version": "Unix 5.15.0.1058"
-  }
-}

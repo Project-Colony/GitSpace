@@ -88,7 +88,12 @@ pub fn read_commit_log(
             if let Some(search) = &filter.search {
                 let search_lower = search.to_lowercase();
                 let message = commit.message().unwrap_or_default().to_lowercase();
-                let summary = commit.summary().unwrap_or_default().to_lowercase();
+                let summary = commit
+                    .summary()
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default()
+                    .to_lowercase();
                 if !message.contains(&search_lower) && !summary.contains(&search_lower) {
                     continue;
                 }
@@ -135,10 +140,15 @@ pub fn read_commit_log(
             commits.push(CommitInfo {
                 id,
                 short_id,
-                summary: commit.summary().unwrap_or_default().to_string(),
+                summary: commit
+                    .summary()
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default()
+                    .to_string(),
                 message: commit.message().unwrap_or_default().to_string(),
                 author: commit.author().name().unwrap_or("Unknown").to_string(),
-                email: commit.author().email().map(|s| s.to_string()),
+                email: commit.author().email().ok().map(|s| s.to_string()),
                 time: commit.time(),
                 parents,
                 files_changed,
@@ -220,10 +230,7 @@ fn resolve_branch_oid(
     Ok(None)
 }
 
-fn resolve_ref_oid(
-    repo: &Repository,
-    reference: &str,
-) -> Result<Option<git2::Oid>, git2::Error> {
+fn resolve_ref_oid(repo: &Repository, reference: &str) -> Result<Option<git2::Oid>, git2::Error> {
     if let Ok(object) = repo.revparse_single(reference) {
         return Ok(Some(object.id()));
     }
@@ -236,10 +243,15 @@ fn commit_info_from_commit(commit: &git2::Commit<'_>) -> CommitInfo {
     CommitInfo {
         id,
         short_id,
-        summary: commit.summary().unwrap_or_default().to_string(),
+        summary: commit
+            .summary()
+            .ok()
+            .flatten()
+            .unwrap_or_default()
+            .to_string(),
         message: commit.message().unwrap_or_default().to_string(),
         author: commit.author().name().unwrap_or("Unknown").to_string(),
-        email: commit.author().email().map(|s| s.to_string()),
+        email: commit.author().email().ok().map(|s| s.to_string()),
         time: commit.time(),
         parents: commit.parents().map(|p| p.id().to_string()).collect(),
         files_changed: None,

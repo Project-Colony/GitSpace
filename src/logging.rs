@@ -24,7 +24,9 @@ pub fn init_tracing() {
         .with_line_number(true)
         .json();
 
-    let subscriber = tracing_subscriber::registry().with(env_filter).with(fmt_layer);
+    let subscriber = tracing_subscriber::registry()
+        .with(env_filter)
+        .with(fmt_layer);
 
     if let Some((writer, guard)) = build_file_writer() {
         let file_layer = fmt::layer()
@@ -82,7 +84,7 @@ fn prune_old_logs(log_dir: &std::path::Path, max_files: usize) {
         Err(_) => return,
     };
 
-    entries.sort_by(|a, b| b.1.cmp(&a.1));
+    entries.sort_by_key(|entry| std::cmp::Reverse(entry.1));
     for (index, (path, _)) in entries.iter().enumerate() {
         if index >= max_files {
             let _ = std::fs::remove_file(path);

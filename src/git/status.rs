@@ -34,7 +34,7 @@ pub fn read_repo_status<P: AsRef<Path>>(path: P) -> Result<RepoStatus, git2::Err
             });
         }
 
-        let branch_name = head.shorthand().map(|name| name.to_string());
+        let branch_name = head.shorthand().ok().map(|name| name.to_string());
         let mut status = RepoStatus {
             branch: branch_name.clone(),
             upstream: None,
@@ -85,7 +85,7 @@ pub fn read_working_tree_status<P: AsRef<Path>>(
 
         for entry in statuses.iter() {
             let status = entry.status();
-            let Some(path) = entry.path() else {
+            let Ok(path) = entry.path() else {
                 continue;
             };
 

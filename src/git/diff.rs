@@ -61,7 +61,9 @@ fn collect_diff_files(diff: Diff) -> Result<Vec<FileDiff>, git2::Error> {
 
         // Check if adding this line would exceed the limit
         if entry.patch.len() + content.len() + 1 > MAX_PATCH_SIZE {
-            entry.patch.push_str("\n... [truncated - file too large] ...\n");
+            entry
+                .patch
+                .push_str("\n... [truncated - file too large] ...\n");
             entry.truncated = true;
             return true;
         }
@@ -115,12 +117,14 @@ fn collect_diff_summaries(diff: &Diff) -> Result<Vec<FileDiffSummary>, git2::Err
 
         let is_binary = delta.flags().is_binary();
 
-        summaries.entry(path.clone()).or_insert_with(|| FileDiffSummary {
-            path,
-            additions: 0,
-            deletions: 0,
-            is_binary,
-        });
+        summaries
+            .entry(path.clone())
+            .or_insert_with(|| FileDiffSummary {
+                path,
+                additions: 0,
+                deletions: 0,
+                is_binary,
+            });
     }
 
     // Count additions/deletions from stats

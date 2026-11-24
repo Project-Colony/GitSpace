@@ -48,7 +48,7 @@ impl RepoContext {
                 let branch = repo
                     .head()
                     .ok()
-                    .and_then(|head| head.shorthand().map(|s| s.to_string()));
+                    .and_then(|head| head.shorthand().ok().map(|s| s.to_string()));
 
                 // Statut dirty : verifier s'il y a des modifications
                 let dirty = repo
