@@ -205,8 +205,10 @@ impl AuthManager {
     /// Clears OAuth token for a host.
     pub fn clear_oauth_token(&self, host: &str) -> Result<(), String> {
         let oauth_key = format!("oauth:{}", storage_key(host));
-        let _ = self.storage.clear_token(&oauth_key);
-        self.clear_token(host)
+        let oauth_result = self.storage.clear_token(&oauth_key);
+        // The access token goes even when the refresh token could not be removed.
+        self.clear_token(host)?;
+        oauth_result
     }
 }
 
@@ -319,26 +321,39 @@ impl TokenStorage {
         }
     }
 
+    /// Removes the token from the keyring and from `tokens.enc`, then the host from the host
+    /// list. The host stays listed when the keyring entry could not be removed, since the token
+    /// would still be used.
     pub fn clear_token(&self, host: &str) -> Result<(), String> {
-        if let Err(err) = self.remove_from_keyring(host) {
-            warn!(target: "gitspace::auth", error = %err, "failed to clear token from native keyring");
+        let keyring_result = self.remove_from_keyring(host);
+        if let Err(err) = &keyring_result {
+            error!(target: "gitspace::auth", error = %err, host, "failed to clear token from native keyring");
         }
-        let mut result = if self.allow_encrypted_fallback {
-            let mut map = self.read_fallback_for_update()?;
-            map.tokens.remove(host);
+        let file_result = self.scrub_fallback(host);
+        keyring_result?;
+        file_result?;
+        self.remove_host(host).inspect_err(|err| {
+            warn!(target: "gitspace::auth", error = %err, "failed to update saved host list");
+        })
+    }
+
+    /// Removes `host` from `tokens.enc` whether or not the encrypted fallback is on, so a token
+    /// saved while it was on does not come back when it is turned on again.
+    fn scrub_fallback(&self, host: &str) -> Result<(), String> {
+        let mut map = match self.read_fallback_for_update() {
+            Ok(map) => map,
+            // With the fallback off the file is not in use, so a key mismatch is not an error.
+            Err(err) if !self.allow_encrypted_fallback => {
+                warn!(target: "gitspace::auth", error = %err, "could not remove the token from the encrypted file");
+                return Ok(());
+            }
+            Err(err) => return Err(err),
+        };
+        if map.tokens.remove(host).is_some() {
             self.write_fallback(&map)
         } else {
             Ok(())
-        };
-
-        if let Err(err) = self.remove_host(host) {
-            warn!(target: "gitspace::auth", error = %err, "failed to update saved host list");
-            if result.is_ok() {
-                result = Err(err);
-            }
         }
-
-        result
     }
 
     pub fn known_hosts(&self) -> Vec<String> {
@@ -855,6 +870,33 @@ mod tests {
         let tokens = original.read_fallback().expect("decrypt").tokens;
         assert_eq!(tokens.len(), 2);
         assert_eq!(tokens["gitlab.com"], "second-token");
+    }
+
+    #[test]
+    fn sign_out_scrubs_the_token_file_with_the_fallback_off() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut storage = storage_in(dir.path());
+        storage
+            .persist_fallback("gitlab.com", "old-token")
+            .expect("save");
+        storage
+            .persist_fallback("github.com", "kept-token")
+            .expect("save");
+
+        storage.set_allow_encrypted_fallback(false);
+        storage.scrub_fallback("gitlab.com").expect("scrub");
+        let tokens = storage.read_fallback().expect("decrypt").tokens;
+        assert!(!tokens.contains_key("gitlab.com"));
+        assert_eq!(tokens["github.com"], "kept-token");
+
+        // A file this key cannot decrypt is not in use while the fallback is off.
+        let before = fs::read(&storage.path).expect("read tokens");
+        let mut other_key = storage_in(dir.path());
+        other_key.set_allow_encrypted_fallback(false);
+        other_key.scrub_fallback("github.com").expect("ignored");
+        other_key.set_allow_encrypted_fallback(true);
+        assert!(other_key.scrub_fallback("github.com").is_err());
+        assert_eq!(fs::read(&storage.path).expect("read tokens"), before);
     }
 
     #[test]
