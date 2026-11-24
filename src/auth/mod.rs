@@ -129,15 +129,13 @@ impl AuthManager {
             return Err("Token contains invalid characters".to_string());
         }
 
-        let normalized_host = normalize_host(host)?;
+        let origin = normalize_host(host)?;
         let client = get_http_client();
 
-        if normalized_host.contains("github") {
-            validate_github(client, &normalized_host, token).await
-        } else if normalized_host.contains("gitlab") {
-            validate_gitlab(client, &normalized_host, token).await
-        } else {
-            Ok(())
+        match token_check(&origin) {
+            Some(TokenCheck::GitHub(url)) => validate_github(client, &url, trimmed).await,
+            Some(TokenCheck::GitLab(url)) => validate_gitlab(client, &url, trimmed).await,
+            None => Ok(()),
         }
     }
 
@@ -669,16 +667,32 @@ fn normalize_host(host: &str) -> Result<String, String> {
     Ok(parsed.origin().ascii_serialization())
 }
 
-async fn validate_github(client: &Client, host: &str, token: &str) -> Result<(), String> {
-    let api_base = if host.contains("api.github.com") {
-        host.to_string()
-    } else if host.contains("github.com") {
-        "https://api.github.com".to_string()
-    } else {
-        format!("{}/api/v3", host)
-    };
-    let url = format!("{}/user", api_base.trim_end_matches('/'));
+/// The API that checks a token for `origin` (from [`normalize_host`]), with its `/user` URL.
+#[derive(Debug, PartialEq, Eq)]
+enum TokenCheck {
+    GitHub(String),
+    GitLab(String),
+}
 
+/// Picks the API from the exact host name: a substring test would send the token of
+/// `github.company.com` to `api.github.com`.
+fn token_check(origin: &str) -> Option<TokenCheck> {
+    let host = Url::parse(origin).ok()?.host_str()?.to_ascii_lowercase();
+    if host == "github.com" || host == "api.github.com" {
+        Some(TokenCheck::GitHub(
+            "https://api.github.com/user".to_string(),
+        ))
+    } else if host.starts_with("github.") {
+        // GitHub Enterprise Server serves its REST API under /api/v3.
+        Some(TokenCheck::GitHub(format!("{origin}/api/v3/user")))
+    } else if host == "gitlab.com" || host.starts_with("gitlab.") {
+        Some(TokenCheck::GitLab(format!("{origin}/api/v4/user")))
+    } else {
+        None
+    }
+}
+
+async fn validate_github(client: &Client, url: &str, token: &str) -> Result<(), String> {
     let response = client
         .get(url)
         .header(USER_AGENT, HeaderValue::from_static("gitspace"))
@@ -694,8 +708,7 @@ async fn validate_github(client: &Client, host: &str, token: &str) -> Result<(),
     }
 }
 
-async fn validate_gitlab(client: &Client, host: &str, token: &str) -> Result<(), String> {
-    let url = format!("{}/api/v4/user", host.trim_end_matches('/'));
+async fn validate_gitlab(client: &Client, url: &str, token: &str) -> Result<(), String> {
     let mut headers = HeaderMap::new();
     headers.insert(USER_AGENT, HeaderValue::from_static("gitspace"));
     headers.insert(
@@ -869,6 +882,39 @@ mod tests {
         assert!(normalize_host("http://gitlab.example.com").is_err());
         assert!(normalize_host("HTTP://gitlab.example.com").is_err());
         assert!(normalize_host("ssh://gitlab.example.com").is_err());
+    }
+
+    #[test]
+    fn token_check_matches_the_exact_host() {
+        let check = |host: &str| token_check(&normalize_host(host).unwrap());
+        let github = |url: &str| Some(TokenCheck::GitHub(url.to_string()));
+        let gitlab = |url: &str| Some(TokenCheck::GitLab(url.to_string()));
+
+        assert_eq!(check("github.com"), github("https://api.github.com/user"));
+        assert_eq!(
+            check("API.GitHub.com"),
+            github("https://api.github.com/user")
+        );
+        // An Enterprise host containing "github.com" keeps its token on its own server.
+        assert_eq!(
+            check("github.company.com"),
+            github("https://github.company.com/api/v3/user")
+        );
+        assert_eq!(
+            check("https://github.example.org:8443/org"),
+            github("https://github.example.org:8443/api/v3/user")
+        );
+        assert_eq!(
+            check("gitlab.com"),
+            gitlab("https://gitlab.com/api/v4/user")
+        );
+        assert_eq!(
+            check("gitlab.example.com"),
+            gitlab("https://gitlab.example.com/api/v4/user")
+        );
+        assert_eq!(check("notgithub.com"), None);
+        assert_eq!(check("mygitlab.example.com"), None);
+        assert_eq!(check("git.example.com"), None);
     }
 
     #[tokio::test]
