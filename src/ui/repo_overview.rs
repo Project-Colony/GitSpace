@@ -34,7 +34,10 @@ pub struct AutoFetchContext {
 #[derive(Debug, Clone)]
 struct RemoteSelection {
     remote_name: String,
+    /// The checked-out branch.
     branch: Option<String>,
+    /// The branch it tracks on the remote, when an upstream is set.
+    upstream_branch: Option<String>,
 }
 
 // ── Messages du panneau ────────────────────────────────────────────────────
@@ -369,7 +372,7 @@ impl RepoOverviewPanel {
             self.reload_repo_state(repo);
         }
         let selection = self.resolve_remote_selection()?;
-        let token = self.resolve_remote_token(auth, &selection.remote_name);
+        let token = self.resolve_remote_token(auth, &selection.remote_name, false);
         Ok(AutoFetchContext {
             repo_path: repo.path().to_string(),
             remote_name: selection.remote_name,
@@ -383,7 +386,7 @@ impl RepoOverviewPanel {
     /// Effectue un fetch sur le remote résolu.
     fn do_fetch(&self, repo: &RepoContext, auth: &AuthManager) -> Result<String, String> {
         let selection = self.resolve_remote_selection()?;
-        let token = self.resolve_remote_token(auth, &selection.remote_name);
+        let token = self.resolve_remote_token(auth, &selection.remote_name, false);
         fetch_remote(repo.path(), &selection.remote_name, &self.network, token)
             .map_err(|err| err.to_string())?;
         Ok(format!("Fetched {}", selection.remote_name))
@@ -395,11 +398,13 @@ impl RepoOverviewPanel {
         let branch = selection
             .branch
             .ok_or_else(|| "No branch checked out for pull.".to_string())?;
-        let token = self.resolve_remote_token(auth, &selection.remote_name);
+        let upstream = selection.upstream_branch.as_deref().unwrap_or(&branch);
+        let token = self.resolve_remote_token(auth, &selection.remote_name, false);
         let outcome = pull_branch(
             repo.path(),
             &selection.remote_name,
             &branch,
+            upstream,
             &self.network,
             token,
         )
@@ -419,11 +424,13 @@ impl RepoOverviewPanel {
         let branch = selection
             .branch
             .ok_or_else(|| "No branch checked out for push.".to_string())?;
-        let token = self.resolve_remote_token(auth, &selection.remote_name);
+        let upstream = selection.upstream_branch.as_deref().unwrap_or(&branch);
+        let token = self.resolve_remote_token(auth, &selection.remote_name, true);
         push_branch(
             repo.path(),
             &selection.remote_name,
             &branch,
+            upstream,
             &self.network,
             token,
         )
@@ -446,21 +453,31 @@ impl RepoOverviewPanel {
             (remote, None)
         };
 
-        let branch = upstream_branch.or(status.branch);
         Ok(RemoteSelection {
             remote_name,
-            branch,
+            branch: status.branch,
+            upstream_branch,
         })
     }
 
-    /// Résout le token d'authentification pour un remote donné.
-    fn resolve_remote_token(&self, auth: &AuthManager, remote_name: &str) -> Option<String> {
+    /// Résout le token d'authentification pour un remote donné, d'après l'URL de push
+    /// quand `push` est vrai.
+    fn resolve_remote_token(
+        &self,
+        auth: &AuthManager,
+        remote_name: &str,
+        push: bool,
+    ) -> Option<String> {
         let remote = self.remotes.iter().find(|r| r.name == remote_name)?;
-        if remote.url == "(no url)" {
+        let url = match &remote.push_url {
+            Some(push_url) if push => push_url,
+            _ => &remote.url,
+        };
+        if url == "(no url)" {
             return None;
         }
-        auth.resolve_for_url(&remote.url)
-            .or_else(|| auth.resolve_for_host(&remote.url))
+        auth.resolve_for_url(url)
+            .or_else(|| auth.resolve_for_host(url))
     }
 
     // ── Actions système ────────────────────────────────────────────────

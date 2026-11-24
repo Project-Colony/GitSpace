@@ -267,13 +267,16 @@ fn fetch_push_pull_and_prune_work_with_local_remote() {
         repo.path().parent().unwrap(),
         "origin",
         "main",
+        "main",
         &network,
         None,
     )
     .expect("push");
 
     let fetch_dir = tempfile::tempdir().expect("create fetch dir");
-    let fetch_repo = Repository::init(fetch_dir.path()).expect("init fetch repo");
+    let mut init = RepositoryInitOptions::new();
+    init.initial_head("main");
+    let fetch_repo = Repository::init_opts(fetch_dir.path(), &init).expect("init fetch repo");
     fetch_repo
         .remote("origin", remote_dir.path().to_str().expect("remote path"))
         .expect("add remote");
@@ -293,10 +296,135 @@ fn fetch_push_pull_and_prune_work_with_local_remote() {
         .find_reference("refs/remotes/origin/obsolete")
         .is_err());
 
-    let outcome = pull_branch(fetch_dir.path(), "origin", "main", &network, None).expect("pull");
+    let outcome =
+        pull_branch(fetch_dir.path(), "origin", "main", "main", &network, None).expect("pull");
     assert_eq!(outcome, PullOutcome::FastForward);
     let head = fetch_repo.head().expect("head");
     assert_eq!(head.target(), Some(commit));
+}
+
+/// A clone of a bare remote on `main`, with a `feature` branch checked out that tracks
+/// `origin/main`, and the remote one commit ahead.
+fn clone_with_feature_tracking_main() -> (tempfile::TempDir, tempfile::TempDir, Repository) {
+    let (work_dir, work) = init_temp_repo();
+    write_commit(&work, "shared.txt", "one\n", "initial");
+    let remote_dir = tempfile::tempdir().expect("remote dir");
+    let mut init = RepositoryInitOptions::new();
+    init.bare(true).initial_head("main");
+    Repository::init_opts(remote_dir.path(), &init).expect("init bare");
+    let remote_url = remote_dir.path().to_str().unwrap();
+    work.remote("origin", remote_url).expect("add remote");
+    let network = NetworkOptions::default();
+    let work_root = work.path().parent().unwrap().to_path_buf();
+    push_branch(&work_root, "origin", "main", "main", &network, None).expect("push");
+    fetch_remote(&work_root, "origin", &network, None).expect("fetch");
+
+    let head = work.head().unwrap().peel_to_commit().unwrap().id();
+    work.branch("feature", &work.find_commit(head).unwrap(), false)
+        .expect("feature");
+    work.set_head("refs/heads/feature").expect("switch");
+    ensure_remote_tracking(&work, "feature", "origin/main", head);
+
+    // Advance origin/main from a second clone.
+    let other_dir = tempfile::tempdir().expect("other dir");
+    let other = Repository::clone(remote_url, other_dir.path()).expect("clone");
+    write_commit(&other, "shared.txt", "one\ntwo\n", "remote change");
+    push_branch(other_dir.path(), "origin", "main", "main", &network, None).expect("push");
+    (work_dir, remote_dir, work)
+}
+
+#[test]
+fn pull_fast_forwards_the_checked_out_branch_only() {
+    let (_work_dir, _remote_dir, work) = clone_with_feature_tracking_main();
+    let root = work.path().parent().unwrap();
+    let main_before = work.refname_to_id("refs/heads/main").unwrap();
+    let network = NetworkOptions::default();
+
+    let outcome = pull_branch(root, "origin", "feature", "main", &network, None).expect("pull");
+    assert_eq!(outcome, PullOutcome::FastForward);
+    assert_eq!(
+        work.find_reference("HEAD")
+            .unwrap()
+            .symbolic_target()
+            .unwrap(),
+        Some("refs/heads/feature")
+    );
+    assert_eq!(
+        work.refname_to_id("refs/heads/feature").unwrap(),
+        work.refname_to_id("refs/remotes/origin/main").unwrap()
+    );
+    assert_eq!(work.refname_to_id("refs/heads/main").unwrap(), main_before);
+    assert_eq!(
+        fs::read_to_string(root.join("shared.txt")).unwrap(),
+        "one\ntwo\n"
+    );
+
+    // A branch that is not checked out is refused.
+    assert!(pull_branch(root, "origin", "main", "main", &network, None).is_err());
+}
+
+#[test]
+fn pull_refuses_to_overwrite_uncommitted_changes() {
+    let (_work_dir, _remote_dir, work) = clone_with_feature_tracking_main();
+    let root = work.path().parent().unwrap();
+    let feature_before = work.refname_to_id("refs/heads/feature").unwrap();
+    fs::write(root.join("shared.txt"), "local edit\n").unwrap();
+
+    let result = pull_branch(
+        root,
+        "origin",
+        "feature",
+        "main",
+        &NetworkOptions::default(),
+        None,
+    );
+    assert!(result.is_err());
+    assert_eq!(
+        fs::read_to_string(root.join("shared.txt")).unwrap(),
+        "local edit\n"
+    );
+    assert_eq!(
+        work.refname_to_id("refs/heads/feature").unwrap(),
+        feature_before
+    );
+}
+
+#[test]
+fn push_maps_the_local_branch_to_the_upstream_name() {
+    let (_dir, repo) = init_temp_repo();
+    let commit = write_commit(&repo, "a.txt", "a", "initial");
+    let remote_dir = tempfile::tempdir().expect("remote dir");
+    let remote = Repository::init_bare(remote_dir.path()).expect("init bare");
+    repo.remote("origin", remote_dir.path().to_str().unwrap())
+        .expect("add remote");
+
+    push_branch(
+        repo.path().parent().unwrap(),
+        "origin",
+        "main",
+        "release",
+        &NetworkOptions::default(),
+        None,
+    )
+    .expect("push");
+
+    assert_eq!(remote.refname_to_id("refs/heads/release").unwrap(), commit);
+    assert!(remote.find_reference("refs/heads/main").is_err());
+}
+
+#[test]
+fn remotes_report_a_separate_push_url() {
+    let (_dir, repo) = init_temp_repo();
+    repo.remote("origin", "https://example.com/fetch.git")
+        .expect("create remote");
+    repo.remote_set_pushurl("origin", Some("https://push.example.com/push.git"))
+        .expect("set push url");
+
+    let remotes = list_remotes(repo.path().parent().unwrap()).expect("list remotes");
+    assert_eq!(
+        remotes[0].push_url.as_deref(),
+        Some("https://push.example.com/push.git")
+    );
 }
 
 #[test]
