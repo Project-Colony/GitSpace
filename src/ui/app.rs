@@ -13,7 +13,7 @@ use crate::config::{AppConfig, LoggingOptions, Preferences};
 use crate::error::logs_directory;
 use crate::ui::{
     auth::AuthPanel,
-    branches::BranchPanel,
+    branches::{self, BranchPanel},
     clone::{self, ClonePanel},
     context::RepoContext,
     history::HistoryPanel,
@@ -22,7 +22,7 @@ use crate::ui::{
     preferences::PreferencesPanel,
     recent::RecentList,
     repo_overview::{self, RepoOverviewPanel},
-    stage::StagePanel,
+    stage::{self, StagePanel},
     theme::Theme,
 };
 
@@ -193,8 +193,17 @@ impl GitSpaceApp {
 
             // ── Stage ──────────────────────────────────────────────────
             Message::Stage(msg) => {
-                let task = self.stage_panel.update(msg, self.current_repo.as_ref());
-                task.map(Message::Stage)
+                // A commit moves HEAD: the other panels show the old state until reloaded.
+                let changed = matches!(&msg, stage::Message::Committed(_, Ok(_)));
+                let task = self
+                    .stage_panel
+                    .update(msg, self.current_repo.as_ref())
+                    .map(Message::Stage);
+                if changed {
+                    Task::batch([task, self.reload_other_panels(MainTab::Stage)])
+                } else {
+                    task
+                }
             }
 
             // ── History ────────────────────────────────────────────────
@@ -205,13 +214,29 @@ impl GitSpaceApp {
 
             // ── Branches ───────────────────────────────────────────────
             Message::Branches(msg) => {
-                let task = self.branches_panel.update(msg, self.current_repo.as_ref());
+                // Checkout, merge and rebase change the working tree and HEAD.
+                let changed = matches!(
+                    &msg,
+                    branches::Message::ActionDone(_, Ok(_)) | branches::Message::MergeDone(_, _)
+                );
+                let mut tasks = vec![self
+                    .branches_panel
+                    .update(msg, self.current_repo.as_ref())
+                    .map(Message::Branches)];
+                if changed {
+                    tasks.push(self.reload_other_panels(MainTab::Branches));
+                }
 
                 // Gerer la demande de navigation vers l'historique d'une branche
                 if let Some(branch) = self.branches_panel.take_history_request() {
                     self.active_tab = MainTab::History;
-                    self.history_panel
-                        .set_branch_filter(branch, self.current_repo.as_ref());
+                    if let Some(repo) = &self.current_repo {
+                        tasks.push(
+                            self.history_panel
+                                .show_branch(branch, repo)
+                                .map(Message::History),
+                        );
+                    }
                 }
 
                 // Persister les branches epinglees
@@ -225,7 +250,7 @@ impl GitSpaceApp {
                     self.save_config();
                 }
 
-                task.map(Message::Branches)
+                Task::batch(tasks)
             }
 
             // ── Auth ───────────────────────────────────────────────────
@@ -270,15 +295,35 @@ impl GitSpaceApp {
                 if self.config.touch_recent(std::path::Path::new(&path)) {
                     self.save_config();
                 }
-                let task = self.repo_overview.refresh(&repo);
-                self.stage_panel.refresh_if_needed(&repo);
+                let tasks = [
+                    self.repo_overview.refresh(&repo).map(Message::RepoOverview),
+                    self.stage_panel.load(&repo).map(Message::Stage),
+                    self.branches_panel.load(&repo).map(Message::Branches),
+                    self.history_panel.load(&repo).map(Message::History),
+                ];
                 self.current_repo = Some(repo);
-                task.map(Message::RepoOverview)
+                Task::batch(tasks)
             }
 
             // ── Auto-fetch ─────────────────────────────────────────────
             Message::AutoFetchTick => self.maybe_start_auto_fetch(),
         }
+    }
+
+    /// Reloads every repository panel except `origin` after it changed the repository.
+    fn reload_other_panels(&mut self, origin: MainTab) -> Task<Message> {
+        let Some(repo) = self.current_repo.clone() else {
+            return Task::none();
+        };
+        let mut tasks = vec![self.repo_overview.refresh(&repo).map(Message::RepoOverview)];
+        if origin != MainTab::Stage {
+            tasks.push(self.stage_panel.load(&repo).map(Message::Stage));
+        }
+        if origin != MainTab::Branches {
+            tasks.push(self.branches_panel.load(&repo).map(Message::Branches));
+        }
+        tasks.push(self.history_panel.load(&repo).map(Message::History));
+        Task::batch(tasks)
     }
 
     // ─── View ──────────────────────────────────────────────────────────

@@ -259,7 +259,6 @@ impl BranchPanel {
 
     /// Oublie le depot precedent et charge les branches de `repo` en tache de fond.
     /// Les branches epinglees sont conservees.
-    #[allow(dead_code)] // app.rs calls it in a separate change
     pub fn load(&mut self, repo: &RepoContext) -> Task<Message> {
         let pinned = std::mem::take(&mut self.pinned_branches);
         *self = Self {

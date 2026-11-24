@@ -181,22 +181,6 @@ impl HistoryPanel {
         self.refresh()
     }
 
-    /// Comme [`Self::show_branch`], mais lit le journal sur le thread appelant. Sans depot,
-    /// le filtre est garde pour le prochain chargement.
-    /// shortcut: blocks the UI thread; app.rs should call `show_branch` and run its task.
-    pub fn set_branch_filter(&mut self, branch: String, repo: Option<&RepoContext>) {
-        let Some(repo) = repo else {
-            self.filters.branch = branch;
-            return;
-        };
-        let _ = self.show_branch(branch, repo);
-        let result = read_page(repo.path(), &self.applied, PAGE_SIZE);
-        let _ = self.update(
-            Message::Loaded(repo.path_arc(), self.request, result),
-            Some(repo),
-        );
-    }
-
     // -----------------------------------------------------------------------
     // Mise a jour (logique)
     // -----------------------------------------------------------------------

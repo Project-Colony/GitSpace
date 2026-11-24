@@ -199,15 +199,6 @@ impl StagePanel {
         self.refresh()
     }
 
-    /// Comme [`Self::load`], mais lit le dépôt sur le thread appelant.
-    /// shortcut: blocks the UI thread; app.rs should call `load` and run its task instead.
-    pub fn refresh_if_needed(&mut self, repo: &RepoContext) {
-        // Only the reset is wanted: a task that is never run never starts its job.
-        let _ = self.load(repo);
-        let snapshot = read_snapshot(repo.path());
-        let _ = self.update(Message::Loaded(repo.path_arc(), snapshot), Some(repo));
-    }
-
     /// Traite un message et retourne une commande Iced.
     pub fn update(&mut self, message: Message, _repo: Option<&RepoContext>) -> Task<Message> {
         match message {
