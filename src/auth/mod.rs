@@ -77,7 +77,7 @@ impl AuthManager {
     }
 
     pub fn resolve_for_host(&self, host: &str) -> Option<String> {
-        self.storage.get_token(host).ok().flatten()
+        self.storage.get_token(&storage_key(host)).ok().flatten()
     }
 
     pub fn resolve_for_url(&self, url: &str) -> Option<String> {
@@ -94,8 +94,15 @@ impl AuthManager {
         self.storage.set_token(host, token)
     }
 
+    /// Removes the token saved for `host`, normalized like a lookup. An entry that an older
+    /// release saved under the host as typed is removed too.
     pub fn clear_token(&self, host: &str) -> Result<(), String> {
-        self.storage.clear_token(host)
+        let key = storage_key(host);
+        let result = self.storage.clear_token(&key);
+        if key != host {
+            self.storage.clear_token(host)?;
+        }
+        result
     }
 
     pub fn known_hosts(&self) -> Vec<String> {
@@ -141,7 +148,8 @@ impl AuthManager {
 
     pub async fn validate_and_store(&self, host: &str, token: &str) -> Result<(), String> {
         self.validate_token(host, token).await?;
-        self.storage.set_token(host, token)
+        // Saved under the key `resolve_for_url` looks up, not the host as typed.
+        self.storage.set_token(&storage_key(host), token.trim())
     }
 
     pub fn set_encrypted_fallback(&mut self, allowed: bool) {
@@ -151,10 +159,11 @@ impl AuthManager {
     /// Stores an OAuth token for a host.
     pub fn store_oauth_token(&self, token: &OAuthToken) -> Result<(), String> {
         // Store the access token using the existing mechanism
-        self.storage.set_token(&token.host, &token.access_token)?;
+        let host = storage_key(&token.host);
+        self.storage.set_token(&host, &token.access_token)?;
 
         // Store the full OAuth token (with refresh token) as JSON in a separate entry
-        let oauth_key = format!("oauth:{}", token.host);
+        let oauth_key = format!("oauth:{host}");
         let oauth_json = serde_json::to_string(token)
             .map_err(|e| format!("Failed to serialize OAuth token: {}", e))?;
         self.storage.set_token(&oauth_key, &oauth_json)?;
@@ -172,7 +181,7 @@ impl AuthManager {
 
     /// Retrieves the OAuth token for a host, if one exists.
     pub fn get_oauth_token(&self, host: &str) -> Option<OAuthToken> {
-        let oauth_key = format!("oauth:{}", host);
+        let oauth_key = format!("oauth:{}", storage_key(host));
         let oauth_json = self.storage.get_token(&oauth_key).ok()??;
         serde_json::from_str(&oauth_json).ok()
     }
@@ -195,9 +204,9 @@ impl AuthManager {
 
     /// Clears OAuth token for a host.
     pub fn clear_oauth_token(&self, host: &str) -> Result<(), String> {
-        let oauth_key = format!("oauth:{}", host);
+        let oauth_key = format!("oauth:{}", storage_key(host));
         let _ = self.storage.clear_token(&oauth_key);
-        self.storage.clear_token(host)
+        self.clear_token(host)
     }
 }
 
@@ -730,26 +739,31 @@ async fn validate_gitlab(client: &Client, url: &str, token: &str) -> Result<(), 
     }
 }
 
+/// Returns the lowercase host name of a URL, `host:port`, scp-like `user@host:path` or bare
+/// host.
 pub fn extract_host(target: &str) -> Option<String> {
-    if let Ok(url) = Url::parse(target) {
-        return url.host_str().map(|h| h.to_string());
-    }
-
-    if let Some((host, _)) = target.split_once("://") {
-        return Some(host.to_string());
-    }
-
-    if let Some((user_host, _)) = target.split_once(':') {
-        if let Some((_, host)) = user_host.split_once('@') {
-            return Some(host.to_string());
+    let target = target.trim();
+    let host = match Url::parse(target) {
+        // `gitlab.example.com:8443` parses as a URL with scheme `gitlab.example.com` and no
+        // host, so only a URL with a host is taken.
+        Ok(url) if url.host_str().is_some() => url.host_str().unwrap_or_default().to_string(),
+        _ => {
+            let rest = target.split_once("://").map_or(target, |(_, rest)| rest);
+            let authority = rest.split('/').next().unwrap_or_default();
+            let authority = authority
+                .rsplit_once('@')
+                .map_or(authority, |(_, host)| host);
+            authority.split(':').next().unwrap_or_default().to_string()
         }
-    }
+    };
+    let host = host.to_ascii_lowercase();
+    (!host.is_empty()).then_some(host)
+}
 
-    target
-        .split('/')
-        .next()
-        .filter(|segment| !segment.is_empty())
-        .map(|h| h.to_string())
+/// The key a host's token is saved under: the host name [`extract_host`] finds, so a token
+/// typed for `https://GitLab.example.com:8443/` is found again for any remote on that host.
+fn storage_key(host: &str) -> String {
+    extract_host(host).unwrap_or_else(|| host.trim().to_ascii_lowercase())
 }
 
 #[cfg(test)]
@@ -915,6 +929,34 @@ mod tests {
         assert_eq!(check("notgithub.com"), None);
         assert_eq!(check("mygitlab.example.com"), None);
         assert_eq!(check("git.example.com"), None);
+    }
+
+    #[test]
+    fn manual_hosts_are_saved_under_the_key_a_remote_looks_up() {
+        let remote = extract_host("https://gitlab.example.com/group/repo.git");
+        assert_eq!(remote.as_deref(), Some("gitlab.example.com"));
+        for typed in [
+            "gitlab.example.com",
+            "GitLab.example.com",
+            "gitlab.example.com:8443",
+            " gitlab.example.com/group ",
+            "https://gitlab.example.com",
+            "https://GitLab.Example.com:8443/",
+        ] {
+            assert_eq!(Some(storage_key(typed)), remote, "{typed}");
+        }
+        for remote in [
+            "ssh://git@GitLab.example.com:22/group/repo.git",
+            "git@gitlab.example.com:group/repo.git",
+        ] {
+            assert_eq!(
+                extract_host(remote).as_deref(),
+                Some("gitlab.example.com"),
+                "{remote}"
+            );
+        }
+        assert_eq!(extract_host(""), None);
+        assert_eq!(extract_host("file:///home/me/repo"), None);
     }
 
     #[tokio::test]
