@@ -22,9 +22,9 @@ panel-based window inspired by GitKraken.
 > work out of the box. OAuth sign-in needs the client ID of an OAuth app you register
 > yourself, because no build embeds one yet. The git operations are covered by tests on
 > local repositories; SSH sign-in, proxies and OAuth are covered by unit tests of their
-> logic, not by tests against live servers. The interface has no language setting yet: most
-> of it is in English, the Preferences window in French. It is being moved from egui to iced
-> and the shared Colony UI kit, which brings English and French locales.
+> logic, not by tests against live servers. The interface is built on iced and has no
+> language setting yet: most of it is in French, with some labels still in English. It is
+> meant to move to the shared Colony UI kit, which brings English and French locales.
 
 ## Why GitSpace
 
@@ -42,17 +42,19 @@ panel-based window inspired by GitKraken.
 - Clone from GitHub, GitLab or any Git URL over HTTPS or SSH, and reopen recent repositories.
 - Repository overview with fetch, pull (fast-forward), push, open in the file manager and
   open a terminal, plus optional auto-fetch on an interval.
-- Stage and unstage files with their diffs, restore a file from another branch, and create,
-  apply and drop stashes.
+- Stage and unstage files with their diffs, commit, restore a file from another branch, and
+  create, apply and drop stashes.
 - History with commit diffs, filtered by branch.
-- Branches: create, rename, delete, check out and track, merge or rebase into the current
-  branch, compare with it, pin favourites, and archive a branch as a tag.
+- Branches: create, rename, delete, check out and track, merge a branch into the current one
+  or rebase the current one onto it, compare with it, pin favourites, and archive a branch as
+  a tag. Delete, merge and rebase ask for confirmation, and checkout refuses to overwrite
+  uncommitted changes.
 - Sign in to GitHub with a one-time code entered on github.com (OAuth device flow), to
   GitLab through OAuth in the browser (PKCE), or to GitHub, GitLab and self-hosted hosts with
   a personal access token.
 - Network preferences: HTTP and HTTPS proxies, transfer timeout, preferring HTTPS and
   allowing SSH.
-- Four Catppuccin themes, adjustable control sizes and a reduced-motion setting.
+- Four Catppuccin themes.
 - Structured logs with daily rotation (`GITSPACE_LOG` sets the filter).
 
 ## Installation
