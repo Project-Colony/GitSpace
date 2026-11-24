@@ -571,21 +571,35 @@ impl Preferences {
     }
 
     pub fn save_to_path<P: AsRef<Path>>(&self, path: P) -> std::io::Result<()> {
-        let contents = serde_json::to_string_pretty(self).unwrap_or_else(|_| "{}".to_string());
-        if let Some(parent) = path.as_ref().parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(path, contents)
+        let contents = serde_json::to_vec_pretty(self).map_err(io::Error::other)?;
+        write_atomic(path.as_ref(), &contents)
     }
 
+    /// Reads preferences saved by [`Self::save_to_path`], or the `preferences` object of a
+    /// whole `config.json`. A file with none of the preference fields is refused: read as is,
+    /// it would silently reset every preference to its default.
     pub fn from_path<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
+        let invalid = |message: String| io::Error::new(ErrorKind::InvalidData, message);
         let contents = fs::read_to_string(path)?;
-        serde_json::from_str(&contents).map_err(|err| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("Failed to parse preferences: {err}"),
-            )
-        })
+        let mut value: serde_json::Value = serde_json::from_str(&contents)
+            .map_err(|err| invalid(format!("Failed to parse preferences: {err}")))?;
+        if let Some(preferences) = value.get_mut("preferences").map(serde_json::Value::take) {
+            value = preferences;
+        }
+        let known = serde_json::to_value(Self::default()).map_err(io::Error::other)?;
+        let has_preferences = match (&value, &known) {
+            (serde_json::Value::Object(fields), serde_json::Value::Object(known)) => {
+                fields.keys().any(|key| known.contains_key(key))
+            }
+            _ => false,
+        };
+        if !has_preferences {
+            return Err(invalid(
+                "The file does not contain GitSpace preferences".to_string(),
+            ));
+        }
+        serde_json::from_value(value)
+            .map_err(|err| invalid(format!("Failed to parse preferences: {err}")))
     }
 }
 
@@ -658,6 +672,39 @@ mod tests {
             assert_eq!(interval, expected_minutes);
             assert!(interval.checked_mul(60).is_some());
             assert_eq!(config.logging().retention_files(), expected_files);
+        }
+    }
+
+    #[test]
+    fn preferences_import_reads_an_export_or_a_whole_config() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("exports").join("preferences.json");
+        let mut preferences = Preferences::default();
+        preferences.set_theme_mode(ThemeMode::Latte);
+        preferences.set_pinned_branches(vec!["main".to_string()]);
+        preferences.save_to_path(&path).expect("export");
+        assert_eq!(Preferences::from_path(&path).expect("import"), preferences);
+
+        // The whole config.json keeps the preferences under "preferences".
+        let mut config = AppConfig::default();
+        config.set_preferences(preferences.clone());
+        let config_path = dir.path().join(CONFIG_FILE_NAME);
+        config.save_to(&config_path).expect("save config");
+        assert_eq!(
+            Preferences::from_path(&config_path).expect("import config"),
+            preferences
+        );
+
+        for contents in [
+            "{}",
+            "[]",
+            "3",
+            r#"{"unrelated": true}"#,
+            r#"{"preferences": {}}"#,
+        ] {
+            fs::write(&path, contents).expect("write");
+            let err = Preferences::from_path(&path).expect_err(contents);
+            assert_eq!(err.kind(), ErrorKind::InvalidData, "{contents}");
         }
     }
 
