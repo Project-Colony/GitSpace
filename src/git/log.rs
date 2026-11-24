@@ -1,4 +1,6 @@
-use git2::{BranchType, Repository, Time};
+use git2::{BranchType, ErrorCode, Repository, Time};
+
+use crate::git::diff::commit_against_parent;
 // Utilise le cache thread-local pour éviter de réouvrir le dépôt à chaque appel
 use crate::git::repo_cache::with_cached_repo;
 
@@ -58,108 +60,76 @@ pub fn read_commit_log(
         revwalk.set_sorting(git2::Sort::TIME | git2::Sort::TOPOLOGICAL)?;
 
         if let Some(branch) = &filter.branch {
-            let reference_name = format!("refs/heads/{branch}");
-            if let Ok(reference) = repo.find_reference(&reference_name) {
-                if let Some(oid) = reference.target() {
-                    revwalk.push(oid)?;
-                }
+            // Local branches first, then anything git can resolve, such as `origin/x`.
+            match resolve_branch_oid(repo, branch)? {
+                Some(oid) => revwalk.push(oid)?,
+                None => return Ok(Vec::new()),
             }
+        } else if repo
+            .head()
+            .is_err_and(|err| err.code() == ErrorCode::UnbornBranch)
+        {
+            // A fresh `git init` has no commit yet.
+            return Ok(Vec::new());
         } else {
             revwalk.push_head()?;
         }
 
+        // `limit` counts matching commits, so filters may walk further back.
         let mut commits = Vec::with_capacity(limit.min(256));
-
-        for oid_result in revwalk.take(limit) {
-            let oid = oid_result?;
-            let commit = repo.find_commit(oid)?;
-
-            if let Some(author_filter) = &filter.author {
-                let author_text = format!(
-                    "{} {}",
-                    commit.author().name().unwrap_or_default(),
-                    commit.author().email().unwrap_or_default()
-                )
-                .to_lowercase();
-                if !author_text.contains(&author_filter.to_lowercase()) {
-                    continue;
-                }
+        for oid_result in revwalk {
+            if commits.len() >= limit {
+                break;
+            }
+            let commit = repo.find_commit(oid_result?)?;
+            if !matches_filter(&commit, filter) {
+                continue;
             }
 
-            if let Some(search) = &filter.search {
-                let search_lower = search.to_lowercase();
-                let message = commit.message().unwrap_or_default().to_lowercase();
-                let summary = commit
-                    .summary()
-                    .ok()
-                    .flatten()
-                    .unwrap_or_default()
-                    .to_lowercase();
-                if !message.contains(&search_lower) && !summary.contains(&search_lower) {
-                    continue;
-                }
+            let mut info = commit_info_from_commit(&commit);
+            if include_stats {
+                let stats = commit_against_parent(repo, commit.id(), None)?.stats()?;
+                info.files_changed = Some(stats.files_changed());
+                info.additions = Some(stats.insertions());
+                info.deletions = Some(stats.deletions());
             }
-
-            let timestamp = commit.time().seconds();
-            if let Some(since) = filter.since {
-                if timestamp < since {
-                    continue;
-                }
-            }
-
-            if let Some(until) = filter.until {
-                if timestamp > until {
-                    continue;
-                }
-            }
-
-            let parents = commit
-                .parents()
-                .map(|p| p.id().to_string())
-                .collect::<Vec<_>>();
-
-            let (files_changed, additions, deletions) = if include_stats {
-                let tree = commit.tree()?;
-                let parent_tree = commit
-                    .parent(0)
-                    .ok()
-                    .map(|parent| parent.tree())
-                    .transpose()?;
-                let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)?;
-                let stats = diff.stats()?;
-                (
-                    Some(stats.files_changed()),
-                    Some(stats.insertions()),
-                    Some(stats.deletions()),
-                )
-            } else {
-                (None, None, None)
-            };
-
-            let id = oid.to_string();
-            let short_id = id.chars().take(8).collect();
-            commits.push(CommitInfo {
-                id,
-                short_id,
-                summary: commit
-                    .summary()
-                    .ok()
-                    .flatten()
-                    .unwrap_or_default()
-                    .to_string(),
-                message: commit.message().unwrap_or_default().to_string(),
-                author: commit.author().name().unwrap_or("Unknown").to_string(),
-                email: commit.author().email().ok().map(|s| s.to_string()),
-                time: commit.time(),
-                parents,
-                files_changed,
-                additions,
-                deletions,
-            });
+            commits.push(info);
         }
 
         Ok(commits)
     })
+}
+
+fn matches_filter(commit: &git2::Commit<'_>, filter: &CommitFilter) -> bool {
+    if let Some(author_filter) = &filter.author {
+        let author_text = format!(
+            "{} {}",
+            commit.author().name().unwrap_or_default(),
+            commit.author().email().unwrap_or_default()
+        )
+        .to_lowercase();
+        if !author_text.contains(&author_filter.to_lowercase()) {
+            return false;
+        }
+    }
+
+    if let Some(search) = &filter.search {
+        let search_lower = search.to_lowercase();
+        let message = commit.message().unwrap_or_default().to_lowercase();
+        let summary = commit
+            .summary()
+            .ok()
+            .flatten()
+            .unwrap_or_default()
+            .to_lowercase();
+        if !message.contains(&search_lower) && !summary.contains(&search_lower) {
+            return false;
+        }
+    }
+
+    let timestamp = commit.time().seconds();
+    filter.since.is_none_or(|since| timestamp >= since)
+        && filter.until.is_none_or(|until| timestamp <= until)
 }
 
 pub fn latest_commit_for_branch(

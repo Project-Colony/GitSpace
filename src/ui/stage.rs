@@ -194,7 +194,9 @@ impl StagePanel {
             }
             Message::ApplyStash(index) => {
                 if let Some(repo) = repo {
-                    match apply_stash(repo.path(), index) {
+                    let id = self.stashes.iter().find(|s| s.index == index);
+                    let id = id.map_or("", |s| s.id.as_str());
+                    match apply_stash(repo.path(), index, id) {
                         Ok(_) => {
                             self.status = Some(format!("Applied stash #{index}"));
                             self.needs_refresh = true;
@@ -208,7 +210,9 @@ impl StagePanel {
             }
             Message::DropStash(index) => {
                 if let Some(repo) = repo {
-                    match drop_stash(repo.path(), index) {
+                    let id = self.stashes.iter().find(|s| s.index == index);
+                    let id = id.map_or("", |s| s.id.as_str());
+                    match drop_stash(repo.path(), index, id) {
                         Ok(_) => {
                             self.status = Some(format!("Dropped stash #{index}"));
                             self.needs_refresh = true;

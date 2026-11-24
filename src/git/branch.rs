@@ -31,11 +31,6 @@ pub struct TrackingBranch {
 pub fn list_branches<P: AsRef<Path>>(repo_path: P) -> Result<Vec<BranchEntry>, Error> {
     // Utilise le cache thread-local au lieu de Repository::open()
     with_cached_repo(repo_path, |repo| {
-        let head_name = repo
-            .head()
-            .ok()
-            .and_then(|head| head.shorthand().ok().map(|s| s.to_string()));
-
         let mut entries = Vec::new();
         for branch_result in repo.branches(None)? {
             let (branch, branch_type) = branch_result?;
@@ -50,15 +45,10 @@ pub fn list_branches<P: AsRef<Path>>(repo_path: P) -> Result<Vec<BranchEntry>, E
                     BranchType::Remote => BranchKind::Remote,
                 };
 
-                let is_head = head_name
-                    .as_ref()
-                    .map(|current| current == name)
-                    .unwrap_or(false);
-
                 entries.push(BranchEntry {
                     name: name.to_string(),
                     kind,
-                    is_head,
+                    is_head: branch.is_head(),
                     upstream,
                 });
             }
@@ -178,7 +168,8 @@ pub fn checkout_branch<P: AsRef<Path>>(repo_path: P, name: &str) -> Result<(), E
             Err(_) => repo.revparse_ext(name)?,
         };
 
-        repo.checkout_tree(&object, Some(CheckoutBuilder::default().force()))?;
+        // Safe checkout: libgit2 fails instead of overwriting a modified file.
+        repo.checkout_tree(&object, Some(&mut CheckoutBuilder::new()))?;
         if let Some(reference) = reference {
             if let Ok(name) = reference.name() {
                 repo.set_head(name)?;
