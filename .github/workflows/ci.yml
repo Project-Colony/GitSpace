@@ -61,7 +61,7 @@ jobs:
 
   # Holds `rust-version` in Cargo.toml honest: the oldest toolchain it promises.
   msrv:
-    name: MSRV (Rust 1.100)
+    name: MSRV
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
