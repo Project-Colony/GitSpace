@@ -1,6 +1,9 @@
 // Panneau de vue d'ensemble du dépôt — migration Iced 0.13
 // Affiche le statut, les remotes, les actions rapides et le contexte d'auto-fetch.
 
+use std::ffi::OsStr;
+use std::io::ErrorKind;
+use std::path::Path;
 use std::process::Command as ProcessCommand;
 
 use iced::widget::{button, container, horizontal_rule, text, Column, Row};
@@ -505,64 +508,22 @@ impl RepoOverviewPanel {
 
     /// Ouvre un terminal dans le répertoire du dépôt.
     fn open_terminal(&self, repo: &RepoContext) -> Result<String, String> {
-        #[cfg(target_os = "windows")]
-        {
-            ProcessCommand::new("cmd")
-                .args(["/K", "cd", "/d", repo.path()])
-                .spawn()
-                .map_err(|err| err.to_string())?;
-            return Ok("Terminal opened".to_string());
+        let path = Path::new(repo.path());
+        if !path.is_dir() {
+            return Err(format!("Repository folder not found: {}", repo.path()));
         }
 
-        #[cfg(target_os = "macos")]
-        {
-            ProcessCommand::new("open")
-                .args(["-a", "Terminal", repo.path()])
-                .spawn()
-                .map_err(|err| err.to_string())?;
-            return Ok("Terminal opened".to_string());
-        }
-
-        #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-        {
-            let xterm_command = format!("cd '{}' && exec bash", repo.path());
-            let candidates: Vec<(&str, Vec<String>)> = vec![
-                ("x-terminal-emulator", Vec::new()),
-                (
-                    "gnome-terminal",
-                    vec!["--working-directory".into(), repo.path().to_string()],
-                ),
-                ("konsole", vec!["--workdir".into(), repo.path().to_string()]),
-                (
-                    "xfce4-terminal",
-                    vec!["--working-directory".into(), repo.path().to_string()],
-                ),
-                (
-                    "xterm",
-                    vec!["-e".into(), "bash".into(), "-lc".into(), xterm_command],
-                ),
-                (
-                    "alacritty",
-                    vec!["--working-directory".into(), repo.path().to_string()],
-                ),
-                ("kitty", vec!["--directory".into(), repo.path().to_string()]),
-                (
-                    "wezterm",
-                    vec!["start".into(), "--cwd".into(), repo.path().to_string()],
-                ),
-            ];
-
-            for (terminal, args) in candidates {
-                let mut command = ProcessCommand::new(terminal);
-                command.args(args);
-                command.current_dir(repo.path());
-                if command.spawn().is_ok() {
-                    return Ok("Terminal opened".to_string());
-                }
+        let mut error = None;
+        for mut command in terminal_commands(path) {
+            match command.spawn() {
+                Ok(_) => return Ok("Terminal opened".to_string()),
+                Err(err) => error = Some(err),
             }
-
-            Err("No supported terminal emulator found on PATH".to_string())
         }
+        Err(match error {
+            Some(err) if err.kind() != ErrorKind::NotFound => err.to_string(),
+            _ => "No supported terminal emulator found on PATH".to_string(),
+        })
     }
 
     /// Ouvre l'explorateur de fichiers dans le répertoire du dépôt.
@@ -596,9 +557,72 @@ impl RepoOverviewPanel {
 // ── Fonctions utilitaires ──────────────────────────────────────────────────
 
 /// Sépare un upstream "remote/branch" en ses deux composants.
+/// The terminal emulators to try, in order, each opening in `path`.
+///
+/// The path is only ever the working directory or a whole argument, never part of a shell
+/// command line, so characters such as `&`, `'` or spaces in it cannot run anything.
+fn terminal_commands(path: &Path) -> Vec<ProcessCommand> {
+    #[cfg(target_os = "windows")]
+    let candidates: Vec<(&str, Vec<&OsStr>)> = vec![("cmd", Vec::new())];
+
+    #[cfg(target_os = "macos")]
+    let candidates: Vec<(&str, Vec<&OsStr>)> = vec![(
+        "open",
+        vec!["-a".as_ref(), "Terminal".as_ref(), path.as_os_str()],
+    )];
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let dir = path.as_os_str();
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let candidates: Vec<(&str, Vec<&OsStr>)> = vec![
+        ("x-terminal-emulator", Vec::new()),
+        ("gnome-terminal", vec!["--working-directory".as_ref(), dir]),
+        ("konsole", vec!["--workdir".as_ref(), dir]),
+        ("xfce4-terminal", vec!["--working-directory".as_ref(), dir]),
+        ("xterm", Vec::new()),
+        ("alacritty", vec!["--working-directory".as_ref(), dir]),
+        ("kitty", vec!["--directory".as_ref(), dir]),
+        ("wezterm", vec!["start".as_ref(), "--cwd".as_ref(), dir]),
+    ];
+
+    candidates
+        .into_iter()
+        .map(|(program, args)| {
+            let mut command = ProcessCommand::new(program);
+            command.args(args).current_dir(path);
+            command
+        })
+        .collect()
+}
+
 fn split_upstream(upstream: &str) -> Option<(&str, &str)> {
     let mut parts = upstream.splitn(2, '/');
     let remote = parts.next()?;
     let branch = parts.next()?;
     Some((remote, branch))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_commands_never_put_the_path_in_a_command_line() {
+        for path in ["/tmp/R&D/it's here", "/tmp/a;b $(touch x)", r"C:\R&D\x y"] {
+            let path = Path::new(path);
+            let commands = terminal_commands(path);
+            assert!(!commands.is_empty());
+            for command in &commands {
+                assert_eq!(command.get_current_dir(), Some(path));
+                for arg in command.get_args() {
+                    assert!(
+                        arg == path.as_os_str()
+                            || !arg.to_string_lossy().contains(&*path.to_string_lossy()),
+                        "{:?} embeds the path in {arg:?}",
+                        command.get_program()
+                    );
+                }
+            }
+        }
+    }
 }
