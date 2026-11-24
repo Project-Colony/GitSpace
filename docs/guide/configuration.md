@@ -34,7 +34,9 @@ GitSpace never saves over a file it could not read:
   GitSpace started or `GITSPACE_TOKEN_MASTER_PASSWORD` changed or is no longer set: saving or
   removing a token fails with an error and the file is left as it is. Unlock the keyring or set
   the same master password, then restart GitSpace. If the key is gone for good, move
-  `tokens.enc` aside to start over.
+  `tokens.enc` aside to start over. Tokens saved while the keyring was locked are encrypted
+  with `token-local-key.bin`; the next start with the keyring unlocked reads them with that
+  key and saves them again under the keyring key.
 - **`token-hosts.json` cannot be read**: the host list is left as it is and the error is
   logged.
 

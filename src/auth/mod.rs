@@ -214,6 +214,9 @@ impl AuthManager {
 #[derive(Clone)]
 pub struct TokenStorage {
     key: SecureKey,
+    /// The local key file, when `key` comes from the keyring: `tokens.enc` may have been
+    /// written with the local key while the keyring was locked.
+    local_key_path: Option<PathBuf>,
     path: PathBuf,
     host_path: PathBuf,
     allow_encrypted_fallback: bool,
@@ -248,13 +251,16 @@ struct EncryptedTokenFile {
 
 impl TokenStorage {
     pub fn new(allow_encrypted_fallback: bool) -> Self {
-        let key = load_or_create_keyring_key()
-            .map_err(|err| {
+        let (key, local_key_path) = match load_or_create_keyring_key() {
+            Ok(key) => (key, Some(config_dir().join(TOKEN_LOCAL_KEY_FILE))),
+            Err(err) => {
                 warn!(target: "gitspace::auth", error = %err, "failed to access keyring encryption key");
-            })
-            .unwrap_or_else(|_| load_or_create_local_key());
+                (load_or_create_local_key(), None)
+            }
+        };
         Self {
             key: SecureKey(key),
+            local_key_path,
             path: config_dir().join(TOKEN_FILE_NAME),
             host_path: config_dir().join(HOST_FILE_NAME),
             allow_encrypted_fallback,
@@ -429,7 +435,28 @@ impl TokenStorage {
         };
         let blob: EncryptedTokenFile = serde_json::from_str(&data)
             .map_err(|err| format!("Failed to parse credential file: {err}"))?;
-        decrypt_tokens(&blob, &self.key.0)
+        let err = match decrypt_tokens(&blob, &self.key.0) {
+            Ok(map) => return Ok(map),
+            Err(err) => err,
+        };
+
+        // Written with the local key while the keyring was locked: decrypt it with that key
+        // and save it again under the keyring key.
+        let Some(mut local_key) = self.local_key_path.as_deref().and_then(read_local_key) else {
+            return Err(err);
+        };
+        let result = decrypt_tokens(&blob, &local_key);
+        local_key.zeroize();
+        let map = result.map_err(|_| err)?;
+        match self.write_fallback(&map) {
+            Ok(()) => {
+                info!(target: "gitspace::auth", "re-encrypted saved tokens with the keyring key")
+            }
+            Err(err) => {
+                warn!(target: "gitspace::auth", error = %err, "failed to re-encrypt saved tokens with the keyring key")
+            }
+        }
+        Ok(map)
     }
 
     fn record_host(&self, host: &str) -> Result<(), String> {
@@ -528,6 +555,14 @@ fn load_or_create_local_key() -> [u8; 32] {
     let mut key = load_or_create_secret(&dir.join(TOKEN_LOCAL_KEY_FILE));
     mix_master_password(&mut key, &dir);
     key
+}
+
+/// Reads the local key without creating it, mixed with the master password like
+/// [`load_or_create_local_key`].
+fn read_local_key(path: &Path) -> Option<[u8; 32]> {
+    let mut key: [u8; 32] = fs::read(path).ok()?.try_into().ok()?;
+    mix_master_password(&mut key, path.parent().unwrap_or(Path::new(".")));
+    Some(key)
 }
 
 /// XORs the key derived from `GITSPACE_TOKEN_MASTER_PASSWORD`, if set, into `key`.
@@ -788,6 +823,7 @@ mod tests {
     fn storage_in(dir: &std::path::Path) -> TokenStorage {
         TokenStorage {
             key: SecureKey(Generate::generate()),
+            local_key_path: Some(dir.join(TOKEN_LOCAL_KEY_FILE)),
             path: dir.join(TOKEN_FILE_NAME),
             host_path: dir.join(HOST_FILE_NAME),
             allow_encrypted_fallback: true,
@@ -887,6 +923,33 @@ mod tests {
             let mode = fs::metadata(path).expect("metadata").permissions().mode();
             assert_eq!(mode & 0o777, 0o600, "{}", path.display());
         }
+    }
+
+    #[test]
+    fn tokens_saved_with_the_local_key_open_once_the_keyring_is_back() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // First run, keyring locked: the local key encrypts the file.
+        let local_key: [u8; 32] = load_or_create_secret(&dir.path().join(TOKEN_LOCAL_KEY_FILE));
+        let locked = TokenStorage {
+            key: SecureKey(local_key),
+            local_key_path: None,
+            ..storage_in(dir.path())
+        };
+        locked
+            .persist_fallback("github.com", "token")
+            .expect("save");
+
+        // Next run, keyring unlocked: another key, the local one as a fallback.
+        let unlocked = storage_in(dir.path());
+        assert_eq!(
+            unlocked.read_fallback().expect("decrypt").tokens["github.com"],
+            "token"
+        );
+        // The file is now encrypted with the keyring key.
+        let blob: EncryptedTokenFile =
+            serde_json::from_slice(&fs::read(&unlocked.path).expect("read")).expect("parse");
+        assert!(decrypt_tokens(&blob, &unlocked.key.0).is_ok());
+        assert!(decrypt_tokens(&blob, &local_key).is_err());
     }
 
     #[test]
