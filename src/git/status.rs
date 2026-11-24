@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use git2::{BranchType, Status, StatusOptions};
+use git2::{BranchType, ErrorCode, Status, StatusOptions};
 // Utilise le cache thread-local pour éviter de réouvrir le dépôt à chaque appel
 use crate::git::repo_cache::with_cached_repo;
 
@@ -24,7 +24,21 @@ pub struct WorkingTreeStatus {
 pub fn read_repo_status<P: AsRef<Path>>(path: P) -> Result<RepoStatus, git2::Error> {
     // Lecture seule du statut — utilise le cache thread-local
     with_cached_repo(path, |repo| {
-        let head = repo.head()?;
+        let head = match repo.head() {
+            Ok(head) => head,
+            // A fresh `git init`: HEAD names a branch with no commit yet.
+            Err(err) if err.code() == ErrorCode::UnbornBranch => {
+                let head = repo.find_reference("HEAD")?;
+                let branch = head
+                    .symbolic_target()?
+                    .map(|target| target.strip_prefix("refs/heads/").unwrap_or(target));
+                return Ok(RepoStatus {
+                    branch: branch.map(str::to_string),
+                    ..RepoStatus::default()
+                });
+            }
+            Err(err) => return Err(err),
+        };
 
         if !head.is_branch() {
             return Ok(RepoStatus {

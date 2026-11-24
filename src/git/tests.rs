@@ -12,7 +12,9 @@ use crate::git::branch;
 use crate::git::branch::{
     list_branches, list_tracking_branches, rename_branch, set_upstream, unset_upstream, BranchKind,
 };
-use crate::git::diff::{commit_diff, diff_file, staged_diff, working_tree_diff};
+use crate::git::diff::{
+    commit_diff, commit_diff_file, commit_diff_summaries, diff_file, staged_diff, working_tree_diff,
+};
 use crate::git::discovery::{find_repo_root, is_git_repo, list_submodules, list_worktrees};
 use crate::git::log::{read_commit_log, CommitFilter};
 use crate::git::merge::detect_conflicts;
@@ -607,6 +609,108 @@ fn worktrees_and_submodules_are_listed() {
     assert!(worktrees
         .iter()
         .any(|path| fs::canonicalize(path).ok().as_ref() == Some(&expected)));
+}
+
+#[test]
+fn commit_diff_summaries_count_lines() {
+    let (_dir, repo) = init_temp_repo();
+    let path = repo.path().parent().unwrap().to_str().unwrap().to_string();
+    write_commit(&repo, "lines.txt", "one\nold\n", "initial");
+    let second = write_commit(&repo, "lines.txt", "one\ntwo\nthree\n", "edit");
+
+    let summaries = commit_diff_summaries(&path, &second.to_string()).expect("summaries");
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].path, "lines.txt");
+    assert_eq!((summaries[0].additions, summaries[0].deletions), (2, 1));
+    assert!(!summaries[0].is_binary);
+}
+
+#[test]
+fn patch_text_prefixes_only_content_lines() {
+    let (_dir, repo) = init_temp_repo();
+    let path = repo.path().parent().unwrap().to_str().unwrap().to_string();
+    write_commit(&repo, "p.txt", "a\n", "initial");
+    let second = write_commit(&repo, "p.txt", "a\nb", "no newline at end");
+
+    let diff = commit_diff_file(&path, &second.to_string(), "p.txt")
+        .expect("diff")
+        .expect("entry");
+    let lines: Vec<&str> = diff.patch.lines().collect();
+    assert!(lines[0].starts_with("diff --git"), "{}", diff.patch);
+    assert!(lines.iter().any(|line| line.starts_with("@@")));
+    assert!(lines.contains(&"+b"));
+    assert!(lines.contains(&"\\ No newline at end of file"));
+}
+
+#[test]
+fn single_file_diffs_take_the_path_literally() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    let path = root.to_str().unwrap();
+    write_commit(&repo, "d.md", "other\n", "decoy");
+    let commit = write_commit(&repo, "[draft].md", "draft\n", "add draft");
+
+    let in_commit = commit_diff_file(path, &commit.to_string(), "[draft].md")
+        .expect("commit diff")
+        .expect("entry");
+    assert_eq!(in_commit.path, "[draft].md");
+
+    fs::write(root.join("[draft].md"), "draft\nmore\n").unwrap();
+    fs::write(root.join("d.md"), "changed\n").unwrap();
+    let in_workdir = diff_file(path, "[draft].md", false)
+        .expect("diff")
+        .expect("entry");
+    assert_eq!(in_workdir.path, "[draft].md");
+}
+
+#[test]
+fn log_limit_counts_matching_commits() {
+    let (_dir, repo) = init_temp_repo();
+    let path = repo.path().parent().unwrap().to_str().unwrap().to_string();
+    write_commit(&repo, "f.txt", "0", "needle in the oldest commit");
+    for i in 1..5 {
+        write_commit(&repo, "f.txt", &i.to_string(), &format!("hay {i}"));
+    }
+
+    let filter = CommitFilter {
+        search: Some("needle".to_string()),
+        ..Default::default()
+    };
+    let commits = read_commit_log(&path, &filter, 2, false).expect("log");
+    assert_eq!(commits.len(), 1);
+    assert!(commits[0].summary.contains("needle"));
+}
+
+#[test]
+fn log_branch_filter_accepts_remote_branches() {
+    let (_dir, repo) = init_temp_repo();
+    let path = repo.path().parent().unwrap().to_str().unwrap().to_string();
+    let first = write_commit(&repo, "f.txt", "1", "first");
+    write_commit(&repo, "f.txt", "2", "second");
+    repo.reference("refs/remotes/origin/x", first, true, "test")
+        .unwrap();
+
+    let filter = CommitFilter {
+        branch: Some("origin/x".to_string()),
+        ..Default::default()
+    };
+    let commits = read_commit_log(&path, &filter, 10, false).expect("log");
+    assert_eq!(commits.len(), 1);
+    assert_eq!(commits[0].id, first.to_string());
+}
+
+#[test]
+fn unborn_repository_has_a_branch_and_an_empty_log() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+
+    let status = read_repo_status(root).expect("status");
+    assert_eq!(status.branch.as_deref(), Some("main"));
+    assert!(status.upstream.is_none());
+
+    let log =
+        read_commit_log(root.to_str().unwrap(), &CommitFilter::default(), 10, false).expect("log");
+    assert!(log.is_empty());
 }
 
 #[test]
