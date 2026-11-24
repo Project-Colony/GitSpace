@@ -48,7 +48,6 @@ impl MainTab {
 pub enum LayoutMessage {
     TabSelected(MainTab),
     HeaderClicked,
-    SidebarNav(MainTab),
     OpenFileManager,
     CopyPath,
 }
@@ -112,17 +111,12 @@ pub fn view_sidebar<'a>(
             .size(theme.typography.label)
             .color(theme.palette.text_secondary),
     );
-    for (label, tab) in [
-        ("Recent", MainTab::Open),
-        ("Favorites", MainTab::Open),
-        ("Local Repos", MainTab::Open),
-        ("Remote Repos", MainTab::Clone),
-    ] {
+    for (label, tab) in [("Recent", MainTab::Open), ("Remote Repos", MainTab::Clone)] {
         sidebar = sidebar.push(menu::menu_item(
             theme,
             label,
             active_tab == tab,
-            LayoutMessage::SidebarNav(tab),
+            LayoutMessage::TabSelected(tab),
         ));
     }
 
@@ -142,7 +136,7 @@ pub fn view_sidebar<'a>(
             theme,
             label,
             active_tab == tab,
-            LayoutMessage::SidebarNav(tab),
+            LayoutMessage::TabSelected(tab),
         ));
     }
 

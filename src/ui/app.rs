@@ -152,9 +152,6 @@ impl GitSpaceApp {
                     LayoutMessage::HeaderClicked => {
                         self.preferences_panel.toggle();
                     }
-                    LayoutMessage::SidebarNav(tab) => {
-                        self.active_tab = tab;
-                    }
                     LayoutMessage::OpenFileManager => {
                         if let Some(repo) = &self.current_repo {
                             let _ = open::that(repo.path());

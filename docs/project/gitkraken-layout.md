@@ -24,8 +24,7 @@ This page describes the shell as it is built today, in `src/ui/layout.rs` and
   replaces the whole window until it is closed (General, Appearance, Accessibility and
   GitSpace categories).
 - **Left rail.** A resizable side panel, 220 px wide by default, in three groups:
-  - *Workspaces*: Recent, Favorites and Local Repos open the Open tab; Remote Repos opens
-    Clone.
+  - *Workspaces*: Recent opens the Open tab; Remote Repos opens Clone.
   - *Actions*: Clone, Open, New Branch (the Branches tab) and Sync (the Stage tab).
   - *Context*: the active repository with its path, and buttons to open it in the file
     manager or copy its path. "No repository selected" until one is open.
