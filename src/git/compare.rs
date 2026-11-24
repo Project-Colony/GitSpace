@@ -13,8 +13,6 @@ pub struct BranchCommit {
     pub id: String,
     pub summary: String,
     pub author: String,
-    #[allow(dead_code)] // not displayed by the comparison view yet
-    pub time: git2::Time,
 }
 
 #[derive(Debug, Clone)]
@@ -70,13 +68,11 @@ fn branch_commit(
         .unwrap_or_default()
         .to_string();
     let author = commit.author().name().unwrap_or("Unknown").to_string();
-    let time = commit.time();
 
     Ok(Some(BranchCommit {
         id,
         summary,
         author,
-        time,
     }))
 }
 

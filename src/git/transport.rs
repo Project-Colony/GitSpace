@@ -4,7 +4,6 @@
 //! and credential callbacks to avoid code duplication across clone.rs and remote.rs.
 
 // Some utilities are designed for future use or as public API surface
-#![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 use std::sync::Once;
@@ -56,23 +55,6 @@ fn is_ssh_url(url: &str) -> bool {
     };
     let is_drive = colon == 1 && url.as_bytes()[0].is_ascii_alphabetic();
     colon > 0 && !is_drive && !url[..colon].contains(['/', '\\'])
-}
-
-/// Ensures a URL conforms to HTTPS policy for API requests.
-pub fn enforce_https_policy(url: &str, network: &NetworkOptions) -> Result<(), AppError> {
-    if url.starts_with("https://") && !network.use_https {
-        return Err(AppError::Validation(
-            "HTTPS endpoints are disabled in your network settings.".to_string(),
-        ));
-    }
-
-    if url.starts_with("http://") && network.use_https {
-        return Err(AppError::Validation(
-            "HTTP requests are blocked. Enable HTTP in network settings or use HTTPS.".to_string(),
-        ));
-    }
-
-    Ok(())
 }
 
 /// Sends git traffic for `url` through the proxy set in Preferences for its scheme: the HTTPS
@@ -377,18 +359,6 @@ mod tests {
         let mut network = default_network();
         network.allow_ssh = false;
         assert!(validate_transport_url("git@github.com:user/repo.git", &network).is_err());
-    }
-
-    #[test]
-    fn enforce_https_blocks_http() {
-        let network = default_network();
-        assert!(enforce_https_policy("http://api.github.com", &network).is_err());
-    }
-
-    #[test]
-    fn enforce_https_allows_https() {
-        let network = default_network();
-        assert!(enforce_https_policy("https://api.github.com", &network).is_ok());
     }
 
     #[test]

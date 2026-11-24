@@ -23,8 +23,6 @@ pub struct CommitInfo {
     pub author: String,
     pub email: Option<String>,
     pub time: Time,
-    #[allow(dead_code)] // tested, not used by the iced UI yet
-    pub parents: Vec<String>,
     pub files_changed: Option<usize>,
     pub additions: Option<usize>,
     pub deletions: Option<usize>,
@@ -224,7 +222,6 @@ fn commit_info_from_commit(commit: &git2::Commit<'_>) -> CommitInfo {
         author: commit.author().name().unwrap_or("Unknown").to_string(),
         email: commit.author().email().ok().map(|s| s.to_string()),
         time: commit.time(),
-        parents: commit.parents().map(|p| p.id().to_string()).collect(),
         files_changed: None,
         additions: None,
         deletions: None,

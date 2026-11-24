@@ -653,12 +653,12 @@ impl HistoryPanel {
             move |repo| match commit_diff_file(repo, &job_id, &job_path) {
                 Ok(Some(diff)) => Ok(diff),
                 // Fichier absent du diff, inserer un espace reserve
-                Ok(None) => Ok(placeholder_diff(&job_path, "(pas de modifications)")),
+                Ok(None) => Ok(placeholder_diff("(pas de modifications)")),
                 Err(err) => Err(err.to_string()),
             },
             move |repo, result| {
                 let diff = result.unwrap_or_else(|err| {
-                    placeholder_diff(&file_path, &format!("Erreur de chargement du diff : {err}"))
+                    placeholder_diff(&format!("Erreur de chargement du diff : {err}"))
                 });
                 Message::PatchLoaded(repo, id.clone(), file_path.clone(), diff)
             },
@@ -667,9 +667,8 @@ impl HistoryPanel {
 }
 
 /// Diff sans contenu reel, affiche a la place d'un patch absent ou en erreur.
-fn placeholder_diff(path: &str, patch: &str) -> FileDiff {
+fn placeholder_diff(patch: &str) -> FileDiff {
     FileDiff {
-        path: path.to_string(),
         additions: 0,
         deletions: 0,
         patch: patch.to_string(),

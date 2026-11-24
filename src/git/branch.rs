@@ -17,15 +17,6 @@ pub struct BranchEntry {
     pub name: String,
     pub kind: BranchKind,
     pub is_head: bool,
-    #[allow(dead_code)] // tested, not used by the iced UI yet
-    pub upstream: Option<String>,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub struct TrackingBranch {
-    pub local: String,
-    pub upstream: String,
 }
 
 pub fn list_branches<P: AsRef<Path>>(repo_path: P) -> Result<Vec<BranchEntry>, Error> {
@@ -35,11 +26,6 @@ pub fn list_branches<P: AsRef<Path>>(repo_path: P) -> Result<Vec<BranchEntry>, E
         for branch_result in repo.branches(None)? {
             let (branch, branch_type) = branch_result?;
             if let Some(name) = branch.name()? {
-                let upstream = branch
-                    .upstream()
-                    .ok()
-                    .and_then(|upstream| upstream.name().ok().flatten().map(|s| s.to_string()));
-
                 let kind = match branch_type {
                     BranchType::Local => BranchKind::Local,
                     BranchType::Remote => BranchKind::Remote,
@@ -49,7 +35,6 @@ pub fn list_branches<P: AsRef<Path>>(repo_path: P) -> Result<Vec<BranchEntry>, E
                     name: name.to_string(),
                     kind,
                     is_head: branch.is_head(),
-                    upstream,
                 });
             }
         }
@@ -88,56 +73,6 @@ pub fn create_tracking_branch<P: AsRef<Path>>(
         let mut local_branch = repo.find_branch(&local_name, BranchType::Local)?;
         local_branch.set_upstream(Some(remote_branch))?;
         Ok(local_name)
-    })
-}
-
-#[allow(dead_code)]
-pub fn set_upstream<P: AsRef<Path>>(
-    repo_path: P,
-    local: &str,
-    upstream: &str,
-) -> Result<(), Error> {
-    // Configure l'upstream via le dépôt mis en cache
-    with_cached_repo(repo_path, |repo| {
-        let mut branch = repo.find_branch(local, BranchType::Local)?;
-        branch.set_upstream(Some(upstream))?;
-        Ok(())
-    })
-}
-
-#[allow(dead_code)]
-pub fn unset_upstream<P: AsRef<Path>>(repo_path: P, local: &str) -> Result<(), Error> {
-    // Supprime l'upstream via le dépôt mis en cache
-    with_cached_repo(repo_path, |repo| {
-        let mut branch = repo.find_branch(local, BranchType::Local)?;
-        branch.set_upstream(None)?;
-        Ok(())
-    })
-}
-
-#[allow(dead_code)]
-pub fn list_tracking_branches<P: AsRef<Path>>(repo_path: P) -> Result<Vec<TrackingBranch>, Error> {
-    // Liste les branches de suivi via le dépôt mis en cache
-    with_cached_repo(repo_path, |repo| {
-        let mut entries = Vec::new();
-        for branch_result in repo.branches(Some(BranchType::Local))? {
-            let (branch, _) = branch_result?;
-            let Some(name) = branch.name()? else {
-                continue;
-            };
-            let upstream = branch
-                .upstream()
-                .ok()
-                .and_then(|upstream| upstream.name().ok().flatten().map(|s| s.to_string()));
-            if let Some(upstream) = upstream {
-                entries.push(TrackingBranch {
-                    local: name.to_string(),
-                    upstream,
-                });
-            }
-        }
-        entries.sort_by(|a, b| a.local.cmp(&b.local));
-        Ok(entries)
     })
 }
 

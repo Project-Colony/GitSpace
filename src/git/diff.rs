@@ -9,8 +9,6 @@ const MAX_PATCH_SIZE: usize = 64 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct FileDiff {
-    #[allow(dead_code)] // tested, not used by the iced UI yet
-    pub path: String,
     pub additions: usize,
     pub deletions: usize,
     pub patch: String,
@@ -42,8 +40,7 @@ fn collect_diff_files(diff: Diff) -> Result<Vec<FileDiff>, git2::Error> {
 
     diff.print(DiffFormat::Patch, |delta, _hunk, line| {
         let path = delta_path(&delta);
-        let entry = files.entry(path.clone()).or_insert_with(|| FileDiff {
-            path,
+        let entry = files.entry(path).or_insert_with(|| FileDiff {
             additions: 0,
             deletions: 0,
             patch: String::with_capacity(1024),
@@ -86,8 +83,7 @@ fn collect_diff_files(diff: Diff) -> Result<Vec<FileDiff>, git2::Error> {
     // Files without textual output (e.g., binary) get a placeholder.
     for delta in diff.deltas() {
         let path = delta_path(&delta);
-        files.entry(path.clone()).or_insert_with(|| FileDiff {
-            path,
+        files.entry(path).or_insert_with(|| FileDiff {
             additions: 0,
             deletions: 0,
             patch: String::from("Binary file change\n"),
@@ -162,15 +158,6 @@ fn single_path_options(path: &str) -> DiffOptions {
     options
 }
 
-/// Get full diff for all files in a commit (prefer commit_diff_summaries + commit_diff_file for lazy loading)
-#[allow(dead_code)] // tested, not used by the iced UI yet
-pub fn commit_diff(repo_path: &str, oid: &str) -> Result<Vec<FileDiff>, git2::Error> {
-    let oid = Oid::from_str(oid)?;
-    with_cached_repo(repo_path, |repo| {
-        collect_diff_files(commit_against_parent(repo, oid, None)?)
-    })
-}
-
 /// Get only summaries for a commit (for lazy loading - no patch content)
 pub fn commit_diff_summaries(
     repo_path: &str,
@@ -193,33 +180,6 @@ pub fn commit_diff_file(
         let mut options = single_path_options(file_path);
         let diff = commit_against_parent(repo, oid, Some(&mut options))?;
         Ok(collect_diff_files(diff)?.into_iter().next())
-    })
-}
-
-// Diff de l'arbre de travail — comparaison index/répertoire de travail
-#[allow(dead_code)] // tested, not used by the iced UI yet
-pub fn working_tree_diff(repo_path: &str) -> Result<Vec<FileDiff>, git2::Error> {
-    with_cached_repo(repo_path, |repo| {
-        let mut index = repo.index()?;
-        index.read(true)?;
-        let mut options = DiffOptions::new();
-        options.include_untracked(true);
-        let diff = repo.diff_index_to_workdir(Some(&index), Some(&mut options))?;
-
-        collect_diff_files(diff)
-    })
-}
-
-// Diff des fichiers indexés (staged) — comparaison HEAD/index
-#[allow(dead_code)] // tested, not used by the iced UI yet
-pub fn staged_diff(repo_path: &str) -> Result<Vec<FileDiff>, git2::Error> {
-    with_cached_repo(repo_path, |repo| {
-        let mut index = repo.index()?;
-        index.read(true)?;
-        let base_tree = head_tree(repo)?;
-        let diff = repo.diff_tree_to_index(base_tree.as_ref(), Some(&index), None)?;
-
-        collect_diff_files(diff)
     })
 }
 
