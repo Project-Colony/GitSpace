@@ -5,10 +5,9 @@
 GitSpace draws its window with [egui](https://github.com/emilk/egui) 0.27, run by eframe with
 the OpenGL (glow) renderer. Panels are immediate-mode: every frame, `GitSpaceApp::update`
 in `src/ui/app.rs` lays out the header, the left rail and the active tab again from the
-application state. Clone, repository search, token checks, OAuth sign-in and auto-fetch run
-on a background thread behind a `poll_promise::Promise`, so the window keeps drawing while
-they wait on the network. Fetch, pull and push started from Repo Overview do not yet: they
-run on the UI thread, and the window stops responding until they finish.
+application state. Clone, repository search, token checks, OAuth sign-in, auto-fetch, and
+fetch, pull and push started from Repo Overview run on a background thread behind a
+`poll_promise::Promise`, so the window keeps drawing while they wait on the network.
 
 The look is GitSpace's own: four Catppuccin palettes in `src/ui/theme.rs`, the bundled
 JetBrains Mono Nerd Font in `src/ui/fonts.rs`, and hand-drawn menu items in `src/ui/menu.rs`.

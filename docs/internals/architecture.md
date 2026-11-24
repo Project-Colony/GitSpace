@@ -32,9 +32,9 @@ Preferences. `settings.rs` is an older settings panel that the tab strip no long
 Shared pieces: `theme.rs` (the Catppuccin palettes), `menu.rs` (menu items and tab buttons),
 `fonts.rs` (the bundled JetBrains Mono Nerd Font) and `notifications.rs` (toasts).
 
-Network work that can take a while (clone, repository search, token checks, OAuth, auto-fetch)
-runs on a thread behind a `poll_promise::Promise` that the frame polls. Fetch, pull and push
-from Repo Overview still run on the UI thread.
+Network work that can take a while (clone, repository search, token checks, OAuth, auto-fetch,
+and fetch, pull and push from Repo Overview) runs on a thread behind a `poll_promise::Promise`
+that the frame polls.
 
 ## `git`: repository operations
 

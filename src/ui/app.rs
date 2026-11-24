@@ -3,8 +3,7 @@
 //! Centralise le modèle, les messages, le dispatch update/view,
 //! les subscriptions (auto-fetch, notifications, clavier) et le thème.
 
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use iced::widget::{column, container, row};
 use iced::{Element, Length, Subscription, Task};
@@ -12,7 +11,6 @@ use iced::{Element, Length, Subscription, Task};
 use crate::auth::AuthManager;
 use crate::config::{AppConfig, LoggingOptions, Preferences};
 use crate::error::logs_directory;
-use crate::git::remote::fetch_remote;
 use crate::ui::{
     auth::AuthPanel,
     branches::BranchPanel,
@@ -23,7 +21,7 @@ use crate::ui::{
     notifications::{Notification, NotificationAction, NotificationCenter},
     preferences::PreferencesPanel,
     recent::RecentList,
-    repo_overview::RepoOverviewPanel,
+    repo_overview::{self, RepoOverviewPanel},
     stage::StagePanel,
     theme::Theme,
 };
@@ -52,16 +50,11 @@ pub enum Message {
     // Chargement async du contexte d'un depot
     RepoContextLoaded(String, Option<RepoContext>),
 
-    // Mises a jour automatiques
-
-    // Auto-fetch
-    AutoFetchResult(AutoFetchOutcome),
-
     // Tick de nettoyage notifications
     NotificationTick,
 
     // Auto-fetch timer tick
-    AutoFetchTick(Instant),
+    AutoFetchTick,
 }
 
 // ─── Modele principal ──────────────────────────────────────────────────────
@@ -85,15 +78,10 @@ pub struct GitSpaceApp {
     // Etat global
     config: AppConfig,
     current_repo: Option<RepoContext>,
+    /// Dernier depot demande : seul son resultat de chargement est applique.
+    pending_repo: Option<String>,
     auth_manager: AuthManager,
     notifications: NotificationCenter,
-
-    // Mise a jour
-
-    // Auto-fetch
-    auto_fetch_last: Option<Instant>,
-    auto_fetch_in_progress: bool,
-    auto_fetch_repo: Option<Arc<str>>,
 }
 
 impl GitSpaceApp {
@@ -106,14 +94,12 @@ impl GitSpaceApp {
         let theme = Theme::from_mode(preferences.theme_mode());
         let auth_manager =
             AuthManager::with_encrypted_fallback(preferences.allow_encrypted_tokens());
-        let current_repo = config
+        let last_repo = config
             .recent_repos()
             .first()
-            .and_then(|entry| RepoContext::from_path(&entry.path));
+            .map(|entry| entry.path.clone());
 
-        let tab_order = MainTab::ALL.to_vec();
-
-        let app = Self {
+        let mut app = Self {
             clone_panel: ClonePanel::new(default_clone_path, preferences.network().clone()),
             recent_list: RecentList::new(),
             repo_overview: RepoOverviewPanel::new(preferences.network().clone()),
@@ -124,18 +110,20 @@ impl GitSpaceApp {
             preferences_panel: PreferencesPanel::new(preferences, logging),
             theme,
             config,
-            current_repo,
+            current_repo: None,
+            pending_repo: None,
             auth_manager,
             active_tab: MainTab::Clone,
-            tab_order,
+            tab_order: MainTab::ALL.to_vec(),
             notifications: NotificationCenter::new(),
-            auto_fetch_last: None,
-            auto_fetch_in_progress: false,
-            auto_fetch_repo: None,
         };
 
         let accounts = app.auth_panel.refresh_accounts().map(Message::Auth);
-        (app, accounts)
+        let repo = match last_repo {
+            Some(path) => app.load_repo_context_async(path),
+            None => Task::none(),
+        };
+        (app, Task::batch([accounts, repo]))
     }
 
     // ─── Update ────────────────────────────────────────────────────────
@@ -154,7 +142,12 @@ impl GitSpaceApp {
                     }
                     LayoutMessage::OpenFileManager => {
                         if let Some(repo) = &self.current_repo {
-                            let _ = open::that(repo.path());
+                            if let Err(err) = repo_overview::open_folder(repo.path()) {
+                                self.notifications.push(Notification::error(
+                                    "Impossible d'ouvrir le dossier",
+                                    format!("{} : {err}", repo.path()),
+                                ));
+                            }
                         }
                     }
                     LayoutMessage::CopyPath => {
@@ -191,6 +184,7 @@ impl GitSpaceApp {
 
             // ── Repo overview ──────────────────────────────────────────
             Message::RepoOverview(msg) => {
+                self.notify_auto_fetch_failure(&msg);
                 let task =
                     self.repo_overview
                         .update(msg, self.current_repo.as_ref(), &self.auth_manager);
@@ -261,25 +255,29 @@ impl GitSpaceApp {
 
             // ── Chargement async du contexte depot ──────────────────────
             Message::RepoContextLoaded(path, context) => {
-                self.current_repo = context;
+                // Un chargement plus recent a ete demande : ce resultat est perime.
+                if self.pending_repo.as_deref() != Some(path.as_str()) {
+                    return Task::none();
+                }
+                self.pending_repo = None;
+                let Some(repo) = context else {
+                    self.notifications.push(Notification::error(
+                        "Impossible d'ouvrir le dépôt",
+                        format!("{path} n'est pas un dépôt Git lisible."),
+                    ));
+                    return Task::none();
+                };
                 if self.config.touch_recent(std::path::Path::new(&path)) {
                     self.save_config();
                 }
-                if let Some(repo) = &self.current_repo {
-                    self.repo_overview.refresh(repo);
-                    self.stage_panel.refresh_if_needed(repo);
-                }
-                Task::none()
+                let task = self.repo_overview.refresh(&repo);
+                self.stage_panel.refresh_if_needed(&repo);
+                self.current_repo = Some(repo);
+                task.map(Message::RepoOverview)
             }
 
             // ── Auto-fetch ─────────────────────────────────────────────
-            Message::AutoFetchTick(_now) => self.maybe_start_auto_fetch(),
-
-            Message::AutoFetchResult(outcome) => {
-                self.auto_fetch_in_progress = false;
-                self.handle_auto_fetch_result(outcome);
-                Task::none()
-            }
+            Message::AutoFetchTick => self.maybe_start_auto_fetch(),
         }
     }
 
@@ -412,14 +410,15 @@ impl GitSpaceApp {
             subs.push(iced::time::every(Duration::from_secs(1)).map(|_| Message::NotificationTick));
         }
 
-        // Timer auto-fetch
+        // Timer auto-fetch. Il est recree apres chaque operation du panneau, donc le prochain
+        // auto-fetch part un intervalle apres la derniere operation reseau ou le dernier chargement.
         if self.config.preferences().auto_fetch_enabled()
             && self.current_repo.is_some()
-            && !self.auto_fetch_in_progress
+            && !self.repo_overview.is_busy()
         {
             let interval =
                 Duration::from_secs(self.config.preferences().auto_fetch_interval_minutes() * 60);
-            subs.push(iced::time::every(interval).map(Message::AutoFetchTick));
+            subs.push(iced::time::every(interval).map(|_| Message::AutoFetchTick));
         }
 
         Subscription::batch(subs)
@@ -440,7 +439,8 @@ impl GitSpaceApp {
     /// Lance le chargement async du contexte d'un depot.
     /// Les I/O git sont deplacees dans un thread bloquant pour ne pas
     /// bloquer le thread UI.
-    fn load_repo_context_async(&self, path: String) -> Task<Message> {
+    fn load_repo_context_async(&mut self, path: String) -> Task<Message> {
+        self.pending_repo = Some(path.clone());
         Task::perform(
             async move {
                 let p = path.clone();
@@ -537,105 +537,32 @@ impl GitSpaceApp {
         self.notifications.push(notification);
     }
 
-    /// Demarre l'auto-fetch si les conditions sont remplies.
+    /// Signale l'echec d'un auto-fetch sur le depot courant.
+    fn notify_auto_fetch_failure(&mut self, message: &repo_overview::Message) {
+        if let repo_overview::Message::ActionFinished {
+            path,
+            auto: true,
+            result: Err(err),
+            ..
+        } = message
+        {
+            if self.current_repo.as_ref().map(RepoContext::path) == Some(&**path) {
+                self.notifications
+                    .push(Notification::error("Auto-fetch echoue", err.clone()));
+            }
+        }
+    }
+
+    /// Demarre l'auto-fetch du depot courant si l'option est active.
     fn maybe_start_auto_fetch(&mut self) -> Task<Message> {
-        if self.auto_fetch_in_progress {
+        if !self.config.preferences().auto_fetch_enabled() {
             return Task::none();
         }
-
-        let preferences = self.config.preferences();
-        if !preferences.auto_fetch_enabled() {
-            return Task::none();
-        }
-
         let Some(repo) = self.current_repo.as_ref() else {
             return Task::none();
         };
-
-        // Reinitialiser si le depot a change
-        if self.auto_fetch_repo.as_deref() != Some(repo.path()) {
-            self.auto_fetch_repo = Some(repo.path_arc());
-            self.auto_fetch_last = Some(Instant::now());
-            return Task::none();
-        }
-
-        let context = match self
-            .repo_overview
-            .auto_fetch_context(repo, &self.auth_manager)
-        {
-            Ok(ctx) => ctx,
-            Err(err) => {
-                self.repo_overview
-                    .set_action_status(Some(format!("Auto-fetch echoue: {err}")));
-                self.notifications
-                    .push(Notification::error("Auto-fetch echoue", err));
-                return Task::none();
-            }
-        };
-
-        self.auto_fetch_in_progress = true;
-        self.auto_fetch_last = Some(Instant::now());
         self.repo_overview
-            .set_action_status(Some(format!("Auto-fetch {}...", context.remote_name)));
-
-        let repo_path = context.repo_path.clone();
-        let remote_name = context.remote_name.clone();
-        let token = context.token.clone();
-        let network = context.network.clone();
-
-        Task::perform(
-            async move {
-                tokio::task::spawn_blocking(move || {
-                    let result = fetch_remote(&repo_path, &remote_name, &network, token)
-                        .map(|_| ())
-                        .map_err(|err| err.to_string());
-                    AutoFetchOutcome {
-                        repo_path,
-                        remote_name,
-                        result,
-                    }
-                })
-                .await
-                .unwrap_or_else(|err| AutoFetchOutcome {
-                    repo_path: String::new(),
-                    remote_name: String::new(),
-                    result: Err(err.to_string()),
-                })
-            },
-            Message::AutoFetchResult,
-        )
+            .auto_fetch(repo, &self.auth_manager)
+            .map(Message::RepoOverview)
     }
-
-    /// Traite le resultat d'un auto-fetch.
-    fn handle_auto_fetch_result(&mut self, outcome: AutoFetchOutcome) {
-        match outcome.result {
-            Ok(()) => {
-                if let Some(repo) = &self.current_repo {
-                    if repo.path() == outcome.repo_path {
-                        self.repo_overview.reload_repo_state(repo);
-                    }
-                }
-                self.repo_overview
-                    .set_action_status(Some(format!("Auto-fetch {} termine", outcome.remote_name)));
-            }
-            Err(err) => {
-                self.repo_overview
-                    .set_action_status(Some(format!("Auto-fetch echoue: {err}")));
-                self.notifications.push(Notification::error(
-                    "Auto-fetch echoue",
-                    format!("{} ({})", err, outcome.remote_name),
-                ));
-            }
-        }
-    }
-}
-
-// ─── Helpers hors impl ─────────────────────────────────────────────────────
-
-/// Resultat d'une operation d'auto-fetch.
-#[derive(Debug, Clone)]
-pub struct AutoFetchOutcome {
-    pub repo_path: String,
-    pub remote_name: String,
-    pub result: Result<(), String>,
 }
