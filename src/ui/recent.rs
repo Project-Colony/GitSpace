@@ -21,6 +21,8 @@ pub struct RecentList {
     pub search_applied: String,
     /// Compteur de version pour le mécanisme de debounce.
     pub search_debounce: u32,
+    /// Raccourcis d'accès rapide, calculés une fois au démarrage.
+    common_paths: Vec<(String, String)>,
 }
 
 /// Messages émis par le panneau des dépôts récents.
@@ -47,6 +49,7 @@ impl RecentList {
             search: String::new(),
             search_applied: String::new(),
             search_debounce: 0,
+            common_paths: common_paths(),
         }
     }
 
@@ -76,18 +79,7 @@ impl RecentList {
                 }
                 (Task::none(), None)
             }
-            Message::BrowseClicked => {
-                // Ouvrir le dialogue de fichiers dans un thread bloquant.
-                let task = Task::perform(
-                    tokio::task::spawn_blocking(|| {
-                        rfd::FileDialog::new()
-                            .pick_folder()
-                            .map(|p| p.display().to_string())
-                    }),
-                    |result| Message::BrowseResult(result.ok().flatten()),
-                );
-                (task, None)
-            }
+            Message::BrowseClicked => (pick_folder(None).map(Message::BrowseResult), None),
             Message::BrowseResult(Some(path)) => {
                 self.search.clear();
                 self.search_applied.clear();
@@ -230,8 +222,7 @@ impl RecentList {
         let mut col = column![hint, Space::with_height(8.0), open_btn].spacing(theme.spacing.xs);
 
         // Raccourcis d'accès rapide vers les répertoires courants.
-        let common = Self::common_paths();
-        if !common.is_empty() {
+        if !self.common_paths.is_empty() {
             col = col.push(Space::with_height(8.0));
             col = col.push(
                 text("Quick access")
@@ -239,13 +230,13 @@ impl RecentList {
                     .color(palette.text_secondary),
             );
 
-            for (label, path) in common {
+            for (label, path) in &self.common_paths {
                 let quick_btn = button(
                     text(format!("{label}: {path}"))
                         .size(typo.label)
                         .color(palette.text_secondary),
                 )
-                .on_press(Message::QuickAccessClicked(path));
+                .on_press(Message::QuickAccessClicked(path.clone()));
 
                 col = col.push(quick_btn);
             }
@@ -253,36 +244,55 @@ impl RecentList {
 
         container(col).width(Length::Fill).into()
     }
-
-    /// Renvoie les chemins courants disponibles sur le système (accueil, bureau, etc.).
-    fn common_paths() -> Vec<(String, String)> {
-        let mut paths = Vec::new();
-        let mut seen = HashSet::new();
-
-        let candidates = [
-            ("Home", dirs::home_dir()),
-            ("Desktop", dirs::desktop_dir()),
-            ("Documents", dirs::document_dir()),
-            ("Downloads", dirs::download_dir()),
-        ];
-
-        for (label, path) in candidates {
-            if let Some(path) = path {
-                if path.exists() {
-                    let display = path.display().to_string();
-                    if seen.insert(display.clone()) {
-                        paths.push((label.to_string(), display));
-                    }
-                }
-            }
-        }
-
-        paths
-    }
 }
 
 impl Default for RecentList {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Renvoie les chemins courants disponibles sur le système (accueil, bureau, etc.).
+fn common_paths() -> Vec<(String, String)> {
+    let mut paths = Vec::new();
+    let mut seen = HashSet::new();
+
+    let candidates = [
+        ("Home", dirs::home_dir()),
+        ("Desktop", dirs::desktop_dir()),
+        ("Documents", dirs::document_dir()),
+        ("Downloads", dirs::download_dir()),
+    ];
+
+    for (label, path) in candidates {
+        if let Some(path) = path {
+            if path.exists() {
+                let display = path.display().to_string();
+                if seen.insert(display.clone()) {
+                    paths.push((label.to_string(), display));
+                }
+            }
+        }
+    }
+
+    paths
+}
+
+/// Ouvre le sélecteur de dossier natif hors du thread UI, dans `start` s'il est donné.
+pub fn pick_folder(start: Option<String>) -> Task<Option<String>> {
+    Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || {
+                let mut dialog = rfd::FileDialog::new();
+                if let Some(start) = start {
+                    dialog = dialog.set_directory(start);
+                }
+                dialog.pick_folder().map(|p| p.display().to_string())
+            })
+            .await
+            .ok()
+            .flatten()
+        },
+        std::convert::identity,
+    )
 }
