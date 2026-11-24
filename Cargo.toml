@@ -40,7 +40,6 @@ tracing-appender = "0.2.5"
 argon2 = { version = "0.6.0", default-features = false, features = ["alloc"] }
 thiserror = "2.0.21"
 zeroize = { version = "1.9.2", features = ["derive"] }
-parking_lot = "0.13.0"
 oauth2 = { version = "5.0.0", default-features = false }
 webbrowser = "1.2.7"
 
