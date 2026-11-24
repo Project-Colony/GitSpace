@@ -29,13 +29,6 @@ fn main() {
         .subscription(GitSpaceApp::subscription)
         .theme(GitSpaceApp::theme)
         .font(fonts::FONT_REGULAR)
-        .font(fonts::FONT_MEDIUM)
-        .font(fonts::FONT_SEMIBOLD)
-        .font(fonts::FONT_BOLD)
-        .font(fonts::FONT_ITALIC)
-        .font(fonts::FONT_BOLD_ITALIC)
-        .font(fonts::FONT_MONO_REGULAR)
-        .font(fonts::FONT_MONO_BOLD)
         .default_font(fonts::DEFAULT_FONT)
         .window_size((1280.0, 800.0))
         .run_with(GitSpaceApp::new);

@@ -7,7 +7,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 
 use iced::futures::{SinkExt, Stream};
 use iced::widget::{button, column, container, row, scrollable, text, text_input, Space};
-use iced::{Alignment, Element, Font, Length, Task};
+use iced::{Alignment, Element, Length, Task};
 
 use crate::auth::{AuthManager, DeviceFlow, OAuthProvider, OAuthResult};
 use crate::ui::theme::Theme;
@@ -475,7 +475,6 @@ impl AuthPanel {
                     .color(palette.text_secondary),
                 text(user_code.as_str())
                     .size(typo.heading)
-                    .font(Font::MONOSPACE)
                     .color(palette.text_primary),
                 row![
                     small_button("Copier le code", Message::CopyGithubCode),
