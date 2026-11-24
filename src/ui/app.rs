@@ -516,7 +516,11 @@ impl GitSpaceApp {
     fn notify_clone_failure(&mut self, message: &clone::Message) {
         let (title, err, can_retry) = match message {
             clone::Message::CloneResult(Err(err)) => ("Échec du clonage", err, true),
-            clone::Message::SearchResult(Err(err)) => ("Échec de la recherche", err, false),
+            clone::Message::SearchResult(version, Err(err))
+                if self.clone_panel.is_current_search(*version) =>
+            {
+                ("Échec de la recherche", err, false)
+            }
             _ => return,
         };
         let mut notification = Notification::error(title, err.user_message());
