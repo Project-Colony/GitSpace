@@ -19,7 +19,6 @@ pub fn is_git_repo<P: AsRef<Path>>(path: P) -> bool {
 
 #[allow(dead_code)]
 pub fn find_repo_root<P: AsRef<Path>>(path: P) -> Result<Option<PathBuf>, Error> {
-    // Découvre la racine du dépôt puis utilise le cache thread-local
     let discovered = match Repository::discover(path) {
         Ok(repo) => repo,
         Err(err) => {
@@ -31,14 +30,8 @@ pub fn find_repo_root<P: AsRef<Path>>(path: P) -> Result<Option<PathBuf>, Error>
         }
     };
 
-    let git_dir = discovered.path().to_path_buf();
-    let root = discovered
-        .workdir()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| git_dir);
-
-    // Valide via le cache pour rester cohérent avec les autres opérations
-    with_cached_repo(&root, |_repo| Ok(Some(root.clone())))
+    let root = discovered.workdir().unwrap_or_else(|| discovered.path());
+    Ok(Some(root.to_path_buf()))
 }
 
 #[allow(dead_code)]

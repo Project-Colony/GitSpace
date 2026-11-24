@@ -55,10 +55,12 @@ pub fn merge_branch<P: AsRef<Path>>(
             }
         )
     } else {
-        String::from_utf8_lossy(&output.stderr)
-            .trim()
-            .to_string()
-            .if_empty_then(|| "Operation completed with conflicts".to_string())
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if stderr.is_empty() {
+            "Operation completed with conflicts".to_string()
+        } else {
+            stderr
+        }
     };
 
     Ok(MergeOutcome {
@@ -91,20 +93,6 @@ pub fn detect_conflicts<P: AsRef<Path>>(repo_path: P) -> Result<Vec<String>, git
         }
         Ok(conflicts)
     })
-}
-
-trait EmptyStringExt {
-    fn if_empty_then(self, alt: impl FnOnce() -> String) -> String;
-}
-
-impl EmptyStringExt for String {
-    fn if_empty_then(self, alt: impl FnOnce() -> String) -> String {
-        if self.is_empty() {
-            alt()
-        } else {
-            self
-        }
-    }
 }
 
 /// Runs a git command with a timeout.
