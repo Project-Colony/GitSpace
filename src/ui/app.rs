@@ -134,7 +134,8 @@ impl GitSpaceApp {
             auto_fetch_repo: None,
         };
 
-        (app, Task::none())
+        let accounts = app.auth_panel.refresh_accounts().map(Message::Auth);
+        (app, accounts)
     }
 
     // ─── Update ────────────────────────────────────────────────────────
@@ -454,19 +455,19 @@ impl GitSpaceApp {
     }
 
     /// Applique les changements de preferences depuis le panneau preferences.
-    /// Retourne une Task si une verification de mise a jour est demandee.
     fn handle_preferences_changes(&mut self) -> Task<Message> {
+        let mut task = Task::none();
         if let Some(prefs) = self.preferences_panel.take_changes() {
-            self.apply_preferences(prefs);
+            task = self.apply_preferences(prefs);
         }
         if let Some(logging) = self.preferences_panel.take_logging_changes() {
             self.apply_logging(logging);
         }
-        Task::none()
+        task
     }
 
     /// Applique un jeu de preferences mis a jour a toute l'application.
-    fn apply_preferences(&mut self, preferences: Preferences) {
+    fn apply_preferences(&mut self, preferences: Preferences) -> Task<Message> {
         self.config.set_preferences(preferences.clone());
         self.theme = Theme::from_mode(preferences.theme_mode());
 
@@ -481,10 +482,14 @@ impl GitSpaceApp {
             .set_pinned_branches(preferences.pinned_branches().to_vec());
         self.auth_manager
             .set_encrypted_fallback(preferences.allow_encrypted_tokens());
-        self.auth_panel.set_auth_manager(self.auth_manager.clone());
+        let accounts = self
+            .auth_panel
+            .set_auth_manager(self.auth_manager.clone())
+            .map(Message::Auth);
         self.preferences_panel.set_preferences(preferences);
 
         self.save_config();
+        accounts
     }
 
     /// Applique les options de logging mises a jour.
