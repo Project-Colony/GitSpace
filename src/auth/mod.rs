@@ -412,6 +412,12 @@ impl TokenStorage {
         match entry.delete_credential() {
             Ok(()) => Ok(()),
             Err(keyring::Error::NoEntry) => Ok(()),
+            // No keyring service at all: nothing can have been saved there. A locked keyring
+            // (NoStorageAccess) is still an error, since the token may be in it.
+            Err(keyring::Error::PlatformFailure(err)) => {
+                warn!(target: "gitspace::auth", error = %err, host, "native keyring unavailable; nothing to remove there");
+                Ok(())
+            }
             Err(err) => Err(format!("Failed to remove keyring entry: {err}")),
         }
     }
