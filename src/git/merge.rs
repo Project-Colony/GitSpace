@@ -70,7 +70,9 @@ pub fn detect_conflicts<P: AsRef<Path>>(repo_path: P) -> Result<Vec<String>, git
     // Détection des conflits en lecture seule — utilise le cache thread-local
     with_cached_repo(repo_path, |repo| {
         let mut conflicts = Vec::new();
-        if let Ok(index) = repo.index() {
+        if let Ok(mut index) = repo.index() {
+            // The cached repository keeps its index: reload it after `git merge` wrote one.
+            index.read(false)?;
             if index.has_conflicts() {
                 for conflict in index.conflicts()?.flatten() {
                     if let Some(name) = conflict

@@ -15,6 +15,7 @@ use crate::git::branch::{
 use crate::git::diff::{commit_diff, diff_file, staged_diff, working_tree_diff};
 use crate::git::discovery::{find_repo_root, is_git_repo, list_submodules, list_worktrees};
 use crate::git::log::{read_commit_log, CommitFilter};
+use crate::git::merge::detect_conflicts;
 use crate::git::remote::{
     fetch_remote, list_remotes, prune_remotes, pull_branch, push_branch, PullOutcome,
 };
@@ -606,4 +607,39 @@ fn worktrees_and_submodules_are_listed() {
     assert!(worktrees
         .iter()
         .any(|path| fs::canonicalize(path).ok().as_ref() == Some(&expected)));
+}
+
+#[test]
+fn conflicts_written_by_another_handle_are_detected() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    let base = write_commit(&repo, "c.txt", "base\n", "base");
+    repo.branch("other", &repo.find_commit(base).unwrap(), false)
+        .unwrap();
+    write_commit(&repo, "c.txt", "ours\n", "ours");
+
+    // Caches the repository with its clean index.
+    assert!(detect_conflicts(root).unwrap().is_empty());
+
+    // Commit on `other` and merge it from a separate handle, as `git merge` would.
+    let mut tree = repo.treebuilder(None).unwrap();
+    tree.insert("c.txt", repo.blob(b"theirs\n").unwrap(), 0o100644)
+        .unwrap();
+    let tree = repo.find_tree(tree.write().unwrap()).unwrap();
+    let sig = Signature::now("Tester", "tester@example.com").unwrap();
+    let parent = repo.find_commit(base).unwrap();
+    let theirs = repo
+        .commit(
+            Some("refs/heads/other"),
+            &sig,
+            &sig,
+            "theirs",
+            &tree,
+            &[&parent],
+        )
+        .unwrap();
+    let annotated = repo.find_annotated_commit(theirs).unwrap();
+    repo.merge(&[&annotated], None, None).unwrap();
+
+    assert_eq!(detect_conflicts(root).unwrap(), vec!["c.txt".to_string()]);
 }
