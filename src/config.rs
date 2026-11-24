@@ -11,6 +11,10 @@ const CONFIG_FILE_NAME: &str = "config.json";
 const APP_CONFIG_DIR: &str = "gitspace";
 pub const MIN_LOG_RETENTION_FILES: usize = 1;
 pub const MAX_LOG_RETENTION_FILES: usize = 30;
+/// Auto-fetch interval bounds, in minutes. Zero would make `iced::time::every` panic, and the
+/// upper bound of one day keeps the conversion to seconds far from overflowing.
+const MIN_AUTO_FETCH_INTERVAL_MINUTES: u64 = 1;
+const MAX_AUTO_FETCH_INTERVAL_MINUTES: u64 = 24 * 60;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppConfig {
@@ -442,6 +446,13 @@ fn default_auto_fetch_interval_minutes() -> u64 {
     5
 }
 
+fn clamp_auto_fetch_interval(minutes: u64) -> u64 {
+    minutes.clamp(
+        MIN_AUTO_FETCH_INTERVAL_MINUTES,
+        MAX_AUTO_FETCH_INTERVAL_MINUTES,
+    )
+}
+
 impl Preferences {
     pub fn theme_mode(&self) -> ThemeMode {
         self.theme
@@ -550,12 +561,13 @@ impl Preferences {
         self.auto_fetch_enabled = auto_fetch_enabled;
     }
 
+    /// Clamped on read too: config.json and imported files are not checked when loaded.
     pub fn auto_fetch_interval_minutes(&self) -> u64 {
-        self.auto_fetch_interval_minutes
+        clamp_auto_fetch_interval(self.auto_fetch_interval_minutes)
     }
 
     pub fn set_auto_fetch_interval_minutes(&mut self, minutes: u64) {
-        self.auto_fetch_interval_minutes = minutes.max(1);
+        self.auto_fetch_interval_minutes = clamp_auto_fetch_interval(minutes);
     }
 
     pub fn save_to_path<P: AsRef<Path>>(&self, path: P) -> std::io::Result<()> {
@@ -578,8 +590,10 @@ impl Preferences {
 }
 
 impl LoggingOptions {
+    /// Clamped on read too: config.json is not checked when loaded.
     pub fn retention_files(&self) -> usize {
         self.retention_files
+            .clamp(MIN_LOG_RETENTION_FILES, MAX_LOG_RETENTION_FILES)
     }
 
     pub fn set_retention_files(&mut self, retention_files: usize) {
@@ -620,6 +634,31 @@ mod tests {
         assert_eq!(preferences.pinned_branches(), ["main"]);
         assert_eq!(config.logging().retention_files(), 12);
         assert!(!backup_path(&path).exists());
+    }
+
+    #[test]
+    fn out_of_range_numbers_in_the_file_are_clamped() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(CONFIG_FILE_NAME);
+        for (minutes, files, expected_minutes, expected_files) in [
+            (0, 0, 1, 1),
+            (u64::MAX, usize::MAX, 24 * 60, 30),
+            (10, 5, 10, 5),
+        ] {
+            fs::write(
+                &path,
+                format!(
+                    r#"{{"preferences": {{"auto_fetch_interval_minutes": {minutes}}},
+                        "logging": {{"retention_files": {files}}}}}"#
+                ),
+            )
+            .expect("write config");
+            let config = AppConfig::load_from(&path);
+            let interval = config.preferences().auto_fetch_interval_minutes();
+            assert_eq!(interval, expected_minutes);
+            assert!(interval.checked_mul(60).is_some());
+            assert_eq!(config.logging().retention_files(), expected_files);
+        }
     }
 
     #[test]
