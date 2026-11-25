@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.2.0](https://github.com/Project-Colony/GitSpace/compare/v0.1.2...v0.2.0) (2026-11-25)
+
+
+### Features
+
+* store files under Colony/GitSpace and move existing ones once ([1ed9b7d](https://github.com/Project-Colony/GitSpace/commit/1ed9b7d3cffd40de0979e2186bb86b55f049ff81))
+* **ui:** add a branch relation card, grouped merge and rebase, and a menu for rare branch actions ([1ed9b7d](https://github.com/Project-Colony/GitSpace/commit/1ed9b7d3cffd40de0979e2186bb86b55f049ff81))
+* **ui:** add a repository from GitHub, GitLab, a URL or a local folder ([1ed9b7d](https://github.com/Project-Colony/GitSpace/commit/1ed9b7d3cffd40de0979e2186bb86b55f049ff81))
+* **ui:** list repositories in the sidebar with an in-place search, pinned and recent groups, and per-repository status ([1ed9b7d](https://github.com/Project-Colony/GitSpace/commit/1ed9b7d3cffd40de0979e2186bb86b55f049ff81))
+* **ui:** move Preferences to the colony-ui page with Accounts, Git and Network, 26 theme families and English and French ([1ed9b7d](https://github.com/Project-Colony/GitSpace/commit/1ed9b7d3cffd40de0979e2186bb86b55f049ff81))
+* **ui:** open a repository on Changes, History, Branches and Stashes tabs under a header with Fetch, Pull and Push ([1ed9b7d](https://github.com/Project-Colony/GitSpace/commit/1ed9b7d3cffd40de0979e2186bb86b55f049ff81))
+* **ui:** rebuild the interface on colony-ui ([#53](https://github.com/Project-Colony/GitSpace/issues/53)) ([1ed9b7d](https://github.com/Project-Colony/GitSpace/commit/1ed9b7d3cffd40de0979e2186bb86b55f049ff81))
+* **ui:** rebuild the interface on iced ([#1](https://github.com/Project-Colony/GitSpace/issues/1)) ([af99248](https://github.com/Project-Colony/GitSpace/commit/af99248eaf0c46ff138acf2dcc16008189b79075))
+* **ui:** show branch, remote and tag badges and merge markers in History ([1ed9b7d](https://github.com/Project-Colony/GitSpace/commit/1ed9b7d3cffd40de0979e2186bb86b55f049ff81))
+* **ui:** show line counts, discard a file and commit with a summary counter, templates and sign-off in Changes ([1ed9b7d](https://github.com/Project-Colony/GitSpace/commit/1ed9b7d3cffd40de0979e2186bb86b55f049ff81))
+* **ui:** show the branch, date, file count and contents of each stash ([1ed9b7d](https://github.com/Project-Colony/GitSpace/commit/1ed9b7d3cffd40de0979e2186bb86b55f049ff81))
+
+
+### Fixes
+
+* **auth:** create secret files owner-only ([fd0099d](https://github.com/Project-Colony/GitSpace/commit/fd0099df6fb8c71501a9a128f36f79e5f4878de3))
+* **auth:** save tokens under the host name lookups use, remove them everywhere on sign-out, and refresh GitLab OAuth tokens ([fd0099d](https://github.com/Project-Colony/GitSpace/commit/fd0099df6fb8c71501a9a128f36f79e5f4878de3))
+* **auth:** stop sending a GitHub Enterprise token to api.github.com ([fd0099d](https://github.com/Project-Colony/GitSpace/commit/fd0099df6fb8c71501a9a128f36f79e5f4878de3))
+* **config:** keep valid values when one has the wrong type, and clamp the auto-fetch interval ([fd0099d](https://github.com/Project-Colony/GitSpace/commit/fd0099df6fb8c71501a9a128f36f79e5f4878de3))
+* correct data-loss, security and UI-thread bugs found in an audit ([#52](https://github.com/Project-Colony/GitSpace/issues/52)) ([fd0099d](https://github.com/Project-Colony/GitSpace/commit/fd0099df6fb8c71501a9a128f36f79e5f4878de3))
+* **deps:** update dependencies and Rust to 1.100 ([#48](https://github.com/Project-Colony/GitSpace/issues/48)) ([39f85c9](https://github.com/Project-Colony/GitSpace/commit/39f85c9de044bfa9a34fe87a87b9d6cd7f48428d))
+* **git:** check the stash id before dropping or applying a stash ([fd0099d](https://github.com/Project-Colony/GitSpace/commit/fd0099df6fb8c71501a9a128f36f79e5f4878de3))
+* **git:** count real lines in history, filter before the page limit, and open an empty repository ([fd0099d](https://github.com/Project-Colony/GitSpace/commit/fd0099df6fb8c71501a9a128f36f79e5f4878de3))
+* **git:** keep uncommitted changes on checkout, pull and stash apply ([fd0099d](https://github.com/Project-Colony/GitSpace/commit/fd0099df6fb8c71501a9a128f36f79e5f4878de3))
+* **git:** offer the token only to https remotes and treat git+ssh and scp-style URLs as SSH ([fd0099d](https://github.com/Project-Colony/GitSpace/commit/fd0099df6fb8c71501a9a128f36f79e5f4878de3))
+* **git:** pull and push only the checked-out branch, and refuse when HEAD is another branch ([fd0099d](https://github.com/Project-Colony/GitSpace/commit/fd0099df6fb8c71501a9a128f36f79e5f4878de3))
+* **git:** read git's output while merge and rebase run, and reload the index before listing conflicts ([fd0099d](https://github.com/Project-Colony/GitSpace/commit/fd0099df6fb8c71501a9a128f36f79e5f4878de3))
+* **ui:** run git, keyring and network work off the interface thread, confirm destructive actions, and add a Commit button ([fd0099d](https://github.com/Project-Colony/GitSpace/commit/fd0099df6fb8c71501a9a128f36f79e5f4878de3))
+* **ui:** stage a modified file instead of deleting it when GitSpace starts from another folder ([fd0099d](https://github.com/Project-Colony/GitSpace/commit/fd0099df6fb8c71501a9a128f36f79e5f4878de3))
+
 ## [0.1.2](https://github.com/Project-Colony/GitSpace/compare/v0.1.1...v0.1.2) (2026-11-09)
 
 
