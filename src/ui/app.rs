@@ -1,7 +1,5 @@
-//! Application principale GitSpace — architecture Elm pour Iced 0.13.
-//!
-//! Centralise le modèle, les messages, le dispatch update/view,
-//! les subscriptions (auto-fetch, notifications, clavier) et le thème.
+//! The GitSpace application on iced 0.14: the model, the messages, `update` and `view`,
+//! and the subscriptions (auto-fetch, toasts, keyboard, window focus).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -166,10 +164,11 @@ impl GitSpaceApp {
         colony_ui::i18n::set_locale(preferences.language().locale());
         let auth_manager =
             AuthManager::with_encrypted_fallback(preferences.allow_encrypted_tokens());
-        let last_repo = config
-            .last_repo()
-            .filter(|_| preferences.reopen_last_repo())
-            .map(|entry| entry.path.clone());
+        let last_repo = startup_target(
+            preferences.reopen_last_repo(),
+            config.last_repo().map(|entry| entry.path.as_str()),
+            |path| !std::path::Path::new(path).exists(),
+        );
 
         let mut app = Self {
             sidebar: Sidebar::default(),
@@ -1000,6 +999,17 @@ fn needs_load(pending: &mut Option<String>, current: Option<&str>, path: &str) -
     false
 }
 
+/// The repository to open on Changes at startup; `None` shows Add repository.
+fn startup_target(
+    reopen_last_repo: bool,
+    last_repo: Option<&str>,
+    is_missing: impl Fn(&str) -> bool,
+) -> Option<String> {
+    last_repo
+        .filter(|path| reopen_last_repo && !is_missing(path))
+        .map(str::to_string)
+}
+
 /// Any finished stash job may have changed the working tree: an Apply and drop that
 /// left conflicts, or applied and then failed to drop, still returns an error.
 fn stash_job_finished(msg: &stashes::Message) -> bool {
@@ -1060,6 +1070,20 @@ mod tests {
             name(shortcut(escape, Modifiers::empty(), true, true)),
             "Escape"
         );
+    }
+
+    #[test]
+    fn startup_target_prefers_the_last_repo() {
+        let none_missing = |_: &str| false;
+        let gone = |path: &str| path == "/gone";
+        assert_eq!(
+            startup_target(true, Some("/repo"), none_missing),
+            Some("/repo".to_string())
+        );
+        // Turned off, nothing opened yet or the folder is missing: Add repository.
+        assert_eq!(startup_target(false, Some("/repo"), none_missing), None);
+        assert_eq!(startup_target(true, None, none_missing), None);
+        assert_eq!(startup_target(true, Some("/gone"), gone), None);
     }
 
     #[test]
