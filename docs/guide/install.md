@@ -59,6 +59,6 @@ prints the version without opening a window.
   everything else keeps working.
 - **A keyring** to keep tokens in: Keychain on macOS, Credential Manager on Windows, and a
   Secret Service provider such as GNOME Keyring or KWallet on Linux. Without one, turn on
-  "Allow encrypted file storage if the native keyring is unavailable"; see
+  "Allow an encrypted file" in Preferences → Accounts → Token storage; see
   [configuration](configuration.md) for what that stores and how well it is protected.
 - **OpenGL** for drawing the window.

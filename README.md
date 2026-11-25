@@ -13,8 +13,8 @@
 Graphical Git clients either serve one hosting site, like GitHub Desktop, or are closed
 source and tied to an account of their own, like GitKraken. GitSpace is an open source,
 native Rust client that signs in to GitHub, GitLab and their self-hosted instances side by
-side, finds and clones your repositories from both, and then works on them in one
-panel-based window inspired by GitKraken.
+side, finds and clones your repositories from both, and keeps all of them one click away
+in a sidebar.
 
 > **Status:** early development, no release yet. CI builds GitSpace and runs its tests on
 > Linux, macOS and Windows, and checks that it still builds on Rust 1.100. The first signed
@@ -22,15 +22,14 @@ panel-based window inspired by GitKraken.
 > work out of the box. OAuth sign-in needs the client ID of an OAuth app you register
 > yourself, because no build embeds one yet. The git operations are covered by tests on
 > local repositories; SSH sign-in, proxies and OAuth are covered by unit tests of their
-> logic, not by tests against live servers. The interface is built on iced and has no
-> language setting yet: most of it is in French, with some labels still in English. It is
-> meant to move to the shared Colony UI kit, which brings English and French locales.
+> logic, not by tests against live servers. The interface is built on iced 0.14 and the
+> shared [colony-ui](https://crates.io/crates/colony-ui) kit, in English and French.
 
 ## Why GitSpace
 
 - **Both sites in one place.** Tokens for GitHub, GitLab and self-hosted instances sit side
-  by side, and the Clone dialog searches your repositories on either site without leaving
-  GitSpace.
+  by side, and the Add repository screen searches your repositories on either site without
+  leaving GitSpace.
 - **Tokens stay with you.** They go to the operating system's keyring, are only ever sent
   over HTTPS, and only to the host they belong to. GitSpace has no account of its own and no
   server: it talks to the hosts you use and nothing else.
@@ -39,23 +38,53 @@ panel-based window inspired by GitKraken.
 
 ## What it does
 
-- Clone from GitHub, GitLab or any Git URL over HTTPS or SSH, and reopen recent repositories.
-- Repository overview with fetch, pull (fast-forward), push, open in the file manager and
-  open a terminal, plus optional auto-fetch on an interval.
-- Stage and unstage files with their diffs, commit, restore a file from another branch, and
-  create, apply and drop stashes.
-- History with commit diffs, filtered by branch.
-- Branches: create, rename, delete, check out and track, merge a branch into the current one
-  or rebase the current one onto it, compare with it, pin favourites, and archive a branch as
-  a tag. Delete, merge and rebase ask for confirmation, and checkout refuses to overwrite
+The window has two parts. The sidebar on the left lists your repositories: pinned ones
+first, then the others by the time you last opened them. Each row shows the number of
+changed files and how far the branch is ahead of or behind its upstream, and a repository
+whose folder is gone is marked as missing. Ctrl+K (Cmd+K on macOS) filters the list by name,
+Alt+Up and Alt+Down move to the previous or next repository, and a right-click on a row pins
+it, removes it from the list or opens its folder or a terminal there. Repositories found one
+level down in the default clone folder join the list on their own.
+
+The right part shows the open repository: a header with the branch, the ahead and behind
+counts, Fetch, Pull and Push, and four tabs below it (Ctrl+1 to Ctrl+4):
+
+- Changes: staged and unstaged files with their added and removed line counts, the diff of
+  the selected file, and the commit box. A file can be staged, unstaged, restored from
+  another branch or have its changes discarded after a confirmation.
+- History: the commits of a branch with branch and tag badges and merge markers, a filter
+  on message, author and hash, and the files and diff of the selected commit. A commit can
+  be checked out or used as the start of a new branch.
+- Branches: local branches and one group per remote, each with its distance from the
+  current branch and whether it is merged. Check out, merge into the current branch, rebase
+  the current branch onto it, rename (F2), pin, change the upstream, archive as a tag or
+  delete. Delete, merge and rebase ask for confirmation, and checkout refuses to overwrite
   uncommitted changes.
-- Sign in to GitHub with a one-time code entered on github.com (OAuth device flow), to
-  GitLab through OAuth in the browser (PKCE), or to GitHub, GitLab and self-hosted hosts with
-  a personal access token.
-- Network preferences: HTTP and HTTPS proxies, transfer timeout, preferring HTTPS and
-  allowing SSH.
-- Four Catppuccin themes.
-- Structured logs with daily rotation (`GITSPACE_LOG` sets the filter).
+- Stashes: stash the working tree, with or without untracked files, then apply, apply and
+  drop, or drop a stash, and look at its files and diff.
+
+"+ Clone or open" at the bottom of the sidebar opens the Add repository screen: search your
+GitHub or GitLab repositories, paste an HTTPS or SSH URL, or pick a local folder. A clone
+shows its progress and opens on Changes when it finishes. At startup GitSpace reopens the
+repository you used last, unless that is turned off or its folder is gone.
+
+The GitSpace button at the top of the sidebar (or Ctrl+,) opens Preferences in place of the
+repository view. Every change applies and is saved at once; there is no Save button.
+
+- General: interface language (English, French, or the system's), reopening the last
+  repository at startup, and import, export or reset of the preferences file.
+- Appearance and Accessibility: the 26 theme families and accents of colony-ui, text size,
+  animations, high contrast, reduced motion and a dyslexia-friendly font. A change redraws
+  every screen at once.
+- Accounts: sign in to GitHub with a one-time code entered on github.com (OAuth device
+  flow), to GitLab through OAuth in the browser (PKCE), or to GitHub, GitLab and self-hosted
+  hosts with a personal access token.
+- Git: the default clone folder, auto-fetch every 1, 5, 15, 30 or 60 minutes, pinned
+  branches and log retention.
+- Network: HTTP and HTTPS proxies, the transfer timeout, preferring HTTPS and allowing SSH.
+- About: the version, the licence and where GitSpace keeps its files.
+
+Logs are structured, one file per day (`GITSPACE_LOG` sets the filter).
 
 ## Installation
 
@@ -97,8 +126,8 @@ command on your `PATH`: merge, rebase and restoring a file from another branch r
 OAuth sign-in needs the client ID of an OAuth app: a GitHub OAuth app with "Enable Device
 Flow" ticked, and a GitLab application with "Confidential" unticked and the redirect URI
 `http://127.0.0.1:9876/callback`. Set `GITSPACE_GITHUB_CLIENT_ID` and
-`GITSPACE_GITLAB_CLIENT_ID` when building to build them in, or enter them under Configure
-OAuth Apps on the Auth tab. A personal access token works without one.
+`GITSPACE_GITLAB_CLIENT_ID` when building to build them in, or enter them under
+Preferences → Accounts → OAuth app client IDs. A personal access token works without one.
 
 ## Documentation
 
@@ -146,12 +175,12 @@ GitSpace sends no telemetry, no analytics and no crash reports.
 |---|---|---|
 | Settings | stored | `config.json` in the `Colony/GitSpace` folder of the system configuration directory (`~/.config/Colony/GitSpace/` on Linux, see [configuration](docs/guide/configuration.md)): preferences, network options, the paths of recent repositories and the log retention |
 | Logs | stored | `Colony/GitSpace/logs/` in the system data directory (`~/.local/share/Colony/GitSpace/logs/` on Linux), one file per day, the oldest deleted past the retention set in Preferences. They record operations and errors, never a token |
-| Access tokens | stored | the operating system's keyring (service `gitspace`, one entry per host, plus `oauth:<host>` with the refresh token and expiry after an OAuth sign-in). With "Allow encrypted file storage if the native keyring is unavailable" on, they are also written to `tokens.enc` in the settings folder, encrypted with a key kept in the keyring. When the keyring cannot be used, that key is the file `token-local-key.bin` in the same folder instead, readable by your user account, so `tokens.enc` is then only as safe as that account. Setting `GITSPACE_TOKEN_MASTER_PASSWORD` mixes a password into that key (Argon2id, salt in `token-salt.bin`). `token-hosts.json` lists the hosts that have a token |
+| Access tokens | stored | the operating system's keyring (service `gitspace`, one entry per host, plus `oauth:<host>` with the refresh token and expiry after an OAuth sign-in). With "Allow an encrypted file" on (Preferences → Accounts → Token storage), they are also written to `tokens.enc` in the settings folder, encrypted with a key kept in the keyring. When the keyring cannot be used, that key is the file `token-local-key.bin` in the same folder instead, readable by your user account, so `tokens.enc` is then only as safe as that account. Setting `GITSPACE_TOKEN_MASTER_PASSWORD` mixes a password into that key (Argon2id, salt in `token-salt.bin`). `token-hosts.json` lists the hosts that have a token |
 | Token check | sent | when you save a personal access token: the token to `https://api.github.com/user`, `https://gitlab.com/api/v4/user`, or the matching API of a self-hosted GitHub or GitLab host you entered. A self-hosted host must use `https://`; an `http://` host is refused, so a token never travels in clear text |
 | GitHub sign-in | sent | when you choose to sign in with GitHub: GitSpace asks `https://github.com/login/device/code` for a one-time code, you enter it at `https://github.com/login/device` in your browser, and GitSpace asks `https://github.com/login/oauth/access_token` every few seconds whether you approved it, until you approve or deny it, cancel, or the code expires. Only the OAuth app's client ID is sent, never a client secret |
 | GitLab sign-in | sent | when you choose to sign in with GitLab: your browser opens `gitlab.com`, which sends the authorization code back to GitSpace on `127.0.0.1` (port 9876), and GitSpace exchanges it for a token at `gitlab.com`, with PKCE |
-| Repository search | sent | when you search in the Clone dialog: the search to `https://api.github.com` (`/user`, `/user/repos`, `/users/<name>/repos`, `/orgs/<name>/repos`) or `https://gitlab.com/api/v4/projects`, with your token for that site when one is saved |
-| Git traffic | sent | clone, fetch, pull and push talk to the remote of the repository when you start them, and fetch also runs on its own while a repository is open if you turn on auto-fetch in Preferences (off by default, every 1, 5 or 15 minutes or an interval you choose). Over HTTPS the token saved for that host is sent as the password; a plain-HTTP remote never receives a token. Over SSH, GitSpace signs in with the keys in ssh-agent or `~/.ssh/id_ed25519`, `id_ecdsa` and `id_rsa`, and never sends a token |
+| Repository search | sent | when you search on the Add repository screen: on GitHub, the search to `https://api.github.com/search/repositories`, plus, with a saved token, the list of your repositories from `https://api.github.com/user/repos`, filtered on your machine; on GitLab, the search to `https://gitlab.com/api/v4/projects`. Your token for that site goes with the request when one is saved |
+| Git traffic | sent | clone, fetch, pull and push talk to the remote of the repository when you start them, and fetch also runs on its own while a repository is open if you turn on auto-fetch in Preferences (off by default, every 1, 5, 15, 30 or 60 minutes). Over HTTPS the token saved for that host is sent as the password; a plain-HTTP remote never receives a token. Over SSH, GitSpace signs in with the keys in ssh-agent or `~/.ssh/id_ed25519`, `id_ecdsa` and `id_rsa`, and never sends a token |
 | Local git commands | neither | merge, rebase and restoring a file from another branch run your own `git` command in the repository folder. These commands work on the local repository only and do not contact a remote |
 
 When a proxy is set in Preferences, the repository search and HTTP(S) git traffic

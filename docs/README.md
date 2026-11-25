@@ -21,7 +21,7 @@ Sorted by who is reading, not by subject.
 
 | | |
 |---|---|
-| [project/gitkraken-layout.md](project/gitkraken-layout.md) | the window layout, tabs and shortcuts, and what GitKraken has that GitSpace leaves out |
-| [project/ui-stack.md](project/ui-stack.md) | why the interface moved from egui to iced, and where it goes next |
+| [project/gitkraken-layout.md](project/gitkraken-layout.md) | the sidebar, the repository tabs, the shortcuts, and what GitKraken has that GitSpace leaves out |
+| [project/ui-stack.md](project/ui-stack.md) | why the interface moved from egui to iced and colony-ui, and what comes from the kit |
 
 Security policy: [../SECURITY.md](../SECURITY.md).
