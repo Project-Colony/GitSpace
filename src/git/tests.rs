@@ -10,7 +10,7 @@ use crate::git::branch::{
     list_branch_overview, list_branches, rename_branch, set_upstream, BranchKind, BranchOverview,
 };
 use crate::git::diff::{commit_diff_file, commit_diff_summaries, diff_file};
-use crate::git::log::{read_commit_log, CommitFilter};
+use crate::git::log::{read_commit_log, CommitFilter, RefKind};
 use crate::git::merge::detect_conflicts;
 use crate::git::remote::{fetch_remote, list_remotes, pull_branch, push_branch, PullOutcome};
 use crate::git::stash::{apply_stash, create_stash, drop_stash, list_stashes};
@@ -915,4 +915,91 @@ fn set_upstream_sets_and_clears() {
         .upstream()
         .is_err());
     assert!(set_upstream(root, "missing", None).is_err());
+}
+
+#[test]
+fn log_reports_merge_commits_with_two_parents() {
+    let (_dir, repo) = init_temp_repo();
+    let path = repo.path().parent().unwrap().to_str().unwrap().to_string();
+    let base = write_commit(&repo, "file.txt", "base", "base");
+    let side = commit_on_branch(&repo, "side", Some(base), "side");
+    let main_tip = write_commit(&repo, "file.txt", "main", "main");
+
+    let sig = Signature::now("Tester", "tester@example.com").expect("signature");
+    let tree = repo.find_commit(main_tip).unwrap().tree().unwrap();
+    let parents = [
+        &repo.find_commit(main_tip).unwrap(),
+        &repo.find_commit(side).unwrap(),
+    ];
+    let merge = repo
+        .commit(Some("HEAD"), &sig, &sig, "merge side", &tree, &parents)
+        .expect("merge commit");
+
+    let commits = read_commit_log(&path, &CommitFilter::default(), 10, false).expect("log");
+    let count_of = |oid: Oid| {
+        commits
+            .iter()
+            .find(|commit| commit.id == oid.to_string())
+            .map(|commit| commit.parent_count)
+    };
+    assert_eq!(count_of(merge), Some(2));
+    assert_eq!(count_of(main_tip), Some(1));
+    assert_eq!(count_of(base), Some(0));
+}
+
+#[test]
+fn log_labels_branches_remotes_and_tags() {
+    let (_dir, repo) = init_temp_repo();
+    let path = repo.path().parent().unwrap().to_str().unwrap().to_string();
+    let first = write_commit(&repo, "f.txt", "1", "first");
+    let second = write_commit(&repo, "f.txt", "2", "second");
+    let sig = Signature::now("Tester", "tester@example.com").expect("signature");
+    let target = repo.find_object(first, None).unwrap();
+    repo.tag("v1", &target, &sig, "release", false)
+        .expect("annotated tag");
+    repo.reference("refs/remotes/origin/main", first, true, "test")
+        .unwrap();
+    repo.branch("feature", &repo.find_commit(second).unwrap(), false)
+        .unwrap();
+
+    let commits = read_commit_log(&path, &CommitFilter::default(), 10, false).expect("log");
+    let labels_of = |oid: Oid| {
+        let commit = commits
+            .iter()
+            .find(|commit| commit.id == oid.to_string())
+            .expect("commit in log");
+        commit
+            .refs
+            .iter()
+            .map(|label| (label.name.clone(), label.kind))
+            .collect::<Vec<_>>()
+    };
+
+    let first_labels = labels_of(first);
+    assert_eq!(first_labels.len(), 2, "{first_labels:?}");
+    assert!(first_labels.contains(&("v1".to_string(), RefKind::Tag)));
+    assert!(first_labels.contains(&("origin/main".to_string(), RefKind::Remote)));
+
+    let second_labels = labels_of(second);
+    assert!(second_labels.contains(&("main".to_string(), RefKind::Head)));
+    assert!(second_labels.contains(&("feature".to_string(), RefKind::Local)));
+}
+
+#[test]
+fn log_labels_a_detached_head() {
+    let (_dir, repo) = init_temp_repo();
+    let path = repo.path().parent().unwrap().to_str().unwrap().to_string();
+    let first = write_commit(&repo, "f.txt", "1", "first");
+    write_commit(&repo, "f.txt", "2", "second");
+    repo.set_head_detached(first).unwrap();
+
+    let commits = read_commit_log(&path, &CommitFilter::default(), 10, false).expect("log");
+    let labels = &commits
+        .iter()
+        .find(|commit| commit.id == first.to_string())
+        .expect("detached commit in log")
+        .refs;
+    assert_eq!(labels.len(), 1, "{labels:?}");
+    assert_eq!(labels[0].name, "HEAD");
+    assert_eq!(labels[0].kind, RefKind::Head);
 }
