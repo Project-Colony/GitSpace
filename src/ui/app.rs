@@ -393,8 +393,7 @@ impl GitSpaceApp {
 
             // ── Stashes ────────────────────────────────────────────────
             Message::Stashes(msg) => {
-                // Stashing and applying change the working tree.
-                let changed = matches!(&msg, stashes::Message::Done(_, _, Ok(_)));
+                let changed = stash_job_finished(&msg);
                 let (task, toast) = self.stashes_panel.update(msg);
                 if let Some(toast) = toast {
                     self.toasts.push(toast);
@@ -1069,6 +1068,12 @@ fn needs_load(pending: &mut Option<String>, current: Option<&str>, path: &str) -
     false
 }
 
+/// Any finished stash job may have changed the working tree: an Apply and drop that
+/// left conflicts, or applied and then failed to drop, still returns an error.
+fn stash_job_finished(msg: &stashes::Message) -> bool {
+    matches!(msg, stashes::Message::Done(..))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1135,6 +1140,20 @@ mod tests {
 
         assert!(needs_load(&mut pending, Some("/a"), "/b"));
         assert!(needs_load(&mut pending, None, "/a"));
+    }
+
+    #[test]
+    fn a_failed_stash_job_still_reloads_the_other_panels() {
+        let done =
+            |result| stashes::Message::Done(Arc::from("/r"), "stashes_apply_drop_failed", result);
+        assert!(stash_job_finished(&done(Ok("applied".into()))));
+        // Apply and drop that kept conflicts: the tree changed, the result is Err.
+        assert!(stash_job_finished(&done(Err(
+            t("stashes_conflicts_kept").to_string()
+        ))));
+        assert!(!stash_job_finished(&stashes::Message::SelectFile(
+            "a.txt".into()
+        )));
     }
 
     #[test]
