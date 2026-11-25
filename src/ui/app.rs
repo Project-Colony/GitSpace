@@ -797,6 +797,10 @@ impl GitSpaceApp {
             subs.push(iced::time::every(Duration::from_secs(1)).map(|_| Message::ToastTick));
         }
 
+        if self.add_repo.is_easing() {
+            subs.push(iced::window::frames().map(|_| Message::AddRepo(add_repo::Message::Frame)));
+        }
+
         // Timer auto-fetch. Il est recree apres chaque operation du panneau, donc le prochain
         // auto-fetch part un intervalle apres la derniere operation reseau ou le dernier chargement.
         if self.config.preferences().auto_fetch_enabled()

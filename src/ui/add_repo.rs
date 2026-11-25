@@ -107,6 +107,8 @@ pub enum Message {
     StartClone,
     CloneProgress(CloneProgress),
     CloneResult(Result<(), AppError>),
+    /// A display frame while the progress bar eases toward the clone's progress.
+    Frame,
     RetryClone,
     ChooseFolder,
     FolderChosen(Option<String>),
@@ -129,6 +131,8 @@ pub struct AddRepoPanel {
     selected: Option<usize>,
     search_status: Option<String>,
     progress: Option<CloneProgress>,
+    /// The ratio the bar shows while it eases toward the clone's progress.
+    shown_ratio: f32,
     /// Bytes per second since the clone started.
     speed: f64,
     started: Option<Instant>,
@@ -155,6 +159,7 @@ impl AddRepoPanel {
             selected: None,
             search_status: None,
             progress: None,
+            shown_ratio: 0.0,
             speed: 0.0,
             started: None,
             cloning: false,
@@ -175,6 +180,13 @@ impl AddRepoPanel {
     pub fn set_default_destination(&mut self, destination: String) {
         self.base_destination = PathBuf::from(destination);
         self.refresh_destination();
+    }
+
+    /// Whether the progress bar still has to ease toward the clone's progress.
+    pub fn is_easing(&self) -> bool {
+        self.cloning
+            && colony_ui::effects_enabled()
+            && self.shown_ratio != progress_ratio(self.progress.as_ref())
     }
 
     pub fn set_network_preferences(&mut self, network: NetworkOptions) {
@@ -264,6 +276,7 @@ impl AddRepoPanel {
                 }
                 self.progress = Some(progress);
             }
+            Message::Frame => self.ease_progress(),
             Message::CloneResult(result) => {
                 self.cloning = false;
                 self.progress = None;
@@ -304,6 +317,18 @@ impl AddRepoPanel {
             Message::OpenAccounts => {}
         }
         (Task::none(), None)
+    }
+
+    /// Moves the bar a fifth of the way to the clone's progress; snaps when close, or back
+    /// when a new phase restarts at 0.
+    fn ease_progress(&mut self) {
+        let target = progress_ratio(self.progress.as_ref());
+        let gap = target - self.shown_ratio;
+        self.shown_ratio = if gap < 0.002 {
+            target
+        } else {
+            self.shown_ratio + gap * 0.2
+        };
     }
 
     /// Returns the folder to open when it holds a repository; otherwise says why not.
@@ -392,6 +417,7 @@ impl AddRepoPanel {
         self.last_request = Some(request.clone());
         self.active_destination = Some(request.destination.clone());
         self.progress = None;
+        self.shown_ratio = 0.0;
         self.speed = 0.0;
         self.started = Some(Instant::now());
         self.cloning = true;
@@ -627,33 +653,32 @@ impl AddRepoPanel {
 
     /// The bar and "Receiving objects · a / b · size · speed", then the delta count.
     fn progress_view(&self) -> Element<'_, Message> {
-        let (ratio, label) = match &self.progress {
-            None => (0.0, t("add_repo_starting").to_string()),
-            Some(p) if p.total_deltas > 0 && p.received_objects >= p.total_objects => (
-                p.indexed_deltas as f32 / p.total_deltas as f32,
-                tf(
-                    "add_repo_resolving",
-                    &[
-                        ("done", &p.indexed_deltas.to_string()),
-                        ("total", &p.total_deltas.to_string()),
-                    ],
-                ),
+        let label = match &self.progress {
+            None => t("add_repo_starting").to_string(),
+            Some(p) if is_resolving(p) => tf(
+                "add_repo_resolving",
+                &[
+                    ("done", &p.indexed_deltas.to_string()),
+                    ("total", &p.total_deltas.to_string()),
+                ],
             ),
-            Some(p) => (
-                p.received_objects as f32 / p.total_objects.max(1) as f32,
-                tf(
-                    "add_repo_receiving",
-                    &[
-                        ("done", &p.received_objects.to_string()),
-                        ("total", &p.total_objects.to_string()),
-                        ("size", &format_size(p.received_bytes as f64)),
-                        (
-                            "speed",
-                            &tf("add_repo_per_second", &[("size", &format_size(self.speed))]),
-                        ),
-                    ],
-                ),
+            Some(p) => tf(
+                "add_repo_receiving",
+                &[
+                    ("done", &p.received_objects.to_string()),
+                    ("total", &p.total_objects.to_string()),
+                    ("size", &format_size(p.received_bytes as f64)),
+                    (
+                        "speed",
+                        &tf("add_repo_per_second", &[("size", &format_size(self.speed))]),
+                    ),
+                ],
             ),
+        };
+        let ratio = if colony_ui::effects_enabled() {
+            self.shown_ratio
+        } else {
+            progress_ratio(self.progress.as_ref())
         };
         let bar = progress_bar(0.0..=1.0, ratio)
             .girth(6)
@@ -663,6 +688,20 @@ impl AddRepoPanel {
                 border: Border::default().rounded(3),
             });
         column![bar, dim_line(label)].spacing(6).into()
+    }
+}
+
+/// Receiving is done and the deltas are being resolved.
+fn is_resolving(p: &CloneProgress) -> bool {
+    p.total_deltas > 0 && p.received_objects >= p.total_objects
+}
+
+/// How far the current clone phase is, from 0 to 1.
+fn progress_ratio(progress: Option<&CloneProgress>) -> f32 {
+    match progress {
+        None => 0.0,
+        Some(p) if is_resolving(p) => p.indexed_deltas as f32 / p.total_deltas as f32,
+        Some(p) => p.received_objects as f32 / p.total_objects.max(1) as f32,
     }
 }
 
@@ -921,6 +960,24 @@ struct GitlabProject {
     star_count: u64,
     #[serde(default)]
     last_activity_at: Option<String>,
+    /// "public", "internal" or "private".
+    #[serde(default)]
+    visibility: Option<String>,
+}
+
+impl GitlabProject {
+    fn into_repo(self) -> RemoteRepo {
+        RemoteRepo {
+            name: self.name_with_namespace,
+            url: self.http_url_to_repo,
+            description: self.description,
+            // Without a token GitLab sends no visibility and lists only public projects.
+            // Internal projects need a GitLab account, so they show as private.
+            private: Some(self.visibility.is_some_and(|v| v != "public")),
+            stars: self.star_count,
+            updated: self.last_activity_at.as_deref().and_then(timestamp),
+        }
+    }
 }
 
 /// Recherche les projets GitLab correspondant à la requête.
@@ -943,7 +1000,6 @@ async fn search_gitlab(
                 ("search", query),
                 ("per_page", &per_page.to_string()),
                 ("page", &page.to_string()),
-                ("simple", "true"),
             ])
             .send()
             .await
@@ -975,14 +1031,7 @@ async fn search_gitlab(
 
     Ok(all_projects
         .into_iter()
-        .map(|project| RemoteRepo {
-            name: project.name_with_namespace,
-            url: project.http_url_to_repo,
-            description: project.description,
-            private: None,
-            stars: project.star_count,
-            updated: project.last_activity_at.as_deref().and_then(timestamp),
-        })
+        .map(GitlabProject::into_repo)
         .collect())
 }
 
@@ -1148,6 +1197,57 @@ mod tests {
         panel.apply_search_result(3, Ok(vec![repo("new")]));
         assert_eq!(panel.results, vec![repo("new")]);
         assert_eq!(panel.selected, Some(0));
+    }
+
+    #[test]
+    fn gitlab_rows_carry_the_project_visibility() {
+        let projects: Vec<GitlabProject> = serde_json::from_str(
+            r#"[
+                {"name_with_namespace": "a / pub", "http_url_to_repo": "u", "visibility": "public"},
+                {"name_with_namespace": "a / int", "http_url_to_repo": "u", "visibility": "internal"},
+                {"name_with_namespace": "a / priv", "http_url_to_repo": "u", "visibility": "private"},
+                {"name_with_namespace": "a / anon", "http_url_to_repo": "u"}
+            ]"#,
+        )
+        .unwrap();
+        let private: Vec<_> = projects
+            .into_iter()
+            .map(|p| p.into_repo().private)
+            .collect();
+        assert_eq!(
+            private,
+            vec![Some(false), Some(true), Some(true), Some(false)]
+        );
+    }
+
+    #[test]
+    fn the_progress_bar_eases_toward_the_clone_progress() {
+        let mut panel = panel("");
+        panel.cloning = true;
+        panel.progress = Some(CloneProgress {
+            received_objects: 10,
+            total_objects: 10,
+            ..CloneProgress::default()
+        });
+
+        panel.ease_progress();
+        assert!(panel.shown_ratio > 0.0 && panel.shown_ratio < 1.0);
+
+        for _ in 0..100 {
+            panel.ease_progress();
+        }
+        assert_eq!(panel.shown_ratio, 1.0);
+
+        // Resolving deltas starts again from 0: the bar jumps back instead of sliding down.
+        panel.progress = Some(CloneProgress {
+            received_objects: 10,
+            total_objects: 10,
+            total_deltas: 4,
+            indexed_deltas: 0,
+            received_bytes: 0,
+        });
+        panel.ease_progress();
+        assert_eq!(panel.shown_ratio, 0.0);
     }
 
     #[test]
