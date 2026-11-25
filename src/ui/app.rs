@@ -11,6 +11,7 @@ use iced::{Element, Length, Subscription, Task};
 use crate::auth::AuthManager;
 use crate::config::{AppConfig, LoggingOptions, Preferences};
 use crate::error::logs_directory;
+use crate::i18n::{t, tf};
 use crate::ui::{
     auth::AuthPanel,
     branches::{self, BranchPanel},
@@ -123,10 +124,9 @@ impl GitSpaceApp {
         };
 
         if let Some(error) = migration_error {
-            // i18n key: startup_migration_failed (Task 4 moves this text to crate::i18n).
             app.notifications.push(Notification::error(
-                "Could not move your settings to the new folder",
-                format!("GitSpace is using the old folder for now. {error}"),
+                t("startup_migration_failed"),
+                tf("startup_migration_failed_detail", &[("error", &error)]),
             ));
         }
 

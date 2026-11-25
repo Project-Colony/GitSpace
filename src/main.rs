@@ -4,6 +4,7 @@ mod auth;
 mod config;
 mod error;
 mod git;
+mod i18n;
 mod logging;
 mod paths;
 mod ui;

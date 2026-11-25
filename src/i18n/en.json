@@ -1,0 +1,4 @@
+{
+  "startup_migration_failed": "Could not move your settings to the new folder",
+  "startup_migration_failed_detail": "GitSpace is using the old folder for now. {error}"
+}
