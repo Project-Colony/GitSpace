@@ -418,11 +418,11 @@
   "time_minutes_ago": "il y a {count} min",
   "time_yesterday": "hier",
   "token_check_failed": "La vérification auprès de {provider} a échoué : {error}",
-  "token_empty": "Le jeton ne peut pas être vide",
-  "token_host_not_https": "L'hôte doit utiliser https : GitSpace n'envoie jamais de jeton en HTTP simple.",
-  "token_invalid_characters": "Le jeton contient des caractères non valides",
+  "token_empty": "Le token ne peut pas être vide",
+  "token_host_not_https": "L'hôte doit utiliser https : GitSpace n'envoie jamais de token en HTTP simple.",
+  "token_invalid_characters": "Le token contient des caractères non valides",
   "token_invalid_host": "Hôte non valide « {host} » : {error}",
-  "token_rejected": "{provider} a refusé le jeton ({status}).",
-  "token_too_long": "Le jeton est trop long ({count} caractères au maximum)",
-  "token_too_short": "Le jeton est trop court ({count} caractères au minimum)"
+  "token_rejected": "{provider} a refusé le token ({status}).",
+  "token_too_long": "Le token est trop long ({count} caractères au maximum)",
+  "token_too_short": "Le token est trop court ({count} caractères au minimum)"
 }
