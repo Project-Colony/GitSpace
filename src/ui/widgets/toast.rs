@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 use colony_ui::theme::Palette;
 use colony_ui::widgets::icons;
 use colony_ui::{fonts, Typography};
-use iced::widget::{button as iced_button, column, container, row, text, Space};
-use iced::{Alignment, Border, Element, Length};
+use iced::widget::{button as iced_button, column, container, mouse_area, row, text, Space};
+use iced::{mouse, Alignment, Border, Element, Length};
 
 use super::button;
 use crate::i18n::t;
@@ -200,7 +200,7 @@ fn error_toast<'a, M: Clone + 'a>(
         content = content.push(row(actions).spacing(6));
     }
 
-    container(content)
+    let card = container(content)
         .padding([10, 14])
         .width(Length::Fill)
         .style(move |_| container::Style {
@@ -210,7 +210,11 @@ fn error_toast<'a, M: Clone + 'a>(
                 .width(1)
                 .color(Palette::ERROR().scale_alpha(alpha * 0.5)),
             ..Default::default()
-        })
+        });
+    // The window's stack hands the cursor to the controls below unless the toast reports an
+    // interaction; text and padding report none, so a click would go through to them.
+    mouse_area(card)
+        .interaction(mouse::Interaction::Idle)
         .into()
 }
 
@@ -264,6 +268,41 @@ mod tests {
         }
         assert_eq!(toasts.queue.len(), MAX_TOASTS);
         assert_eq!(toasts.queue[0].title, "Toast 2");
+    }
+
+    #[tokio::test]
+    async fn an_error_toast_keeps_the_pointer_from_the_controls_under_it() {
+        use iced::advanced::renderer::Headless;
+        use iced::advanced::widget::Tree;
+        use iced::advanced::{layout, Layout};
+
+        let renderer = <iced::Renderer as Headless>::new(
+            iced::Font::default(),
+            iced::Pixels(16.0),
+            Some("tiny-skia"),
+        )
+        .await
+        .expect("tiny-skia renderer");
+        let mut toasts = Toasts::default();
+        toasts.push(Toast::error("Background fetch failed", "offline"));
+        let mut element: Element<'_, ()> = toasts.view(|_| (), |_, _| ());
+        let mut tree = Tree::new(&element);
+        let limits = layout::Limits::new(iced::Size::ZERO, iced::Size::new(400.0, 400.0));
+        let node = element
+            .as_widget_mut()
+            .layout(&mut tree, &renderer, &limits);
+        let bounds = node.bounds();
+
+        // The bottom-left padding of the toast: no button there.
+        let cursor = mouse::Cursor::Available(iced::Point::new(4.0, bounds.height - 4.0));
+        let interaction = element.as_widget().mouse_interaction(
+            &tree,
+            Layout::new(&node),
+            cursor,
+            &bounds,
+            &renderer,
+        );
+        assert_ne!(interaction, mouse::Interaction::None);
     }
 
     #[test]
