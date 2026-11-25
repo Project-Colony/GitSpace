@@ -46,7 +46,7 @@ The screens:
 | `changes.rs`, `history.rs`, `branches.rs`, `stashes.rs` | the four tabs; `diff_view.rs` draws the diffs that Changes, History and Stashes show |
 | `add_repo.rs` | the Add repository screen: GitHub and GitLab search, URL, local folder, clone progress |
 | `preferences/` | the Preferences page: `mod.rs` with the kit's General, Appearance and Accessibility, then `accounts.rs`, `git.rs`, `network.rs` and `about.rs` |
-| `widgets/` | buttons, chips, tabs, the segmented control, menus and toasts the kit does not have yet |
+| `widgets/` | what the kit does not have yet: buttons, chips, tabs, the segmented control, menus, toasts, and one line of text that ends in "…" when it is cut |
 | `context.rs` | `RepoContext`, the open repository, and `git_task`, which runs a git call off the UI thread |
 
 Colours come from `colony_ui::theme::Palette`, sizes from `Typography::current()` and fonts

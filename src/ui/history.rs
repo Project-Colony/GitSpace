@@ -24,6 +24,7 @@ use crate::ui::context::{git_task, RepoContext};
 use crate::ui::diff_view::{self, Diff};
 use crate::ui::widgets::button as gs_button;
 use crate::ui::widgets::chip::{chip, Tone};
+use crate::ui::widgets::ellipsis::ellipsis;
 use crate::ui::widgets::menu::{self, Entry};
 use crate::ui::widgets::toast::Toast;
 
@@ -748,15 +749,12 @@ impl HistoryPanel {
 /// "author · date", and the short hash.
 fn commit_row<'a>(commit: CommitRow, id: String, selected: bool) -> Element<'a, Message> {
     let typo = Typography::current();
-    let mut line = row![container(
-        text(commit.summary)
-            .size(typo.sz(12))
-            .font(typo.regular)
-            .color(Palette::TEXT_PRIMARY())
-            .wrapping(Wrapping::None),
-    )
-    .width(Length::Fill)
-    .clip(true)]
+    let mut line = row![ellipsis(
+        commit.summary,
+        typo.sz(12),
+        typo.regular,
+        Palette::TEXT_PRIMARY()
+    )]
     .spacing(6)
     .align_y(Alignment::Center);
     for label in &commit.refs {

@@ -28,7 +28,8 @@ What comes from colony-ui:
 
 GitSpace adds the widgets the kit does not have yet in `src/ui/widgets/`: push buttons in
 four strengths, chips, tabs with counts, a segmented control, "⋯" and right-click menus
-drawn as iced overlays, and error toasts with action buttons. They follow the kit's rules
+drawn as iced overlays, error toasts with action buttons, and one line of text that ends in
+"…" when its space is too narrow. They follow the kit's rules
 (palette roles, `Typography`, the selection style) so they can move into colony-ui later.
 
 Nothing in `src/ui/` stores a colour, a size, a font or a translated string. A test fails on

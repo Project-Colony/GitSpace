@@ -6,6 +6,7 @@
 
 pub mod button;
 pub mod chip;
+pub mod ellipsis;
 pub mod menu;
 pub mod segmented;
 pub mod tabs;
