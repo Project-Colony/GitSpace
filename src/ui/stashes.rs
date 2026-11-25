@@ -177,7 +177,14 @@ impl StashesPanel {
                 self.menu = None;
                 let task = self.run("stashes_apply_failed", move |repo| {
                     apply_stash(repo, index, &id)
-                        .map(|()| tf("stashes_applied", &[("index", &index.to_string())]))
+                        .map(|conflicts| {
+                            let key = if conflicts {
+                                "stashes_applied_conflicts"
+                            } else {
+                                "stashes_applied"
+                            };
+                            tf(key, &[("index", &index.to_string())])
+                        })
                         .map_err(|err| err.to_string())
                 });
                 return (task, None);
@@ -185,14 +192,7 @@ impl StashesPanel {
             Message::ApplyAndDrop(index, id) => {
                 self.menu = None;
                 let task = self.run("stashes_apply_drop_failed", move |repo| {
-                    apply_then_drop(|step| {
-                        match step {
-                            Step::Apply => apply_stash(repo, index, &id),
-                            Step::Drop => drop_stash(repo, index, &id),
-                        }
-                        .map_err(|err| err.to_string())
-                    })
-                    .map(|()| tf("stashes_applied_dropped", &[("index", &index.to_string())]))
+                    apply_and_drop(repo, index, &id)
                 });
                 return (task, None);
             }
@@ -724,6 +724,19 @@ impl StashesPanel {
     }
 }
 
+/// Applies the stash, then drops it unless the apply left conflicts, as `git stash pop` does.
+fn apply_and_drop(repo: &str, index: usize, id: &str) -> Result<String, String> {
+    apply_then_drop(|step| match step {
+        Step::Apply => match apply_stash(repo, index, id) {
+            Ok(false) => Ok(()),
+            Ok(true) => Err(t("stashes_conflicts_kept").to_string()),
+            Err(err) => Err(err.to_string()),
+        },
+        Step::Drop => drop_stash(repo, index, id).map_err(|err| err.to_string()),
+    })
+    .map(|()| tf("stashes_applied_dropped", &[("index", &index.to_string())]))
+}
+
 /// Applies a stash, then drops it. The drop runs only once the apply succeeded, so a
 /// failed apply keeps the stash.
 fn apply_then_drop(mut run: impl FnMut(Step) -> Result<(), String>) -> Result<(), String> {
@@ -789,6 +802,38 @@ mod tests {
         let err = result.unwrap_err();
         assert!(err.contains("locked"), "{err}");
         assert_ne!(err, "locked", "says the stash was applied");
+    }
+
+    #[test]
+    fn apply_and_drop_keeps_a_stash_that_left_conflicts() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut options = git2::RepositoryInitOptions::new();
+        options.initial_head("main");
+        let repo = git2::Repository::init_opts(dir.path(), &options).unwrap();
+        let path = dir.path().to_str().unwrap();
+        let file = dir.path().join("a.txt");
+        let commit = |contents: &str| {
+            std::fs::write(&file, contents).unwrap();
+            let mut index = repo.index().unwrap();
+            index.add_path(std::path::Path::new("a.txt")).unwrap();
+            index.write().unwrap();
+            let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+            let sig = git2::Signature::now("Tester", "tester@example.com").unwrap();
+            let parent = repo.head().ok().and_then(|head| head.peel_to_commit().ok());
+            let parents: Vec<_> = parent.iter().collect();
+            repo.commit(Some("HEAD"), &sig, &sig, "edit", &tree, &parents)
+                .unwrap();
+        };
+        commit("base");
+        std::fs::write(&file, "stashed").unwrap();
+        create_stash(path, "a", false).unwrap();
+        commit("committed");
+
+        let stash = list_stashes(path).unwrap().remove(0);
+        let err = apply_and_drop(path, stash.index, &stash.id).unwrap_err();
+
+        assert_eq!(err, t("stashes_conflicts_kept"));
+        assert_eq!(list_stashes(path).unwrap().len(), 1, "the stash is kept");
     }
 
     #[test]

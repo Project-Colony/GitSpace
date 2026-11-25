@@ -106,12 +106,15 @@ pub fn create_stash(
     Ok(())
 }
 
-/// Applies the stash at `index`, if it is still the stash `id`. libgit2's default safe
-/// checkout fails instead of overwriting a modified file.
-pub fn apply_stash(repo_path: &str, index: usize, id: &str) -> Result<(), git2::Error> {
+/// Applies the stash at `index`, if it is still the stash `id`, and returns whether the
+/// apply left conflicts. libgit2's default safe checkout fails instead of overwriting a
+/// modified file, but a conflicting change is applied with markers and still succeeds.
+pub fn apply_stash(repo_path: &str, index: usize, id: &str) -> Result<bool, git2::Error> {
     let mut repo = Repository::open(repo_path)?;
     ensure_stash_id(&mut repo, index, id)?;
-    repo.stash_apply(index, Some(&mut StashApplyOptions::new()))
+    repo.stash_apply(index, Some(&mut StashApplyOptions::new()))?;
+    let conflicts = repo.index()?.has_conflicts();
+    Ok(conflicts)
 }
 
 /// Drops the stash at `index`, if it is still the stash `id`.

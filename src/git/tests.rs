@@ -420,10 +420,32 @@ fn stash_apply_keeps_edits_in_other_files() {
     fs::write(root.join("b.txt"), "unsaved").unwrap();
 
     let stash = list_stashes(path).unwrap().remove(0);
-    apply_stash(path, stash.index, &stash.id).expect("apply");
+    let conflicts = apply_stash(path, stash.index, &stash.id).expect("apply");
 
+    assert!(!conflicts);
     assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "stashed");
     assert_eq!(fs::read_to_string(root.join("b.txt")).unwrap(), "unsaved");
+}
+
+#[test]
+fn stash_apply_reports_conflicts() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    let path = root.to_str().unwrap();
+    write_commit(&repo, "a.txt", "base", "add a");
+    fs::write(root.join("a.txt"), "stashed").unwrap();
+    create_stash(path, "a", false).expect("stash");
+    write_commit(&repo, "a.txt", "committed", "edit a");
+
+    let stash = list_stashes(path).unwrap().remove(0);
+    let conflicts = apply_stash(path, stash.index, &stash.id).expect("apply");
+
+    assert!(conflicts);
+    assert!(Repository::open(root)
+        .unwrap()
+        .index()
+        .unwrap()
+        .has_conflicts());
 }
 
 #[test]
