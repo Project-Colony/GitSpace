@@ -509,6 +509,30 @@ fn stash_files_lists_changed_paths() {
 }
 
 #[test]
+fn stash_lists_the_untracked_files_it_saved() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    let path = root.to_str().unwrap();
+    write_commit(&repo, "a.txt", "a\n", "add a");
+    fs::write(root.join("a.txt"), "a\nmore\n").unwrap();
+    fs::write(root.join("brand-new.txt"), "new\n").unwrap();
+    create_stash(path, "mixed", true).expect("stash");
+    assert!(!root.join("brand-new.txt").exists());
+
+    // git keeps the untracked file in the stash's third parent, not in the stash tree.
+    let stash = list_stashes(path).unwrap().remove(0);
+    assert_eq!(stash.file_count, 2);
+    let files = stash_files(path, stash.index, &stash.id).expect("files");
+    let paths: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
+    assert_eq!(paths, ["a.txt", "brand-new.txt"]);
+    assert_eq!((files[1].additions, files[1].deletions), (1, 0));
+    let patch = stash_file_patch(path, stash.index, &stash.id, "brand-new.txt")
+        .expect("patch")
+        .expect("brand-new.txt is in the stash");
+    assert!(patch.patch.contains("+new"), "{}", patch.patch);
+}
+
+#[test]
 fn stash_files_refuses_a_changed_list() {
     let (_dir, repo) = init_temp_repo();
     let root = repo.path().parent().unwrap();

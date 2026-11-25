@@ -35,7 +35,7 @@ fn delta_path(delta: &DiffDelta<'_>) -> String {
         .unwrap_or_else(|| "(unknown)".to_string())
 }
 
-fn collect_diff_files(diff: Diff) -> Result<Vec<FileDiff>, git2::Error> {
+pub(crate) fn collect_diff_files(diff: Diff) -> Result<Vec<FileDiff>, git2::Error> {
     let mut files: HashMap<String, FileDiff> = HashMap::new();
 
     diff.print(DiffFormat::Patch, |delta, _hunk, line| {
@@ -95,7 +95,7 @@ fn collect_diff_files(diff: Diff) -> Result<Vec<FileDiff>, git2::Error> {
 }
 
 /// Collect only diff summaries without patch content (for lazy loading)
-fn collect_diff_summaries(diff: &Diff) -> Result<Vec<FileDiffSummary>, git2::Error> {
+pub(crate) fn collect_diff_summaries(diff: &Diff) -> Result<Vec<FileDiffSummary>, git2::Error> {
     let mut summaries = Vec::with_capacity(diff.deltas().len());
     for (index, delta) in diff.deltas().enumerate() {
         // `None` for a binary file, which has no lines to count.
@@ -152,7 +152,7 @@ pub(crate) fn commit_against_parent<'r>(
 
 /// Options that limit a diff to exactly `path`, without glob matching, so names such as
 /// `[draft].md` work.
-fn single_path_options(path: &str) -> DiffOptions {
+pub(crate) fn single_path_options(path: &str) -> DiffOptions {
     let mut options = DiffOptions::new();
     options.pathspec(path).disable_pathspec_match(true);
     options

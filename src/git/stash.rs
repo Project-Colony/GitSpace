@@ -1,7 +1,8 @@
-use git2::{Repository, Signature, StashApplyOptions, StatusOptions};
+use git2::{Diff, DiffOptions, Oid, Repository, Signature, StashApplyOptions, StatusOptions};
 
 use crate::git::diff::{
-    commit_against_parent, commit_diff_file, commit_diff_summaries, FileDiff, FileDiffSummary,
+    collect_diff_files, collect_diff_summaries, commit_against_parent, single_path_options,
+    FileDiff, FileDiffSummary,
 };
 
 #[derive(Debug, Clone)]
@@ -14,7 +15,7 @@ pub struct StashEntry {
     pub branch: Option<String>,
     /// Commit time of the stash, in seconds since the Unix epoch.
     pub time: i64,
-    /// Files the stash changes against the commit it was made on.
+    /// Files the stash changes against the commit it was made on, untracked files included.
     pub file_count: usize,
 }
 
@@ -29,7 +30,7 @@ pub fn list_stashes(repo_path: &str) -> Result<Vec<StashEntry>, git2::Error> {
     found
         .into_iter()
         .map(|(index, message, oid)| {
-            let file_count = commit_against_parent(&repo, oid, None)?.deltas().len();
+            let file_count = stash_diff(&repo, oid, None)?.deltas().len();
             Ok(StashEntry {
                 index,
                 branch: stash_branch(&message),
@@ -52,6 +53,20 @@ fn stash_branch(message: &str) -> Option<String> {
     (branch != "(no branch)").then(|| branch.to_string())
 }
 
+/// The stash `oid` against the commit it was made on. "Include untracked files" keeps the
+/// untracked files in the stash's third parent, so they are added as new files.
+fn stash_diff<'r>(
+    repo: &'r Repository,
+    oid: Oid,
+    mut options: Option<&mut DiffOptions>,
+) -> Result<Diff<'r>, git2::Error> {
+    let mut diff = commit_against_parent(repo, oid, options.as_deref_mut())?;
+    if let Ok(untracked) = repo.find_commit(oid)?.parent(2) {
+        diff.merge(&repo.diff_tree_to_tree(None, Some(&untracked.tree()?), options)?)?;
+    }
+    Ok(diff)
+}
+
 /// Files of the stash at `index` against the commit it was made on, if it is still the
 /// stash `id`.
 pub fn stash_files(
@@ -59,8 +74,10 @@ pub fn stash_files(
     index: usize,
     id: &str,
 ) -> Result<Vec<FileDiffSummary>, git2::Error> {
-    ensure_stash_id(&mut Repository::open(repo_path)?, index, id)?;
-    commit_diff_summaries(repo_path, id)
+    let mut repo = Repository::open(repo_path)?;
+    ensure_stash_id(&mut repo, index, id)?;
+    let diff = stash_diff(&repo, Oid::from_str(id)?, None)?;
+    collect_diff_summaries(&diff)
 }
 
 /// The patch of `path` in the stash at `index`, if it is still the stash `id`.
@@ -70,8 +87,11 @@ pub fn stash_file_patch(
     id: &str,
     path: &str,
 ) -> Result<Option<FileDiff>, git2::Error> {
-    ensure_stash_id(&mut Repository::open(repo_path)?, index, id)?;
-    commit_diff_file(repo_path, id, path)
+    let mut repo = Repository::open(repo_path)?;
+    ensure_stash_id(&mut repo, index, id)?;
+    let mut options = single_path_options(path);
+    let diff = stash_diff(&repo, Oid::from_str(id)?, Some(&mut options))?;
+    Ok(collect_diff_files(diff)?.into_iter().next())
 }
 
 /// How many files a stash made now would take; ignored files never count.
