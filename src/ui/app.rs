@@ -96,13 +96,12 @@ impl GitSpaceApp {
         let preferences = config.preferences().clone();
         let logging = *config.logging();
         let default_clone_path = preferences.default_clone_path().to_string();
-        let theme = Theme::from_mode(preferences.theme_mode());
+        preferences.standard.apply();
+        colony_ui::i18n::set_locale(preferences.language().locale());
+        let theme = Theme::active();
         let auth_manager =
             AuthManager::with_encrypted_fallback(preferences.allow_encrypted_tokens());
-        let last_repo = config
-            .recent_repos()
-            .first()
-            .map(|entry| entry.path.clone());
+        let last_repo = config.last_repo().map(|entry| entry.path.clone());
 
         let mut app = Self {
             clone_panel: ClonePanel::new(default_clone_path, preferences.network().clone()),
@@ -334,7 +333,7 @@ impl GitSpaceApp {
                     ));
                     return Task::none();
                 };
-                if self.config.touch_recent(std::path::Path::new(&path)) {
+                if self.config.open_repo(&path, chrono::Utc::now().timestamp()) {
                     self.save_config();
                 }
                 let tasks = [
@@ -577,7 +576,9 @@ impl GitSpaceApp {
     /// Applique un jeu de preferences mis a jour a toute l'application.
     fn apply_preferences(&mut self, preferences: Preferences) -> Task<Message> {
         self.config.set_preferences(preferences.clone());
-        self.theme = Theme::from_mode(preferences.theme_mode());
+        preferences.standard.apply();
+        colony_ui::i18n::set_locale(preferences.language().locale());
+        self.theme = Theme::active();
 
         // Propager aux panneaux
         self.clone_panel

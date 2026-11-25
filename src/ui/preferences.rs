@@ -9,18 +9,15 @@ use iced::widget::{
 };
 use iced::{Alignment, Color, Element, Length, Task};
 
+use colony_ui::preferences::Change;
+
 use crate::config::{
-    LoggingOptions, Preferences, ThemeMode, MAX_LOG_RETENTION_FILES, MIN_LOG_RETENTION_FILES,
+    LoggingOptions, Preferences, MAX_LOG_RETENTION_FILES, MIN_LOG_RETENTION_FILES,
 };
 use crate::ui::theme::{with_alpha, Theme};
 
-/// Modes de theme disponibles pour le pick_list.
-const THEME_MODES: &[ThemeMode] = &[
-    ThemeMode::Latte,
-    ThemeMode::Frappe,
-    ThemeMode::Macchiato,
-    ThemeMode::Mocha,
-];
+/// Variantes Catppuccin proposees par le pick_list.
+const CATPPUCCIN_VARIANTS: &[&str] = &["latte", "frappe", "macchiato", "mocha"];
 
 // ─── Categories ───────────────────────────────────────────────────────────
 
@@ -87,8 +84,8 @@ pub enum Message {
     AutoFetchIntervalChanged(String),
 
     // -- Apparences --
-    /// Mode de theme modifie.
-    ThemeModeChanged(ThemeMode),
+    /// Variante Catppuccin choisie.
+    ThemeVariantChanged(&'static str),
 
     // -- GitSpace --
     /// Nombre de fichiers de log conserves modifie.
@@ -287,11 +284,15 @@ impl PreferencesPanel {
             }
 
             // -- Apparences --
-            Message::ThemeModeChanged(mode) => {
+            Message::ThemeVariantChanged(variant) => {
                 // Le theme s'applique tout de suite, sans les autres modifications en cours.
-                self.preferences.set_theme_mode(mode);
+                let change = Change::Theme {
+                    family: "catppuccin",
+                    variant,
+                };
+                self.preferences.standard.update(change);
                 let mut applied = self.applied.clone();
-                applied.set_theme_mode(mode);
+                applied.standard.update(change);
                 self.apply(applied);
                 Task::none()
             }
@@ -786,12 +787,12 @@ impl PreferencesPanel {
             .size(typo.body)
             .color(palette.text_secondary);
 
-        let theme_pick = pick_list(
-            THEME_MODES,
-            Some(self.preferences.theme_mode()),
-            Message::ThemeModeChanged,
-        )
-        .width(Length::Fixed(160.0));
+        let standard = &self.preferences.standard;
+        let selected = CATPPUCCIN_VARIANTS.iter().copied().find(|variant| {
+            standard.selected_theme == "catppuccin" && standard.selected_variant == *variant
+        });
+        let theme_pick = pick_list(CATPPUCCIN_VARIANTS, selected, Message::ThemeVariantChanged)
+            .width(Length::Fixed(160.0));
 
         let theme_row = row![theme_label, theme_pick]
             .spacing(theme.spacing.sm)
@@ -1014,10 +1015,11 @@ mod tests {
     fn theme_change_applies_only_the_theme() {
         let mut panel = open_panel();
         let _ = panel.update(Message::AutoFetchEnabledChanged(true));
-        let _ = panel.update(Message::ThemeModeChanged(ThemeMode::Latte));
+        let _ = panel.update(Message::ThemeVariantChanged("latte"));
 
         let applied = panel.take_changes().expect("theme applied");
-        assert_eq!(applied.theme_mode(), ThemeMode::Latte);
+        assert_eq!(applied.standard.selected_theme, "catppuccin");
+        assert_eq!(applied.standard.selected_variant, "latte");
         assert!(!applied.auto_fetch_enabled());
         // The app hands the applied value back; the unsaved edit stays on screen.
         panel.set_preferences(applied);

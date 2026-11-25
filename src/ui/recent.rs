@@ -132,7 +132,7 @@ impl RecentList {
             .align_y(Alignment::Center);
 
         // Contenu principal : liste des dépôts ou message d'état vide.
-        let content = if config.recent_repos().is_empty() {
+        let content = if config.repos().iter().all(|entry| entry.hidden) {
             self.view_empty_state(theme)
         } else {
             self.view_repo_list(theme, config)
@@ -166,7 +166,7 @@ impl RecentList {
 
         let mut items = column![].spacing(theme.spacing.xs);
 
-        for entry in config.recent_repos() {
+        for entry in config.repos().iter().filter(|entry| !entry.hidden) {
             let path = Path::new(&entry.path);
             let name = path
                 .file_name()

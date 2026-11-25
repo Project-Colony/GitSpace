@@ -1,11 +1,9 @@
-//! Système de thèmes Catppuccin pour GitSpace avec Iced.
-//!
-//! Fournit les palettes Latte, Frappé, Macchiato et Mocha en tant que
-//! thèmes custom Iced, avec les tokens de typographie et d'espacement.
+//! The older panels' theme, read from the active colony-ui palette, with the
+//! typography and spacing tokens they use.
 
 use iced::Color;
 
-use crate::config::ThemeMode;
+use colony_ui::theme::Palette as Kit;
 
 /// Palette de couleurs Catppuccin.
 #[derive(Debug, Clone)]
@@ -20,51 +18,16 @@ pub struct Palette {
 }
 
 impl Palette {
-    pub fn latte() -> Self {
+    /// The active colony-ui theme, in the roles the older panels use.
+    pub fn active() -> Self {
         Self {
-            background: color_from_rgb(0xef, 0xf1, 0xf5),
-            surface: color_from_rgb(0xe6, 0xe9, 0xef),
-            surface_highlight: color_from_rgb(0xcc, 0xd0, 0xda),
-            text_primary: color_from_rgb(0x4c, 0x4f, 0x69),
-            text_secondary: color_from_rgb(0x5c, 0x5f, 0x77),
-            accent: color_from_rgb(0x1e, 0x66, 0xf5),
-            accent_weak: color_from_rgb(0x20, 0x9f, 0xb5),
-        }
-    }
-
-    pub fn frappe() -> Self {
-        Self {
-            background: color_from_rgb(0x23, 0x26, 0x34),
-            surface: color_from_rgb(0x29, 0x2c, 0x3c),
-            surface_highlight: color_from_rgb(0x41, 0x45, 0x59),
-            text_primary: color_from_rgb(0xc6, 0xd0, 0xf5),
-            text_secondary: color_from_rgb(0xb5, 0xbf, 0xe2),
-            accent: color_from_rgb(0x8c, 0xaa, 0xee),
-            accent_weak: color_from_rgb(0x85, 0xc1, 0xdc),
-        }
-    }
-
-    pub fn macchiato() -> Self {
-        Self {
-            background: color_from_rgb(0x18, 0x19, 0x26),
-            surface: color_from_rgb(0x1e, 0x20, 0x30),
-            surface_highlight: color_from_rgb(0x36, 0x3a, 0x4f),
-            text_primary: color_from_rgb(0xca, 0xd3, 0xf5),
-            text_secondary: color_from_rgb(0xb8, 0xc0, 0xe0),
-            accent: color_from_rgb(0x8a, 0xad, 0xf4),
-            accent_weak: color_from_rgb(0x7d, 0xc4, 0xe4),
-        }
-    }
-
-    pub fn mocha() -> Self {
-        Self {
-            background: color_from_rgb(0x11, 0x11, 0x1b),
-            surface: color_from_rgb(0x18, 0x18, 0x25),
-            surface_highlight: color_from_rgb(0x31, 0x32, 0x44),
-            text_primary: color_from_rgb(0xcd, 0xd6, 0xf4),
-            text_secondary: color_from_rgb(0xba, 0xc2, 0xde),
-            accent: color_from_rgb(0x89, 0xb4, 0xfa),
-            accent_weak: color_from_rgb(0x74, 0xc7, 0xec),
+            background: Kit::BG_PRIMARY(),
+            surface: Kit::BG_CARD(),
+            surface_highlight: Kit::BG_SELECTED(),
+            text_primary: Kit::TEXT_PRIMARY(),
+            text_secondary: Kit::TEXT_SECONDARY(),
+            accent: Kit::ACCENT(),
+            accent_weak: Kit::ACCENT_ICON(),
         }
     }
 }
@@ -126,13 +89,9 @@ impl Theme {
         }
     }
 
-    pub fn from_mode(mode: ThemeMode) -> Self {
-        match mode {
-            ThemeMode::Latte => Self::with_palette(Palette::latte()),
-            ThemeMode::Frappe => Self::with_palette(Palette::frappe()),
-            ThemeMode::Macchiato => Self::with_palette(Palette::macchiato()),
-            ThemeMode::Mocha => Self::with_palette(Palette::mocha()),
-        }
+    /// Reads the theme colony-ui has active; call it again after `StandardPreferences::apply`.
+    pub fn active() -> Self {
+        Self::with_palette(Palette::active())
     }
 
     /// Convertit le thème GitSpace en thème Iced natif.
@@ -141,19 +100,14 @@ impl Theme {
             background: self.palette.background,
             text: self.palette.text_primary,
             primary: self.palette.accent,
-            success: color_from_rgb(0xa6, 0xe3, 0xa1),
-            warning: color_from_rgb(0xf9, 0xe2, 0xaf),
-            danger: color_from_rgb(0xf3, 0x8b, 0xa8),
+            success: Kit::SUCCESS(),
+            warning: Kit::WARNING(),
+            danger: Kit::ERROR(),
         };
-        iced::Theme::custom_with_fn("Catppuccin".to_string(), iced_palette, |palette| {
+        iced::Theme::custom_with_fn("GitSpace".to_string(), iced_palette, |palette| {
             iced::theme::palette::Extended::generate(palette)
         })
     }
-}
-
-/// Convertit des composantes RGB (0-255) en `iced::Color`.
-fn color_from_rgb(r: u8, g: u8, b: u8) -> Color {
-    Color::from_rgb8(r, g, b)
 }
 
 /// Applique une opacité alpha à une couleur Iced.
