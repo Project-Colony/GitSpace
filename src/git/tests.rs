@@ -6,7 +6,9 @@ use git2::{BranchType, Commit, Oid, Repository, RepositoryInitOptions, ResetType
 
 use crate::config::NetworkOptions;
 use crate::git::branch;
-use crate::git::branch::{list_branches, rename_branch, BranchKind};
+use crate::git::branch::{
+    list_branch_overview, list_branches, rename_branch, set_upstream, BranchKind, BranchOverview,
+};
 use crate::git::diff::{commit_diff_file, commit_diff_summaries, diff_file};
 use crate::git::log::{read_commit_log, CommitFilter};
 use crate::git::merge::detect_conflicts;
@@ -751,4 +753,151 @@ fn discard_file_refuses_a_path_outside_the_repo() {
     assert!(discard_file(path, "/etc/hostname").is_err());
     assert!(discard_file(path, ".git/config").is_err());
     assert!(root.join(".git/config").exists());
+}
+
+/// Commits `contents` to `path` on top of `parent` and points `refs/heads/<branch>` at it,
+/// without touching HEAD or the working tree.
+fn commit_on_branch(repo: &Repository, branch: &str, parent: Option<Oid>, message: &str) -> Oid {
+    let blob = repo.blob(message.as_bytes()).expect("blob");
+    let mut builder = repo.treebuilder(None).expect("tree builder");
+    builder
+        .insert(format!("{branch}.txt"), blob, 0o100644)
+        .expect("insert");
+    let tree = repo
+        .find_tree(builder.write().expect("tree"))
+        .expect("find tree");
+    let sig = Signature::now("Tester", "tester@example.com").expect("signature");
+    let parents: Vec<Commit> = parent
+        .map(|id| repo.find_commit(id).unwrap())
+        .into_iter()
+        .collect();
+    let parent_refs: Vec<&Commit> = parents.iter().collect();
+    let refname = format!("refs/heads/{branch}");
+    repo.commit(Some(&refname), &sig, &sig, message, &tree, &parent_refs)
+        .expect("commit")
+}
+
+fn overview_of<'a>(list: &'a [BranchOverview], name: &str) -> &'a BranchOverview {
+    list.iter()
+        .find(|entry| entry.name == name)
+        .unwrap_or_else(|| panic!("{name} missing from overview"))
+}
+
+#[test]
+fn overview_counts_ahead_and_behind_head() {
+    let (_dir, repo) = init_temp_repo();
+    let base = write_commit(&repo, "file.txt", "base", "base");
+    let feature = commit_on_branch(&repo, "feature", Some(base), "feature one");
+    commit_on_branch(&repo, "feature", Some(feature), "feature two");
+    write_commit(&repo, "file.txt", "main", "main moves on");
+    let root = repo.path().parent().unwrap().to_str().unwrap();
+
+    let list = list_branch_overview(root).expect("overview");
+    let main = overview_of(&list, "main");
+    assert!(main.is_head);
+    assert_eq!((main.ahead_of_head, main.behind_head), (0, 0));
+    let feature = overview_of(&list, "feature");
+    assert!(!feature.is_head);
+    assert_eq!(feature.kind, BranchKind::Local);
+    assert_eq!((feature.ahead_of_head, feature.behind_head), (2, 1));
+    assert!(!feature.merged_into_head);
+    assert!(feature.last_commit_time.is_some());
+}
+
+#[test]
+fn overview_marks_merged_branches() {
+    let (_dir, repo) = init_temp_repo();
+    let base = write_commit(&repo, "file.txt", "base", "base");
+    repo.branch("done", &repo.find_commit(base).unwrap(), false)
+        .expect("branch");
+    write_commit(&repo, "file.txt", "later", "later");
+    commit_on_branch(&repo, "open", Some(base), "not merged");
+    let root = repo.path().parent().unwrap().to_str().unwrap();
+
+    let list = list_branch_overview(root).expect("overview");
+    let done = overview_of(&list, "done");
+    assert!(done.merged_into_head);
+    assert_eq!((done.ahead_of_head, done.behind_head), (0, 1));
+    assert!(!overview_of(&list, "open").merged_into_head);
+    assert!(!overview_of(&list, "main").merged_into_head);
+}
+
+#[test]
+fn overview_reports_upstream_divergence() {
+    let (_dir, repo) = init_temp_repo();
+    let first = write_commit(&repo, "file.txt", "one", "one");
+    let second = write_commit(&repo, "file.txt", "two", "two");
+    ensure_remote_tracking(&repo, "main", "origin/main", first);
+    let remote_only = repo.find_commit(first).unwrap();
+    let sig = Signature::now("Tester", "tester@example.com").unwrap();
+    let remote_tip = repo
+        .commit(
+            Some("refs/remotes/origin/main"),
+            &sig,
+            &sig,
+            "remote",
+            &remote_only.tree().unwrap(),
+            &[&remote_only],
+        )
+        .expect("remote commit");
+    assert_ne!(remote_tip, second);
+    let root = repo.path().parent().unwrap().to_str().unwrap();
+
+    let list = list_branch_overview(root).expect("overview");
+    let main = overview_of(&list, "main");
+    assert_eq!(main.upstream.as_deref(), Some("origin/main"));
+    assert_eq!((main.upstream_ahead, main.upstream_behind), (1, 1));
+    let remote = overview_of(&list, "origin/main");
+    assert_eq!(remote.kind, BranchKind::Remote);
+    assert!(remote.upstream.is_none());
+    assert_eq!((remote.ahead_of_head, remote.behind_head), (1, 1));
+}
+
+#[test]
+fn overview_on_unborn_head_is_empty_counts() {
+    let (_dir, repo) = init_temp_repo();
+    let other = commit_on_branch(&repo, "other", None, "first");
+    commit_on_branch(&repo, "other", Some(other), "second");
+    assert!(repo.head().is_err());
+    let root = repo.path().parent().unwrap().to_str().unwrap();
+
+    let list = list_branch_overview(root).expect("overview");
+    let other = overview_of(&list, "other");
+    assert!(!other.is_head);
+    assert_eq!((other.ahead_of_head, other.behind_head), (0, 0));
+    assert_eq!((other.upstream_ahead, other.upstream_behind), (0, 0));
+    assert!(!other.merged_into_head);
+    assert!(other.last_commit_time.is_some());
+}
+
+#[test]
+fn set_upstream_sets_and_clears() {
+    let (_dir, repo) = init_temp_repo();
+    let first = write_commit(&repo, "file.txt", "one", "one");
+    repo.remote("origin", "https://example.com/remote.git")
+        .expect("remote");
+    repo.reference("refs/remotes/origin/main", first, true, "remote ref")
+        .expect("remote ref");
+    let root = repo.path().parent().unwrap().to_str().unwrap();
+
+    set_upstream(root, "main", Some("origin/main")).expect("set");
+    let main = repo.find_branch("main", BranchType::Local).unwrap();
+    assert_eq!(
+        main.upstream().unwrap().name().unwrap(),
+        Some("origin/main")
+    );
+    assert_eq!(
+        overview_of(&list_branch_overview(root).unwrap(), "main")
+            .upstream
+            .as_deref(),
+        Some("origin/main")
+    );
+
+    set_upstream(root, "main", None).expect("clear");
+    assert!(repo
+        .find_branch("main", BranchType::Local)
+        .unwrap()
+        .upstream()
+        .is_err());
+    assert!(set_upstream(root, "missing", None).is_err());
 }

@@ -44,6 +44,90 @@ pub fn list_branches<P: AsRef<Path>>(repo_path: P) -> Result<Vec<BranchEntry>, E
     })
 }
 
+/// A branch with what the Branches tab shows next to it.
+#[derive(Debug, Clone)]
+#[cfg_attr(not(test), expect(dead_code, reason = "the Branches tab will call it"))]
+pub struct BranchOverview {
+    pub name: String,
+    pub kind: BranchKind,
+    pub is_head: bool,
+    pub upstream: Option<String>,
+    pub upstream_ahead: usize,
+    pub upstream_behind: usize,
+    pub ahead_of_head: usize,
+    pub behind_head: usize,
+    pub merged_into_head: bool,
+    pub last_commit_time: Option<i64>,
+}
+
+/// Lists branches with their divergence from HEAD and from their upstream.
+///
+/// Runs one `graph_ahead_behind` against HEAD and one `merge_base` per branch, so it belongs
+/// in a background task. With an unborn HEAD the counts against HEAD stay 0 and no branch is
+/// marked merged.
+#[cfg_attr(not(test), expect(dead_code, reason = "the Branches tab will call it"))]
+pub fn list_branch_overview(repo_path: &str) -> Result<Vec<BranchOverview>, Error> {
+    with_cached_repo(repo_path, |repo| {
+        let head = repo.head().ok().and_then(|head| head.target());
+        let mut entries = Vec::new();
+        for branch_result in repo.branches(None)? {
+            let (branch, branch_type) = branch_result?;
+            let Some(name) = branch.name()? else {
+                continue;
+            };
+            let kind = match branch_type {
+                BranchType::Local => BranchKind::Local,
+                BranchType::Remote => BranchKind::Remote,
+            };
+            let is_head = branch.is_head();
+            // Symbolic refs such as origin/HEAD resolve to their target.
+            let tip = branch.get().peel_to_commit().ok();
+            let upstream = branch.upstream().ok();
+            let upstream_name = match &upstream {
+                Some(upstream) => upstream.name()?.map(str::to_string),
+                None => None,
+            };
+
+            let mut entry = BranchOverview {
+                name: name.to_string(),
+                kind,
+                is_head,
+                upstream: upstream_name,
+                upstream_ahead: 0,
+                upstream_behind: 0,
+                ahead_of_head: 0,
+                behind_head: 0,
+                merged_into_head: false,
+                last_commit_time: tip.as_ref().map(|commit| commit.time().seconds()),
+            };
+            if let Some(tip) = tip.map(|commit| commit.id()) {
+                if let Some(upstream_tip) = upstream.and_then(|upstream| upstream.get().target()) {
+                    (entry.upstream_ahead, entry.upstream_behind) =
+                        repo.graph_ahead_behind(tip, upstream_tip)?;
+                }
+                if let Some(head) = head {
+                    (entry.ahead_of_head, entry.behind_head) =
+                        repo.graph_ahead_behind(tip, head)?;
+                    entry.merged_into_head = !is_head && repo.merge_base(tip, head)? == tip;
+                }
+            }
+            entries.push(entry);
+        }
+
+        entries.sort_by(|a, b| (kind_order(&a.kind), &a.name).cmp(&(kind_order(&b.kind), &b.name)));
+        Ok(entries)
+    })
+}
+
+/// Sets the upstream of a local branch (`origin/main`), or removes it with `None`.
+#[cfg_attr(not(test), expect(dead_code, reason = "the Branches tab will call it"))]
+pub fn set_upstream(repo_path: &str, branch: &str, upstream: Option<&str>) -> Result<(), Error> {
+    with_cached_repo(repo_path, |repo| {
+        repo.find_branch(branch, BranchType::Local)?
+            .set_upstream(upstream)
+    })
+}
+
 pub fn create_branch<P: AsRef<Path>>(
     repo_path: P,
     name: &str,
@@ -156,7 +240,11 @@ pub fn restore_file_from_branch<P: AsRef<Path>>(
 }
 
 fn branch_sort_key(entry: &BranchEntry) -> usize {
-    match entry.kind {
+    kind_order(&entry.kind)
+}
+
+fn kind_order(kind: &BranchKind) -> usize {
+    match kind {
         BranchKind::Local => 0,
         BranchKind::Remote => 1,
     }
