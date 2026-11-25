@@ -35,7 +35,7 @@ pub fn menu_item<'a, M: Clone + 'a>(
 
     let content = row![
         // Indicateur circulaire
-        container(Space::new(7, 7)).style(move |_: &iced::Theme| container::Style {
+        container(Space::new().width(7).height(7)).style(move |_: &iced::Theme| container::Style {
             background: Some(icon_color.into()),
             border: iced::Border {
                 radius: 4.0.into(),
@@ -43,7 +43,7 @@ pub fn menu_item<'a, M: Clone + 'a>(
             },
             ..Default::default()
         }),
-        Space::with_width(10),
+        Space::new().width(10),
         text(label).size(theme.typography.body).color(text_color),
     ]
     .align_y(Alignment::Center)

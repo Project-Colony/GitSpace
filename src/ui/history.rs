@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use chrono::{Datelike, NaiveDate, TimeZone, Utc};
 use iced::widget::{
-    button, column, container, horizontal_rule, pick_list, row, scrollable, text, text_input, Space,
+    button, column, container, pick_list, row, rule, scrollable, text, text_input, Space,
 };
 use iced::{Element, Length, Task};
 
@@ -333,7 +333,7 @@ impl HistoryPanel {
             main_col = main_col.push(text(error.as_str()).size(14).style(text::danger));
         }
 
-        main_col = main_col.push(horizontal_rule(1));
+        main_col = main_col.push(rule::horizontal(1));
 
         // Deux colonnes : liste des commits | volet de details
         let commit_list = self.view_commit_list();
@@ -368,7 +368,7 @@ impl HistoryPanel {
             text("Branch").size(14),
             branch_input,
             branch_pick,
-            Space::with_width(Length::Fixed(8.0)),
+            Space::new().width(Length::Fixed(8.0)),
             text("Author").size(14),
             author_input,
         ]
@@ -386,7 +386,7 @@ impl HistoryPanel {
         let second_row = row![
             text("Search").size(14),
             search_input,
-            Space::with_width(Length::Fixed(8.0)),
+            Space::new().width(Length::Fixed(8.0)),
             text("Since").size(14),
             since_input,
             text("Until").size(14),
@@ -432,7 +432,7 @@ impl HistoryPanel {
             let row_content = column![
                 row![
                     text(&commit.summary).size(14),
-                    Space::with_width(Length::Fixed(8.0)),
+                    Space::new().width(Length::Fixed(8.0)),
                     text(&commit.short_id).size(12),
                 ]
                 .spacing(4),
@@ -520,7 +520,7 @@ impl HistoryPanel {
             );
         }
 
-        col = col.push(horizontal_rule(1));
+        col = col.push(rule::horizontal(1));
         col = col.push(text("Files changed").size(18));
 
         // Erreur de diff

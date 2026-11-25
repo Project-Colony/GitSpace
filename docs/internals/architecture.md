@@ -32,8 +32,8 @@ timer.
 One file per tab: `clone.rs` (search and clone), `recent.rs` (the Open tab), `repo_overview.rs`,
 `stage.rs`, `history.rs`, `branches.rs`, `auth.rs`, and `preferences.rs` for the full-window
 Preferences. Shared pieces: `theme.rs` (the Catppuccin palettes), `menu.rs` (menu items),
-`fonts.rs` (the bundled JetBrains Mono Nerd Font, Regular only), `context.rs` (the open
-repository) and `notifications.rs` (toasts).
+`context.rs` (the open repository) and `notifications.rs` (toasts). The fonts come from
+colony-ui and are registered in `src/main.rs`.
 
 Every git, keyring and network call runs in an iced `Task`, on tokio's blocking pool, and
 returns its result as a message. Results carry the repository path they were computed for,

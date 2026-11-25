@@ -7,8 +7,8 @@ mod git;
 mod logging;
 mod ui;
 
+use colony_ui::fonts;
 use ui::app::GitSpaceApp;
-use ui::fonts;
 
 fn main() {
     // Answered before logging starts and before any window opens: the release
@@ -25,13 +25,18 @@ fn main() {
     logging::init_tracing();
     log_dev_feature_flags();
 
-    let result = iced::application("GitSpace", GitSpaceApp::update, GitSpaceApp::view)
+    let result = fonts::BYTES
+        .into_iter()
+        .fold(
+            iced::application(GitSpaceApp::new, GitSpaceApp::update, GitSpaceApp::view),
+            |app, font| app.font(font),
+        )
+        .title("GitSpace")
         .subscription(GitSpaceApp::subscription)
         .theme(GitSpaceApp::theme)
-        .font(fonts::FONT_REGULAR)
-        .default_font(fonts::DEFAULT_FONT)
+        .default_font(colony_ui::ui_font())
         .window_size((1280.0, 800.0))
-        .run_with(GitSpaceApp::new);
+        .run();
 
     if let Err(err) = result {
         tracing::error!(target: "gitspace::main", error = %err, "echec du lancement de l'interface GitSpace");

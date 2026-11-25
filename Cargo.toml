@@ -16,7 +16,8 @@ fake-repos = []
 mock-providers = []
 
 [dependencies]
-iced = { version = "0.13.1", features = ["tokio", "advanced"] }
+iced = { version = "0.14.0", features = ["tokio", "advanced"] }
+colony-ui = "0.1.6"
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 git2 = { version = "0.21.0", features = ["https", "ssh", "vendored-openssl"] }
 reqwest = { version = "0.13.5", features = ["blocking", "form", "json", "query"] }

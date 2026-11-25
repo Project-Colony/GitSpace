@@ -142,6 +142,7 @@ impl Theme {
             text: self.palette.text_primary,
             primary: self.palette.accent,
             success: color_from_rgb(0xa6, 0xe3, 0xa1),
+            warning: color_from_rgb(0xf9, 0xe2, 0xaf),
             danger: color_from_rgb(0xf3, 0x8b, 0xa8),
         };
         iced::Theme::custom_with_fn("Catppuccin".to_string(), iced_palette, |palette| {

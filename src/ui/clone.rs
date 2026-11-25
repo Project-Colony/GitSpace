@@ -471,21 +471,21 @@ impl ClonePanel {
                 .color(theme.palette.text_secondary)
                 .into()
         } else {
-            Space::new(0, 0).into()
+            Space::new().into()
         };
 
         let content = column![
             title,
             subtitle,
-            Space::with_height(12),
+            Space::new().height(12),
             provider_row,
-            Space::with_height(8),
+            Space::new().height(8),
             search_section,
-            Space::with_height(12),
+            Space::new().height(12),
             url_section,
-            Space::with_height(12),
+            Space::new().height(12),
             destination_section,
-            Space::with_height(12),
+            Space::new().height(12),
             action_bar,
             progress_section,
             status_section,
@@ -583,7 +583,7 @@ impl ClonePanel {
                 .color(theme.palette.text_secondary)
                 .into()
         } else {
-            Space::new(0, 0).into()
+            Space::new().into()
         };
 
         let search_row = row![query_input, search_btn, status_label]
@@ -596,9 +596,9 @@ impl ClonePanel {
         column![
             heading,
             help_text,
-            Space::with_height(6),
+            Space::new().height(6),
             search_row,
-            Space::with_height(8),
+            Space::new().height(8),
             results_section
         ]
         .spacing(2)
@@ -670,7 +670,7 @@ impl ClonePanel {
         };
 
         // Alignement à droite via un espace flexible
-        row![Space::with_width(Length::Fill), clone_btn]
+        row![Space::new().width(Length::Fill), clone_btn]
             .width(Length::Fill)
             .into()
     }
@@ -689,7 +689,7 @@ impl ClonePanel {
                     .size(theme.typography.body)
                     .color(theme.palette.text_primary);
 
-                let bar = progress_bar(0.0..=1.0, ratio).width(Length::Fill);
+                let bar = progress_bar(0.0..=1.0, ratio).length(Length::Fill);
 
                 let detail = text(format!(
                     "Objets {}/{} ({:.1} Ko) — Deltas indexés {}/{}",
@@ -702,12 +702,12 @@ impl ClonePanel {
                 .size(theme.typography.body)
                 .color(theme.palette.text_secondary);
 
-                column![Space::with_height(10), label, bar, detail]
+                column![Space::new().height(10), label, bar, detail]
                     .spacing(4)
                     .width(Length::Fill)
                     .into()
             }
-            None => Space::new(0, 0).into(),
+            None => Space::new().into(),
         }
     }
 }
@@ -1083,7 +1083,7 @@ fn clone_with_progress(
     mut request: CloneRequest,
     auth: AuthManager,
 ) -> impl Stream<Item = Message> {
-    iced::stream::channel(16, move |mut output| async move {
+    iced::stream::channel(16, async move |mut output| {
         let mut progress = output.clone();
         let result = tokio::task::spawn_blocking(move || {
             if request.token.is_none() {

@@ -144,9 +144,9 @@ impl RecentList {
         column![
             heading,
             description,
-            Space::with_height(8.0),
+            Space::new().height(8.0),
             filter_row,
-            Space::with_height(8.0),
+            Space::new().height(8.0),
             body
         ]
         .spacing(theme.spacing.xs)
@@ -219,11 +219,11 @@ impl RecentList {
         .width(Length::Fixed(520.0))
         .on_press(Message::BrowseClicked);
 
-        let mut col = column![hint, Space::with_height(8.0), open_btn].spacing(theme.spacing.xs);
+        let mut col = column![hint, Space::new().height(8.0), open_btn].spacing(theme.spacing.xs);
 
         // Raccourcis d'accès rapide vers les répertoires courants.
         if !self.common_paths.is_empty() {
-            col = col.push(Space::with_height(8.0));
+            col = col.push(Space::new().height(8.0));
             col = col.push(
                 text("Quick access")
                     .size(typo.body)

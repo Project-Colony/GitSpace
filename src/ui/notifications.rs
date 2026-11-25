@@ -117,7 +117,7 @@ impl NotificationCenter {
     /// Construit la vue des notifications en overlay.
     pub fn view(&self, theme: &Theme) -> Element<'_, Message> {
         if self.queue.is_empty() {
-            return Space::new(0, 0).into();
+            return Space::new().into();
         }
 
         let fill_color = Color::from_rgb8(125, 32, 32);
@@ -132,7 +132,7 @@ impl NotificationCenter {
                 text(&notification.title)
                     .size(theme.typography.body)
                     .color(Color::WHITE),
-                Space::with_width(Length::Fill),
+                Space::new().width(Length::Fill),
                 button(text("x").size(12).color(Color::WHITE))
                     .on_press(Message::Dismiss(id))
                     .padding(2),

@@ -165,5 +165,5 @@ action named there. Their privacy policies:
 
 GitSpace is licensed under the [GNU General Public License v3.0 or later](LICENSE).
 
-The bundled JetBrains Mono Nerd Font files in `assets/JetBrainsMonoNerdFont/` are licensed
-under the SIL Open Font License 1.1 (see [OFL.txt](assets/JetBrainsMonoNerdFont/OFL.txt)).
+The interface fonts come from the [colony-ui](https://crates.io/crates/colony-ui) crate,
+which ships each font with its licence.

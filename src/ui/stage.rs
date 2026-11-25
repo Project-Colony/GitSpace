@@ -8,8 +8,7 @@ use std::sync::Arc;
 
 use git2::{Repository, Status, StatusOptions, StatusShow};
 use iced::widget::{
-    button, checkbox, container, horizontal_rule, pick_list, scrollable, text, text_input, Button,
-    Column, Row,
+    button, checkbox, container, pick_list, rule, scrollable, text, text_input, Button, Column, Row,
 };
 use iced::{Element, Length, Task};
 
@@ -436,7 +435,7 @@ impl StagePanel {
 
         // ── Dialogue de restauration (intégré dans le panneau) ──────────
         if self.restore_dialog_open {
-            content = content.push(horizontal_rule(1));
+            content = content.push(rule::horizontal(1));
             content = content.push(self.build_restore_dialog());
         }
 
@@ -521,7 +520,7 @@ impl StagePanel {
             None => Row::new().push(text("Diff preview").size(16)),
         };
         col = col.push(header_row);
-        col = col.push(horizontal_rule(1));
+        col = col.push(rule::horizontal(1));
 
         // Contenu du diff, chargé à la sélection
         if self.selected_diff.is_some() {
@@ -568,11 +567,13 @@ impl StagePanel {
 
         // Case à cocher pour le signoff, inactive sans identité Git configurée
         col = col.push(
-            checkbox("Add Signed-off-by", self.include_signoff).on_toggle_maybe(
-                self.signoff_line
-                    .is_some()
-                    .then_some(Message::ToggleSignoff),
-            ),
+            checkbox(self.include_signoff)
+                .label("Add Signed-off-by")
+                .on_toggle_maybe(
+                    self.signoff_line
+                        .is_some()
+                        .then_some(Message::ToggleSignoff),
+                ),
         );
 
         let can_commit = !self.commit_message.trim().is_empty() && !self.staged.is_empty();
@@ -596,7 +597,8 @@ impl StagePanel {
             .on_input(Message::StashMessageChanged)
             .padding(4);
 
-        let untracked_checkbox = checkbox("Include untracked", self.include_untracked_in_stash)
+        let untracked_checkbox = checkbox(self.include_untracked_in_stash)
+            .label("Include untracked")
             .on_toggle(Message::ToggleIncludeUntracked);
 
         let create_btn = self.action_button("Create stash", Message::CreateStash);

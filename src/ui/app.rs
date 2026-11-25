@@ -512,7 +512,12 @@ impl GitSpaceApp {
             subs.push(iced::time::every(interval).map(|_| Message::AutoFetchTick));
         }
 
-        subs.push(iced::keyboard::on_key_press(tab_shortcut));
+        subs.push(iced::keyboard::listen().filter_map(|event| match event {
+            iced::keyboard::Event::KeyPressed { key, modifiers, .. } => {
+                tab_shortcut(key, modifiers)
+            }
+            _ => None,
+        }));
 
         Subscription::batch(subs)
     }

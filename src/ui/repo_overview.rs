@@ -7,7 +7,7 @@ use std::path::Path;
 use std::process::Command as ProcessCommand;
 use std::sync::Arc;
 
-use iced::widget::{button, container, horizontal_rule, text, Column, Row};
+use iced::widget::{button, container, rule, text, Column, Row};
 use iced::{Element, Length, Task};
 
 use crate::ui::theme::Theme;
@@ -237,15 +237,15 @@ impl RepoOverviewPanel {
 
         // ── Résumé : nom + chemin ───────────────────────────────────────
         content = content.push(self.build_summary(repo));
-        content = content.push(horizontal_rule(1));
+        content = content.push(rule::horizontal(1));
 
         // ── Section branche ─────────────────────────────────────────────
         content = content.push(self.build_branch_section());
-        content = content.push(horizontal_rule(1));
+        content = content.push(rule::horizontal(1));
 
         // ── Section remotes ─────────────────────────────────────────────
         content = content.push(self.build_remotes_section());
-        content = content.push(horizontal_rule(1));
+        content = content.push(rule::horizontal(1));
 
         // ── Actions rapides ─────────────────────────────────────────────
         content = content.push(self.build_quick_actions());

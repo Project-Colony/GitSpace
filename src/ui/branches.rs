@@ -9,8 +9,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use git2::BranchType;
 use iced::widget::{
-    button, checkbox, column, container, horizontal_rule, row, scrollable, text, text_input,
-    Button, Space,
+    button, checkbox, column, container, row, rule, scrollable, text, text_input, Button, Space,
 };
 use iced::{Element, Length, Task};
 
@@ -541,7 +540,9 @@ impl BranchPanel {
 
         // Case a cocher "branches obsoletes uniquement"
         main_col = main_col.push(
-            checkbox("Show stale only", self.stale_only).on_toggle(|_| Message::ToggleStaleOnly),
+            checkbox(self.stale_only)
+                .label("Show stale only")
+                .on_toggle(|_| Message::ToggleStaleOnly),
         );
 
         // Disposition en deux colonnes : locales | distantes
@@ -558,12 +559,12 @@ impl BranchPanel {
 
         // Panneau de details de la selection (sous la colonne gauche)
         main_col = main_col
-            .push(horizontal_rule(1))
+            .push(rule::horizontal(1))
             .push(self.view_selection_panel());
 
         // Panneau de comparaison
         main_col = main_col
-            .push(horizontal_rule(1))
+            .push(rule::horizontal(1))
             .push(self.view_compare_panel());
 
         main_col.into()
@@ -627,7 +628,7 @@ impl BranchPanel {
                 col = col.push(self.view_branch_button(branch));
             }
             if !root.children.is_empty() {
-                col = col.push(horizontal_rule(1));
+                col = col.push(rule::horizontal(1));
             }
         }
 
@@ -647,7 +648,7 @@ impl BranchPanel {
             if entry.is_folder {
                 col = col.push(
                     row![
-                        Space::with_width(Length::Fixed(indent as f32)),
+                        Space::new().width(Length::Fixed(indent as f32)),
                         text(entry.label).size(14),
                     ]
                     .spacing(4),
@@ -655,7 +656,7 @@ impl BranchPanel {
             } else if let Some(branch) = &entry.branch {
                 col = col.push(
                     row![
-                        Space::with_width(Length::Fixed(indent as f32)),
+                        Space::new().width(Length::Fixed(indent as f32)),
                         self.view_branch_button(branch),
                     ]
                     .spacing(4),

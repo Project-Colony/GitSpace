@@ -443,11 +443,11 @@ impl AuthPanel {
         let content = column![
             heading,
             description,
-            Space::with_height(theme.spacing.lg),
+            Space::new().height(theme.spacing.lg),
             accounts_section,
-            Space::with_height(theme.spacing.lg),
+            Space::new().height(theme.spacing.lg),
             oauth_section,
-            Space::with_height(theme.spacing.lg),
+            Space::new().height(theme.spacing.lg),
             manual_section,
         ]
         .spacing(theme.spacing.xs)
@@ -508,7 +508,7 @@ impl AuthPanel {
                 )
                 .on_press(Message::Disconnect(host.to_string()));
 
-                let account_row = row![label, Space::with_width(Length::Fill), disconnect_btn]
+                let account_row = row![label, Space::new().width(Length::Fill), disconnect_btn]
                     .spacing(theme.spacing.sm)
                     .align_y(Alignment::Center);
 
@@ -523,9 +523,14 @@ impl AuthPanel {
             );
         }
 
-        column![title, subtitle, Space::with_height(theme.spacing.sm), items]
-            .spacing(theme.spacing.xs)
-            .into()
+        column![
+            title,
+            subtitle,
+            Space::new().height(theme.spacing.sm),
+            items
+        ]
+        .spacing(theme.spacing.xs)
+        .into()
     }
 
     /// Code GitHub en attente de saisie et sa page de vérification.
@@ -617,7 +622,7 @@ impl AuthPanel {
             gitlab_btn = gitlab_btn.on_press(Message::StartGitlabOAuth);
         }
 
-        let oauth_buttons = row![github_btn, Space::with_width(theme.spacing.md), gitlab_btn]
+        let oauth_buttons = row![github_btn, Space::new().width(theme.spacing.md), gitlab_btn]
             .align_y(Alignment::Center);
 
         // Code GitHub puis messages de statut.
@@ -646,10 +651,10 @@ impl AuthPanel {
         column![
             title,
             description,
-            Space::with_height(theme.spacing.sm),
+            Space::new().height(theme.spacing.sm),
             oauth_buttons,
             status_col,
-            Space::with_height(theme.spacing.sm),
+            Space::new().height(theme.spacing.sm),
             oauth_config,
         ]
         .spacing(theme.spacing.xs)
@@ -696,7 +701,7 @@ impl AuthPanel {
         // Note sur les variables d'environnement.
         let mut col = column![
             config_hint,
-            Space::with_height(theme.spacing.xs),
+            Space::new().height(theme.spacing.xs),
             github_row,
             gitlab_row
         ]
@@ -775,10 +780,10 @@ impl AuthPanel {
         let mut col = column![
             title,
             description,
-            Space::with_height(theme.spacing.sm),
+            Space::new().height(theme.spacing.sm),
             host_row,
             token_row,
-            Space::with_height(theme.spacing.xs),
+            Space::new().height(theme.spacing.xs),
             save_btn,
         ]
         .spacing(theme.spacing.xs);
@@ -801,7 +806,7 @@ fn github_device_flow(
     provider: OAuthProvider,
     cancelled: Receiver<()>,
 ) -> impl Stream<Item = GithubSignInEvent> {
-    iced::stream::channel(2, move |mut output| async move {
+    iced::stream::channel(2, async move |mut output| {
         let flow = match tokio::task::spawn_blocking(move || DeviceFlow::start(provider)).await {
             Ok(Ok(flow)) => flow,
             Ok(Err(err)) => {

@@ -12,8 +12,8 @@ Git, keyring and network work never runs in `update` or `view`. It goes to an ic
 tokio's blocking pool and comes back as a message, so the window keeps drawing during a clone,
 a search, a fetch, a merge or a keyring prompt.
 
-The look is GitSpace's own: four Catppuccin palettes in `src/ui/theme.rs`, the bundled
-JetBrains Mono Nerd Font (Regular) in `src/ui/fonts.rs`, and menu items in `src/ui/menu.rs`.
+The look is GitSpace's own: four Catppuccin palettes in `src/ui/theme.rs` and menu items in
+`src/ui/menu.rs`. The fonts come from colony-ui.
 
 ## Before: egui
 

@@ -1,6 +1,6 @@
 //! Structure de la coquille de l'application : header, sidebar, tab bar.
 
-use iced::widget::{button, column, container, horizontal_rule, row, scrollable, text, Space};
+use iced::widget::{button, column, container, row, rule, scrollable, text, Space};
 use iced::{Alignment, Element, Length};
 
 use crate::ui::context::RepoContext;
@@ -55,7 +55,7 @@ pub enum LayoutMessage {
 /// Construit le header de l'application.
 pub fn view_header(theme: &Theme) -> Element<'_, LayoutMessage> {
     let header_content = row![
-        Space::with_width(8),
+        Space::new().width(8),
         button(
             text("GitSpace")
                 .size(theme.typography.heading)
@@ -67,11 +67,11 @@ pub fn view_header(theme: &Theme) -> Element<'_, LayoutMessage> {
             background: None,
             ..Default::default()
         }),
-        Space::with_width(12),
+        Space::new().width(12),
         text("Workspace shell")
             .size(theme.typography.body)
             .color(theme.palette.accent),
-        Space::with_width(Length::Fill),
+        Space::new().width(Length::Fill),
     ]
     .align_y(Alignment::Center)
     .height(48);
@@ -96,14 +96,14 @@ pub fn view_sidebar<'a>(
 ) -> Element<'a, LayoutMessage> {
     let mut sidebar = column![].spacing(2).padding(8).width(220);
 
-    sidebar = sidebar.push(Space::with_height(12));
+    sidebar = sidebar.push(Space::new().height(12));
     sidebar = sidebar.push(
         text("Navigation")
             .size(theme.typography.title)
             .color(theme.palette.text_primary),
     );
-    sidebar = sidebar.push(horizontal_rule(1));
-    sidebar = sidebar.push(Space::with_height(8));
+    sidebar = sidebar.push(rule::horizontal(1));
+    sidebar = sidebar.push(Space::new().height(8));
 
     // Section Workspaces
     sidebar = sidebar.push(
@@ -120,7 +120,7 @@ pub fn view_sidebar<'a>(
         ));
     }
 
-    sidebar = sidebar.push(Space::with_height(12));
+    sidebar = sidebar.push(Space::new().height(12));
     sidebar = sidebar.push(
         text("Actions")
             .size(theme.typography.label)
@@ -141,7 +141,7 @@ pub fn view_sidebar<'a>(
     }
 
     // Section contexte
-    sidebar = sidebar.push(Space::with_height(12));
+    sidebar = sidebar.push(Space::new().height(12));
     sidebar = sidebar.push(
         text("Context")
             .size(theme.typography.label)
@@ -164,7 +164,7 @@ pub fn view_sidebar<'a>(
                 .size(theme.typography.label)
                 .color(theme.palette.text_secondary),
         );
-        sidebar = sidebar.push(Space::with_height(8));
+        sidebar = sidebar.push(Space::new().height(8));
         sidebar = sidebar.push(
             button(text("Ouvrir le dossier").size(12))
                 .on_press(LayoutMessage::OpenFileManager)
@@ -218,5 +218,5 @@ pub fn view_tab_bar<'a>(
         ));
     }
 
-    column![container(tabs).width(Length::Fill), horizontal_rule(1),].into()
+    column![container(tabs).width(Length::Fill), rule::horizontal(1),].into()
 }

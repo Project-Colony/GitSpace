@@ -4,7 +4,7 @@
 //! gauche avec 4 categories et un contenu scrollable a droite.
 
 use iced::widget::{
-    button, checkbox, column, container, horizontal_rule, pick_list, row, scrollable, slider, text,
+    button, checkbox, column, container, pick_list, row, rule, scrollable, slider, text,
     text_input, Space,
 };
 use iced::{Alignment, Color, Element, Length, Task};
@@ -436,7 +436,7 @@ impl PreferencesPanel {
 
         // Separateur vertical simule par un container colore
         let separator =
-            container(Space::with_width(1))
+            container(Space::new().width(1))
                 .height(Length::Fill)
                 .style(move |_: &iced::Theme| container::Style {
                     background: Some(palette.surface_highlight.into()),
@@ -466,11 +466,11 @@ impl PreferencesPanel {
         let typo = &theme.typography;
 
         let mut sidebar_items = column![
-            Space::with_height(theme.spacing.sm),
+            Space::new().height(theme.spacing.sm),
             text("Preferences")
                 .size(typo.title)
                 .color(palette.text_primary),
-            Space::with_height(theme.spacing.md),
+            Space::new().height(theme.spacing.md),
         ]
         .spacing(2);
 
@@ -481,7 +481,7 @@ impl PreferencesPanel {
         }
 
         // Espace flexible pour pousser le bouton Fermer en bas
-        sidebar_items = sidebar_items.push(Space::with_height(Length::Fill));
+        sidebar_items = sidebar_items.push(Space::new().height(Length::Fill));
 
         // Bouton Fermer (abandonne les modifications non sauvegardees)
         let close_btn = button(text("Fermer").size(typo.body).color(palette.text_primary))
@@ -496,7 +496,7 @@ impl PreferencesPanel {
             ));
 
         sidebar_items = sidebar_items.push(close_btn);
-        sidebar_items = sidebar_items.push(Space::with_height(theme.spacing.sm));
+        sidebar_items = sidebar_items.push(Space::new().height(theme.spacing.sm));
 
         container(sidebar_items.padding(theme.spacing.sm))
             .width(200)
@@ -531,7 +531,7 @@ impl PreferencesPanel {
         let content = row![
             // Indicateur accent a gauche si selectionne
             if is_selected {
-                container(Space::with_width(3))
+                container(Space::new().width(3))
                     .height(24)
                     .style(move |_: &iced::Theme| container::Style {
                         background: Some(accent.into()),
@@ -542,9 +542,9 @@ impl PreferencesPanel {
                         ..Default::default()
                     })
             } else {
-                container(Space::with_width(3)).height(24)
+                container(Space::new().width(3)).height(24)
             },
-            Space::with_width(6),
+            Space::new().width(6),
             text(label_text).size(typo.body).color(text_color),
         ]
         .align_y(Alignment::Center);
@@ -703,26 +703,26 @@ impl PreferencesPanel {
             .spacing(theme.spacing.sm)
             .align_y(Alignment::Center);
 
-        let use_https_cb =
-            checkbox("Preferer HTTPS", network.use_https).on_toggle(Message::UseHttpsChanged);
-        let allow_ssh_cb =
-            checkbox("Autoriser SSH", network.allow_ssh).on_toggle(Message::AllowSshChanged);
+        let use_https_cb = checkbox(network.use_https)
+            .label("Preferer HTTPS")
+            .on_toggle(Message::UseHttpsChanged);
+        let allow_ssh_cb = checkbox(network.allow_ssh)
+            .label("Autoriser SSH")
+            .on_toggle(Message::AllowSshChanged);
         let proto_row = row![
             use_https_cb,
-            Space::with_width(theme.spacing.md),
+            Space::new().width(theme.spacing.md),
             allow_ssh_cb
         ]
         .align_y(Alignment::Center);
 
-        let auto_fetch_cb = checkbox(
-            "Recuperation automatique des remotes",
-            self.preferences.auto_fetch_enabled(),
-        )
-        .on_toggle(Message::AutoFetchEnabledChanged);
+        let auto_fetch_cb = checkbox(self.preferences.auto_fetch_enabled())
+            .label("Recuperation automatique des remotes")
+            .on_toggle(Message::AutoFetchEnabledChanged);
 
         let mut network_col = column![
             section_header(theme, "Reseau", "Proxy, timeout et protocoles"),
-            Space::with_height(theme.spacing.xs),
+            Space::new().height(theme.spacing.xs),
             http_proxy_row,
             https_proxy_row,
             timeout_row,
@@ -748,17 +748,17 @@ impl PreferencesPanel {
         column![
             heading,
             subtitle,
-            Space::with_height(theme.spacing.md),
+            Space::new().height(theme.spacing.md),
             section_header(
                 theme,
                 "Depots",
                 "Chemin de destination par defaut pour les clones"
             ),
-            Space::with_height(theme.spacing.xs),
+            Space::new().height(theme.spacing.xs),
             clone_row,
-            Space::with_height(theme.spacing.md),
-            horizontal_rule(1),
-            Space::with_height(theme.spacing.md),
+            Space::new().height(theme.spacing.md),
+            rule::horizontal(1),
+            Space::new().height(theme.spacing.md),
             network_col,
         ]
         .spacing(theme.spacing.sm)
@@ -800,9 +800,9 @@ impl PreferencesPanel {
         column![
             heading,
             subtitle,
-            Space::with_height(theme.spacing.md),
+            Space::new().height(theme.spacing.md),
             section_header(theme, "Theme", "Choisissez un theme Catppuccin"),
-            Space::with_height(theme.spacing.xs),
+            Space::new().height(theme.spacing.xs),
             theme_row,
         ]
         .spacing(theme.spacing.sm)
@@ -846,22 +846,21 @@ impl PreferencesPanel {
             .align_y(Alignment::Center);
 
         // -- Confidentialite --
-        let encrypted_cb = checkbox(
-            "Autoriser le stockage chiffre des tokens",
-            self.preferences.allow_encrypted_tokens(),
-        )
-        .on_toggle(Message::AllowEncryptedTokensChanged);
+        let encrypted_cb = checkbox(self.preferences.allow_encrypted_tokens())
+            .label("Autoriser le stockage chiffre des tokens")
+            .on_toggle(Message::AllowEncryptedTokensChanged);
 
         // -- Import / Export --
         let import_btn = styled_secondary_button(theme, "Importer", Message::ImportSettings);
 
         let export_btn = styled_secondary_button(theme, "Exporter", Message::ExportSettings);
 
-        let mut ie_col = column![
-            row![import_btn, Space::with_width(theme.spacing.sm), export_btn]
-                .align_y(Alignment::Center),
-        ]
-        .spacing(theme.spacing.xs);
+        let mut ie_col =
+            column![
+                row![import_btn, Space::new().width(theme.spacing.sm), export_btn]
+                    .align_y(Alignment::Center),
+            ]
+            .spacing(theme.spacing.xs);
 
         if let Some(status) = &self.import_status {
             ie_col = ie_col.push(
@@ -884,29 +883,29 @@ impl PreferencesPanel {
         column![
             heading,
             subtitle,
-            Space::with_height(theme.spacing.md),
+            Space::new().height(theme.spacing.md),
             section_header(
                 theme,
                 "Journalisation",
                 "Nombre de fichiers de log conserves"
             ),
-            Space::with_height(theme.spacing.xs),
+            Space::new().height(theme.spacing.xs),
             retention_row,
-            Space::with_height(theme.spacing.md),
-            horizontal_rule(1),
-            Space::with_height(theme.spacing.md),
+            Space::new().height(theme.spacing.md),
+            rule::horizontal(1),
+            Space::new().height(theme.spacing.md),
             section_header(theme, "Confidentialite", "Stockage securise des tokens"),
-            Space::with_height(theme.spacing.xs),
+            Space::new().height(theme.spacing.xs),
             encrypted_cb,
-            Space::with_height(theme.spacing.md),
-            horizontal_rule(1),
-            Space::with_height(theme.spacing.md),
+            Space::new().height(theme.spacing.md),
+            rule::horizontal(1),
+            Space::new().height(theme.spacing.md),
             section_header(
                 theme,
                 "Import / Export",
                 "Transferez vos preferences au format JSON"
             ),
-            Space::with_height(theme.spacing.xs),
+            Space::new().height(theme.spacing.xs),
             ie_col,
         ]
         .spacing(theme.spacing.sm)
@@ -927,7 +926,7 @@ fn section_header<'a, M: 'a>(
     let typo = &theme.typography;
     let accent = palette.accent;
 
-    let indicator = container(Space::with_width(3))
+    let indicator = container(Space::new().width(3))
         .height(32)
         .style(move |_: &iced::Theme| container::Style {
             background: Some(accent.into()),
@@ -946,7 +945,7 @@ fn section_header<'a, M: 'a>(
     ]
     .spacing(2);
 
-    row![indicator, Space::with_width(8), labels]
+    row![indicator, Space::new().width(8), labels]
         .align_y(Alignment::Center)
         .into()
 }
