@@ -75,12 +75,24 @@ impl AuthManager {
     }
 
     /// Returns the token saved for `host`. An expired OAuth token with a refresh token is
-    /// refreshed first, which blocks on one HTTP request; `None` if that fails.
+    /// refreshed first, which blocks on one HTTP request; if that fails, the saved access
+    /// token is returned and the host will reject it.
     pub fn resolve_for_host(&self, host: &str) -> Option<String> {
         let key = storage_key(host);
-        if let Some(oauth) = self.get_oauth_token(&key) {
-            if oauth.is_expired() && oauth.refresh_token.is_some() {
-                return self.refresh_oauth_token(&oauth);
+        if self
+            .get_oauth_token(&key)
+            .is_some_and(|oauth| oauth.is_expired() && oauth.refresh_token.is_some())
+        {
+            // One refresh at a time: a provider that rotates refresh tokens refuses the second
+            // use of the same one. The token is read again once the lock is held.
+            static REFRESH: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            let _guard = REFRESH.lock().unwrap_or_else(|err| err.into_inner());
+            if let Some(oauth) = self.get_oauth_token(&key) {
+                if oauth.is_expired() && oauth.refresh_token.is_some() {
+                    if let Some(token) = self.refresh_oauth_token(&oauth) {
+                        return Some(token);
+                    }
+                }
             }
         }
         self.storage.get_token(&key).ok().flatten()
@@ -163,8 +175,12 @@ impl AuthManager {
 
     pub async fn validate_and_store(&self, host: &str, token: &str) -> Result<(), String> {
         self.validate_token(host, token).await?;
+        let key = storage_key(host);
         // Saved under the key `resolve_for_url` looks up, not the host as typed.
-        self.storage.set_token(&storage_key(host), token.trim())
+        self.storage.set_token(&key, token.trim())?;
+        // The token typed by the user replaces an OAuth sign-in, whose refresh would
+        // otherwise overwrite it.
+        self.storage.clear_token(&format!("oauth:{key}"))
     }
 
     pub fn set_encrypted_fallback(&mut self, allowed: bool) {
