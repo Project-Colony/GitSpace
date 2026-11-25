@@ -432,13 +432,14 @@ impl GitSpaceApp {
                 self.reload_changes(),
             ]),
 
-            Message::TabShortcut(index) => {
-                if let Some(tab) = RepoTab::ALL.get(index) {
+            Message::TabShortcut(index) => match RepoTab::ALL.get(index) {
+                Some(tab) => {
                     self.active_tab = *tab;
                     self.adding = false;
+                    self.close_preferences()
                 }
-                Task::none()
-            }
+                None => Task::none(),
+            },
 
             Message::Escape => {
                 if self.sidebar.is_searching() {
@@ -542,13 +543,8 @@ impl GitSpaceApp {
                 Task::none()
             }
             Side::AddRepository => {
-                let closed = if self.preferences.is_open() {
-                    self.update(Message::Preferences(preferences::Message::Toggle))
-                } else {
-                    Task::none()
-                };
                 self.adding = true;
-                closed
+                self.close_preferences()
             }
             Side::TogglePreferences => {
                 self.update(Message::Preferences(preferences::Message::Toggle))
@@ -562,17 +558,28 @@ impl GitSpaceApp {
         }
     }
 
-    /// Opens `path` from the sidebar; the search and any menu close.
+    /// Opens `path` from the sidebar; the search, any menu and Preferences close.
     fn open_repo(&mut self, path: &str) -> Task<Message> {
         self.adding = false;
         self.sidebar.close_search();
         self.sidebar.set_menu(None);
+        let closed = self.close_preferences();
         let current = self.current_repo.as_ref().map(RepoContext::path);
         if !needs_load(&mut self.pending_repo, current, path) {
             self.sidebar.set_anchor(path);
-            return Task::none();
+            return closed;
         }
-        self.load_repo_context_async(path.to_string())
+        Task::batch([closed, self.load_repo_context_async(path.to_string())])
+    }
+
+    /// Closes Preferences, when open, through its own message so a typed clone folder is
+    /// still applied.
+    fn close_preferences(&mut self) -> Task<Message> {
+        if self.preferences.is_open() {
+            self.update(Message::Preferences(preferences::Message::Toggle))
+        } else {
+            Task::none()
+        }
     }
 
     /// Reads the quick status of every listed repository in the background, a few at a time.
@@ -1038,6 +1045,52 @@ mod tests {
 
     fn name(message: Option<Message>) -> String {
         message.map_or_else(|| "None".to_string(), |message| format!("{message:?}"))
+    }
+
+    /// The application with nothing open and nothing read from or written to disk.
+    fn test_app(dir: &std::path::Path) -> GitSpaceApp {
+        let auth_manager = AuthManager::in_dir(dir);
+        GitSpaceApp {
+            active_tab: RepoTab::Changes,
+            adding: false,
+            sidebar: Sidebar::default(),
+            statuses: HashMap::new(),
+            status_refresh: StatusRefresh::default(),
+            add_repo: AddRepoPanel::new(String::new(), Default::default()),
+            repo_header: RepoHeader::new(Default::default()),
+            changes_panel: ChangesPanel::default(),
+            history_panel: HistoryPanel::default(),
+            branches_panel: BranchPanel::new(Vec::new()),
+            stashes_panel: StashesPanel::default(),
+            preferences: PreferencesPage::new(auth_manager.clone()),
+            config: AppConfig::default(),
+            current_repo: None,
+            pending_repo: None,
+            auth_manager,
+            toasts: Toasts::default(),
+        }
+    }
+
+    #[test]
+    fn picking_a_repository_or_a_tab_closes_preferences() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = test_app(dir.path());
+        let toggle = || Message::Preferences(preferences::Message::Toggle);
+
+        let _ = app.update(toggle());
+        assert!(app.preferences.is_open());
+        let _ = app.update(Message::Sidebar(sidebar::Message::Select("/repo".into())));
+        assert!(!app.preferences.is_open());
+
+        let _ = app.update(toggle());
+        let _ = app.update(Message::TabShortcut(2));
+        assert!(!app.preferences.is_open());
+        assert_eq!(app.active_tab, RepoTab::Branches);
+
+        // Ctrl+5 is no tab: Preferences stay.
+        let _ = app.update(toggle());
+        let _ = app.update(Message::TabShortcut(4));
+        assert!(app.preferences.is_open());
     }
 
     #[test]
