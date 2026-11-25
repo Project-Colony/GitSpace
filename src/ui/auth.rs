@@ -183,6 +183,11 @@ impl AuthPanel {
         )
     }
 
+    /// Whether an account is saved for `host`, as of the last account read.
+    pub fn is_connected(&self, host: &str) -> bool {
+        self.accounts.iter().any(|(saved, _)| saved == host)
+    }
+
     /// Message de statut de la connexion OAuth d'un fournisseur.
     fn status_mut(&mut self, service: OAuthService) -> &mut Option<String> {
         match service {

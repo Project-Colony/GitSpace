@@ -848,7 +848,7 @@ fn lane<'a>(is_merge: bool) -> Element<'a, Message> {
 }
 
 /// The author's initials in a circle of their accent colour.
-fn avatar<'a>(initials: &str, accent: &str, size: f32) -> Element<'a, Message> {
+pub(crate) fn avatar<'a, M: 'a>(initials: &str, accent: &str, size: f32) -> Element<'a, M> {
     let typo = Typography::current();
     let color = accent_key_to_color(accent).unwrap_or_else(Palette::ACCENT);
     container(
@@ -940,7 +940,7 @@ fn short_hash(id: &str) -> &str {
 
 /// The first letters of the first two words of `author`, upper case. Words are split on
 /// anything that is not a letter or digit, so "release-please" gives "RP".
-fn initials(author: &str) -> String {
+pub(crate) fn initials(author: &str) -> String {
     author
         .split(|c: char| !c.is_alphanumeric())
         .filter_map(|word| word.chars().next())
@@ -950,7 +950,7 @@ fn initials(author: &str) -> String {
 }
 
 /// The accent key of an author's avatar, the same on every start and machine.
-fn avatar_accent(email_or_name: &str) -> &'static str {
+pub(crate) fn avatar_accent(email_or_name: &str) -> &'static str {
     // A fixed string hash: std's hashers may change between Rust releases.
     let hash = email_or_name
         .to_lowercase()

@@ -19,19 +19,17 @@ use crate::git::discover::discover_repositories;
 use crate::git::status::{quick_status, QuickStatus};
 use crate::i18n::{t, tf};
 use crate::ui::{
+    add_repo::{self, AddRepoPanel},
     auth::AuthPanel,
     branches::{self, BranchPanel},
     changes::{self, ChangesPanel},
-    clone::{self, ClonePanel},
     context::RepoContext,
     history::{self, HistoryPanel},
     preferences::PreferencesPanel,
-    recent::RecentList,
     repo_header::{self, RepoHeader, RepoTab, TabCounts},
     sidebar::{self, Sidebar},
     stashes::{self, StashesPanel},
     theme::Theme,
-    widgets::tabs::tabs,
     widgets::toast::{Toast, ToastAction, Toasts},
 };
 
@@ -72,26 +70,12 @@ impl StatusRefresh {
     }
 }
 
-/// The sections of the add-repository page.
-/// shortcut: Open and Accounts sit here until the Add repository screen and Preferences take
-/// them over (Tasks 17 and 18).
+/// What the content area shows in place of the open repository.
+/// shortcut: Accounts is its own page until Preferences takes it over (Task 18).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AddTab {
-    Clone,
-    Open,
+enum AddPage {
+    Repository,
     Accounts,
-}
-
-impl AddTab {
-    const ALL: [AddTab; 3] = [AddTab::Clone, AddTab::Open, AddTab::Accounts];
-
-    fn label(self) -> &'static str {
-        match self {
-            AddTab::Clone => t("add_clone"),
-            AddTab::Open => t("add_open"),
-            AddTab::Accounts => t("add_accounts"),
-        }
-    }
 }
 
 /// The panel that changed the repository, which [`GitSpaceApp::reload_other_panels`] skips.
@@ -111,12 +95,8 @@ enum Origin {
 pub enum Message {
     Sidebar(sidebar::Message),
 
-    /// Shows a section of the add-repository page.
-    AddTab(AddTab),
-
     // Panneaux
-    Clone(crate::ui::clone::Message),
-    Recent(crate::ui::recent::Message),
+    AddRepo(add_repo::Message),
     RepoHeader(repo_header::Message),
     Changes(changes::Message),
     History(crate::ui::history::Message),
@@ -159,8 +139,8 @@ pub enum Message {
 pub struct GitSpaceApp {
     theme: Theme,
     active_tab: RepoTab,
-    /// The add-repository page is shown in place of the open repository.
-    adding: Option<AddTab>,
+    /// The Add repository screen, or Accounts, is shown in place of the open repository.
+    adding: Option<AddPage>,
 
     sidebar: Sidebar,
     /// Quick status of each listed repository, by path, from the last background scan.
@@ -168,8 +148,7 @@ pub struct GitSpaceApp {
     status_refresh: StatusRefresh,
 
     // Panneaux
-    clone_panel: ClonePanel,
-    recent_list: RecentList,
+    add_repo: AddRepoPanel,
     repo_header: RepoHeader,
     changes_panel: ChangesPanel,
     history_panel: HistoryPanel,
@@ -207,8 +186,7 @@ impl GitSpaceApp {
             sidebar: Sidebar::default(),
             statuses: HashMap::new(),
             status_refresh: StatusRefresh::default(),
-            clone_panel: ClonePanel::new(default_clone_path, preferences.network().clone()),
-            recent_list: RecentList::new(),
+            add_repo: AddRepoPanel::new(default_clone_path, preferences.network().clone()),
             repo_header: RepoHeader::new(preferences.network().clone()),
             history_panel: HistoryPanel::default(),
             branches_panel: BranchPanel::new(preferences.pinned_branches().to_vec()),
@@ -249,32 +227,23 @@ impl GitSpaceApp {
         match message {
             Message::Sidebar(msg) => self.update_sidebar(msg),
 
-            Message::AddTab(tab) => {
-                self.adding = Some(tab);
+            // ── Add repository ─────────────────────────────────────────
+            Message::AddRepo(add_repo::Message::OpenAccounts) => {
+                self.adding = Some(AddPage::Accounts);
                 Task::none()
             }
-
-            // ── Clone ──────────────────────────────────────────────────
-            Message::Clone(msg) => {
+            Message::AddRepo(msg) => {
                 self.notify_clone_failure(&msg);
-                let (task, cloned_path) = self.clone_panel.update(msg, &self.auth_manager);
-                let load_task = if let Some(path) = cloned_path {
-                    self.load_repo_context_async(path.to_string_lossy().to_string())
-                } else {
-                    Task::none()
+                let (task, added) = self.add_repo.update(msg, &self.auth_manager);
+                let load_task = match added {
+                    Some(path) => {
+                        // A cloned or opened repository shows on Changes.
+                        self.active_tab = RepoTab::Changes;
+                        self.load_repo_context_async(path.to_string_lossy().into_owned())
+                    }
+                    None => Task::none(),
                 };
-                Task::batch([task.map(Message::Clone), load_task])
-            }
-
-            // ── Recent ─────────────────────────────────────────────────
-            Message::Recent(msg) => {
-                let (task, selected) = self.recent_list.update(msg);
-                let load_task = if let Some(path) = selected {
-                    self.load_repo_context_async(path)
-                } else {
-                    Task::none()
-                };
-                Task::batch([task.map(Message::Recent), load_task])
+                Task::batch([task.map(Message::AddRepo), load_task])
             }
 
             // ── Repository header ──────────────────────────────────────
@@ -574,7 +543,7 @@ impl GitSpaceApp {
                 if self.preferences_panel.is_open() {
                     self.preferences_panel.toggle();
                 }
-                self.adding = Some(AddTab::Clone);
+                self.adding = Some(AddPage::Repository);
                 Task::none()
             }
             Side::TogglePreferences => {
@@ -744,7 +713,17 @@ impl GitSpaceApp {
                         .height(Length::Fill)
                         .into()
                 }
-                (_, adding) => self.view_add_page(theme, adding.unwrap_or(AddTab::Clone)),
+                (_, Some(AddPage::Accounts)) => {
+                    container(self.auth_panel.view(theme).map(Message::Auth))
+                        .width(Length::Fill)
+                        .height(Length::Fill)
+                        .padding(16)
+                        .into()
+                }
+                (_, _) => self
+                    .add_repo
+                    .view(|host| self.auth_panel.is_connected(host))
+                    .map(Message::AddRepo),
             },
         };
 
@@ -791,33 +770,6 @@ impl GitSpaceApp {
             RepoTab::History => self.history_panel.view().map(Message::History),
             RepoTab::Branches => self.branches_panel.view().map(Message::Branches),
         }
-    }
-
-    /// Clone, open a local folder, or manage accounts: shown with no repository open too.
-    fn view_add_page<'a>(&'a self, theme: &'a Theme, tab: AddTab) -> Element<'a, Message> {
-        let items: Vec<(String, Option<usize>)> = AddTab::ALL
-            .iter()
-            .map(|each| (each.label().to_string(), None))
-            .collect();
-        let selected = AddTab::ALL
-            .iter()
-            .position(|&each| each == tab)
-            .unwrap_or(0);
-        let strip = tabs(&items, selected, |index| {
-            Message::AddTab(AddTab::ALL[index])
-        });
-        let body = match tab {
-            AddTab::Clone => self.clone_panel.view(theme).map(Message::Clone),
-            AddTab::Open => self
-                .recent_list
-                .view(theme, &self.config)
-                .map(Message::Recent),
-            AddTab::Accounts => self.auth_panel.view(theme).map(Message::Auth),
-        };
-        column![container(strip).padding([12, 16]), padded(body)]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
     }
 
     fn toast_overlay(&self) -> Element<'_, Message> {
@@ -931,9 +883,9 @@ impl GitSpaceApp {
         self.theme = Theme::active();
 
         // Propager aux panneaux
-        self.clone_panel
+        self.add_repo
             .set_default_destination(preferences.default_clone_path().to_string());
-        self.clone_panel
+        self.add_repo
             .set_network_preferences(preferences.network().clone());
         self.repo_header
             .set_network_preferences(preferences.network().clone());
@@ -966,22 +918,22 @@ impl GitSpaceApp {
         match action {
             ToastAction::Retry => {
                 let (task, _) = self
-                    .clone_panel
-                    .update(clone::Message::RetryClone, &self.auth_manager);
-                task.map(Message::Clone)
+                    .add_repo
+                    .update(add_repo::Message::RetryClone, &self.auth_manager);
+                task.map(Message::AddRepo)
             }
             ToastAction::CopyLogPath(path) => iced::clipboard::write(path.display().to_string()),
         }
     }
 
     /// Signale un échec de clonage ou de recherche, avec le chemin des logs.
-    fn notify_clone_failure(&mut self, message: &clone::Message) {
+    fn notify_clone_failure(&mut self, message: &add_repo::Message) {
         let (title, err, can_retry) = match message {
-            clone::Message::CloneResult(Err(err)) => ("Échec du clonage", err, true),
-            clone::Message::SearchResult(version, Err(err))
-                if self.clone_panel.is_current_search(*version) =>
+            add_repo::Message::CloneResult(Err(err)) => (t("add_repo_clone_failed"), err, true),
+            add_repo::Message::SearchResult(version, Err(err))
+                if self.add_repo.is_current_search(*version) =>
             {
-                ("Échec de la recherche", err, false)
+                (t("add_repo_search_failed"), err, false)
             }
             _ => return,
         };
@@ -1042,20 +994,6 @@ fn shortcut(key: Key, modifiers: Modifiers, captured: bool, searching: bool) -> 
         }
         _ => None,
     }
-}
-
-/// The content area's padding below the header or the tab strip.
-fn padded<'a>(content: Element<'a, Message>) -> Element<'a, Message> {
-    container(content)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .padding(iced::Padding {
-            top: 0.0,
-            right: 16.0,
-            bottom: 16.0,
-            left: 16.0,
-        })
-        .into()
 }
 
 /// Returns whether `path` must be loaded. Picking the open repository again drops a slower

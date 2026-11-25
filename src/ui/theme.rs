@@ -14,7 +14,6 @@ pub struct Palette {
     pub text_primary: Color,
     pub text_secondary: Color,
     pub accent: Color,
-    pub accent_weak: Color,
 }
 
 impl Palette {
@@ -27,7 +26,6 @@ impl Palette {
             text_primary: Kit::TEXT_PRIMARY(),
             text_secondary: Kit::TEXT_SECONDARY(),
             accent: Kit::ACCENT(),
-            accent_weak: Kit::ACCENT_ICON(),
         }
     }
 }
