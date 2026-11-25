@@ -917,8 +917,11 @@ fn discard_file_restores_a_tracked_file() {
 
     discard_file(root.to_str().unwrap(), "a.txt").expect("discard");
 
+    // A Windows checkout may turn line endings into CRLF (core.autocrlf).
     assert_eq!(
-        fs::read_to_string(root.join("a.txt")).unwrap(),
+        fs::read_to_string(root.join("a.txt"))
+            .unwrap()
+            .replace("\r\n", "\n"),
         "original\n"
     );
     assert_eq!(
