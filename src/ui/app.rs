@@ -140,6 +140,8 @@ pub enum Message {
 
     /// Closes the search, a menu or Preferences, the first one open.
     Escape,
+    /// F2: rename the selected branch while Branches is shown.
+    RenameBranch,
 
     /// The window gained focus: the repositories may have changed outside GitSpace.
     WindowFocused,
@@ -345,14 +347,13 @@ impl GitSpaceApp {
             // ── Branches ───────────────────────────────────────────────
             Message::Branches(msg) => {
                 // Checkout, merge and rebase change the working tree and HEAD.
-                let changed = matches!(
-                    &msg,
-                    branches::Message::ActionDone(_, Ok(_)) | branches::Message::MergeDone(_, _)
-                );
-                let mut tasks = vec![self
-                    .branches_panel
-                    .update(msg, self.current_repo.as_ref())
-                    .map(Message::Branches)];
+                // A conflicted merge or rebase ends as Ok too: the tree still changed.
+                let changed = matches!(&msg, branches::Message::ActionDone(_, _, Ok(_)));
+                let (task, toast) = self.branches_panel.update(msg);
+                if let Some(toast) = toast {
+                    self.toasts.push(toast);
+                }
+                let mut tasks = vec![task.map(Message::Branches)];
                 if changed {
                     tasks.push(self.reload_other_panels(Origin::Branches));
                     tasks.push(self.refresh_statuses());
@@ -464,6 +465,13 @@ impl GitSpaceApp {
                     self.sidebar.set_menu(None);
                 } else if self.preferences_panel.is_open() {
                     self.preferences_panel.toggle();
+                }
+                Task::none()
+            }
+
+            Message::RenameBranch => {
+                if self.active_tab == RepoTab::Branches && self.adding.is_none() {
+                    return self.update(Message::Branches(branches::Message::StartRename));
                 }
                 Task::none()
             }
@@ -698,7 +706,7 @@ impl GitSpaceApp {
                         .repo_header
                         .view(self.active_tab, counts)
                         .map(Message::RepoHeader);
-                    column![header, self.view_active_tab(theme)]
+                    column![header, self.view_active_tab()]
                         .width(Length::Fill)
                         .height(Length::Fill)
                         .into()
@@ -742,17 +750,14 @@ impl GitSpaceApp {
     }
 
     /// The panel of the selected repository tab.
-    fn view_active_tab<'a>(&'a self, theme: &'a Theme) -> Element<'a, Message> {
-        let repo = self.current_repo.as_ref();
+    fn view_active_tab(&self) -> Element<'_, Message> {
         match self.active_tab {
             // The Changes columns run to the window edges, as in the mockup.
             RepoTab::Changes => self.changes_panel.view().map(Message::Changes),
             // Ruling R3: the Stashes screen comes back in a later task.
             RepoTab::Stashes => Space::new().into(),
             RepoTab::History => self.history_panel.view().map(Message::History),
-            RepoTab::Branches => {
-                padded(self.branches_panel.view(theme, repo).map(Message::Branches))
-            }
+            RepoTab::Branches => self.branches_panel.view().map(Message::Branches),
         }
     }
 
@@ -980,6 +985,9 @@ fn shortcut(key: Key, modifiers: Modifiers, captured: bool, searching: bool) -> 
     if captured {
         return None;
     }
+    if key == Key::Named(Named::F2) && modifiers.is_empty() {
+        return Some(Message::RenameBranch);
+    }
     let side = |message| Some(Message::Sidebar(message));
     match key.as_ref() {
         Key::Named(arrow @ (Named::ArrowUp | Named::ArrowDown))
@@ -1050,6 +1058,10 @@ mod tests {
         assert_eq!(free(key("1"), cmd), "TabShortcut(0)");
         assert_eq!(free(key("4"), cmd), "TabShortcut(3)");
         assert_eq!(free(key("5"), cmd), "None");
+        let f2 = Key::Named(Named::F2);
+        assert_eq!(free(f2.clone(), Modifiers::empty()), "RenameBranch");
+        // F2 inside a text field stays with the field.
+        assert_eq!(name(shortcut(f2, Modifiers::empty(), true, false)), "None");
         assert_eq!(free(key("3"), cmd | Modifiers::SHIFT), "None");
         assert_eq!(free(key("k"), Modifiers::empty()), "None");
         assert_eq!(

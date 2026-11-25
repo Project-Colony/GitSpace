@@ -18,7 +18,6 @@ pub enum MergeStrategy {
 
 #[derive(Debug, Clone)]
 pub struct MergeOutcome {
-    pub message: String,
     pub had_conflicts: bool,
     pub conflicts: Vec<String>,
 }
@@ -46,25 +45,7 @@ pub fn merge_branch<P: AsRef<Path>>(
         return Err(message);
     }
 
-    let message = if output.status.success() {
-        format!(
-            "{} completed",
-            match strategy {
-                MergeStrategy::Merge => "Merge",
-                MergeStrategy::Rebase => "Rebase",
-            }
-        )
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        if stderr.is_empty() {
-            "Operation completed with conflicts".to_string()
-        } else {
-            stderr
-        }
-    };
-
     Ok(MergeOutcome {
-        message,
         had_conflicts: !conflicts.is_empty(),
         conflicts,
     })

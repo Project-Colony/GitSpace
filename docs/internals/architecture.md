@@ -45,7 +45,7 @@ read state.
 Thin functions over [git2](https://docs.rs/git2) (libgit2, vendored OpenSSL), one file per
 area: `clone.rs`, `remote.rs` (fetch, pull as a fast-forward of the checked-out branch only,
 push of the checked-out branch to its upstream), `branch.rs`, `commit.rs`, `log.rs`,
-`diff.rs`, `status.rs`, `stash.rs`, `compare.rs` and `merge.rs`. Checkout, pull and stash
+`diff.rs`, `status.rs`, `stash.rs` and `merge.rs`. Checkout, pull and stash
 apply use libgit2's safe checkout, which fails instead of overwriting a modified file.
 
 `transport.rs` is shared by every network operation: it checks the URL against the network

@@ -962,7 +962,7 @@ fn avatar_accent(email_or_name: &str) -> &'static str {
 }
 
 /// "just now", "5 min ago", "3 h ago", "yesterday", "4 days ago", then the date.
-fn relative_time(then: i64, now: i64) -> String {
+pub(crate) fn relative_time(then: i64, now: i64) -> String {
     const MINUTE: i64 = 60;
     const HOUR: i64 = 60 * MINUTE;
     const DAY: i64 = 24 * HOUR;

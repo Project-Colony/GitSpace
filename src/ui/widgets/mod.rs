@@ -12,7 +12,6 @@ pub mod button;
 )]
 pub mod chip;
 pub mod menu;
-#[expect(dead_code, reason = "the add-repository page will use it")]
 pub mod segmented;
 pub mod tabs;
 pub mod toast;

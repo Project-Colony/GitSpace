@@ -211,21 +211,6 @@ fn matches_filter(commit: &git2::Commit<'_>, filter: &CommitFilter) -> bool {
         && filter.until.is_none_or(|until| timestamp <= until)
 }
 
-pub fn latest_commit_for_branch(
-    repo_path: &str,
-    branch_name: &str,
-) -> Result<Option<CommitInfo>, git2::Error> {
-    // Récupération du dernier commit d'une branche via le cache
-    with_cached_repo(repo_path, |repo| {
-        let oid = resolve_branch_oid(repo, branch_name)?;
-        let Some(oid) = oid else {
-            return Ok(None);
-        };
-        let commit = repo.find_commit(oid)?;
-        Ok(Some(commit_info_from_commit(&commit)))
-    })
-}
-
 pub fn commits_between_refs(
     repo_path: &str,
     from_ref: &str,

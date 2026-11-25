@@ -16,7 +16,6 @@ pub enum BranchKind {
 pub struct BranchEntry {
     pub name: String,
     pub kind: BranchKind,
-    pub is_head: bool,
 }
 
 pub fn list_branches<P: AsRef<Path>>(repo_path: P) -> Result<Vec<BranchEntry>, Error> {
@@ -34,7 +33,6 @@ pub fn list_branches<P: AsRef<Path>>(repo_path: P) -> Result<Vec<BranchEntry>, E
                 entries.push(BranchEntry {
                     name: name.to_string(),
                     kind,
-                    is_head: branch.is_head(),
                 });
             }
         }
@@ -46,7 +44,6 @@ pub fn list_branches<P: AsRef<Path>>(repo_path: P) -> Result<Vec<BranchEntry>, E
 
 /// A branch with what the Branches tab shows next to it.
 #[derive(Debug, Clone)]
-#[cfg_attr(not(test), expect(dead_code, reason = "the Branches tab will call it"))]
 pub struct BranchOverview {
     pub name: String,
     pub kind: BranchKind,
@@ -65,7 +62,6 @@ pub struct BranchOverview {
 /// Runs one `graph_ahead_behind` against HEAD and one `merge_base` per branch, so it belongs
 /// in a background task. With an unborn HEAD the counts against HEAD stay 0 and no branch is
 /// marked merged.
-#[cfg_attr(not(test), expect(dead_code, reason = "the Branches tab will call it"))]
 pub fn list_branch_overview(repo_path: &str) -> Result<Vec<BranchOverview>, Error> {
     with_cached_repo(repo_path, |repo| {
         let head = repo.head().ok().and_then(|head| head.target());
@@ -126,7 +122,6 @@ pub fn list_branch_overview(repo_path: &str) -> Result<Vec<BranchOverview>, Erro
 }
 
 /// Sets the upstream of a local branch (`origin/main`), or removes it with `None`.
-#[cfg_attr(not(test), expect(dead_code, reason = "the Branches tab will call it"))]
 pub fn set_upstream(repo_path: &str, branch: &str, upstream: Option<&str>) -> Result<(), Error> {
     with_cached_repo(repo_path, |repo| {
         repo.find_branch(branch, BranchType::Local)?
