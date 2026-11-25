@@ -20,6 +20,7 @@ use url::Url;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::config::write_private;
+use crate::i18n::{t, tf};
 
 pub use oauth::{DeviceFlow, OAuthFlow, OAuthProvider, OAuthResult, OAuthToken};
 
@@ -150,26 +151,26 @@ impl AuthManager {
 
         // Basic format validation
         if trimmed.is_empty() {
-            return Err("Token cannot be empty".to_string());
+            return Err(t("token_empty").to_string());
         }
 
         if trimmed.len() < MIN_TOKEN_LENGTH {
-            return Err(format!(
-                "Token is too short (minimum {} characters)",
-                MIN_TOKEN_LENGTH
+            return Err(tf(
+                "token_too_short",
+                &[("count", &MIN_TOKEN_LENGTH.to_string())],
             ));
         }
 
         if trimmed.len() > MAX_TOKEN_LENGTH {
-            return Err(format!(
-                "Token is too long (maximum {} characters)",
-                MAX_TOKEN_LENGTH
+            return Err(tf(
+                "token_too_long",
+                &[("count", &MAX_TOKEN_LENGTH.to_string())],
             ));
         }
 
         // Check for invalid characters (tokens should be printable ASCII)
         if !trimmed.chars().all(|c| c.is_ascii_graphic()) {
-            return Err("Token contains invalid characters".to_string());
+            return Err(t("token_invalid_characters").to_string());
         }
 
         let origin = normalize_host(host)?;
@@ -710,12 +711,14 @@ fn normalize_host(host: &str) -> Result<String, String> {
     } else {
         format!("https://{trimmed}")
     };
-    let parsed =
-        Url::parse(&with_scheme).map_err(|err| format!("Invalid host \"{trimmed}\": {err}"))?;
+    let parsed = Url::parse(&with_scheme).map_err(|err| {
+        tf(
+            "token_invalid_host",
+            &[("host", trimmed), ("error", &err.to_string())],
+        )
+    })?;
     if parsed.scheme() != "https" {
-        return Err(
-            "The host must use https: GitSpace never sends a token over plain HTTP.".to_string(),
-        );
+        return Err(t("token_host_not_https").to_string());
     }
     Ok(parsed.origin().ascii_serialization())
 }
@@ -777,12 +780,12 @@ async fn validate_github(client: &Client, url: &str, token: &str) -> Result<(), 
         .header(AUTHORIZATION, format!("Bearer {}", token))
         .send()
         .await
-        .map_err(|err| format!("GitHub validation failed: {err}"))?;
+        .map_err(|err| token_check_failed("GitHub", err))?;
 
     if response.status().is_success() {
         Ok(())
     } else {
-        Err(format!("GitHub rejected token ({}).", response.status()))
+        Err(token_rejected("GitHub", response.status()))
     }
 }
 
@@ -799,13 +802,27 @@ async fn validate_gitlab(client: &Client, url: &str, token: &str) -> Result<(), 
         .headers(headers)
         .send()
         .await
-        .map_err(|err| format!("GitLab validation failed: {err}"))?;
+        .map_err(|err| token_check_failed("GitLab", err))?;
 
     if response.status().is_success() {
         Ok(())
     } else {
-        Err(format!("GitLab rejected token ({}).", response.status()))
+        Err(token_rejected("GitLab", response.status()))
     }
+}
+
+fn token_check_failed(provider: &str, err: reqwest::Error) -> String {
+    tf(
+        "token_check_failed",
+        &[("provider", provider), ("error", &err.to_string())],
+    )
+}
+
+fn token_rejected(provider: &str, status: reqwest::StatusCode) -> String {
+    tf(
+        "token_rejected",
+        &[("provider", provider), ("status", &status.to_string())],
+    )
 }
 
 /// Returns the lowercase host name of a URL, `host:port`, scp-like `user@host:path` or bare

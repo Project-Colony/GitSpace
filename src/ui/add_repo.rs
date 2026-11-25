@@ -857,15 +857,11 @@ async fn client_with_headers(
 /// Vérifie que l'URL respecte la politique HTTPS configurée.
 fn enforce_https_policy(url: &str, network: &NetworkOptions) -> Result<(), AppError> {
     if url.starts_with("https://") && !network.use_https {
-        return Err(AppError::Validation(
-            "HTTPS endpoints are disabled in your network settings.".to_string(),
-        ));
+        return Err(AppError::Validation(t("network_https_blocked").to_string()));
     }
 
     if url.starts_with("http://") && network.use_https {
-        return Err(AppError::Validation(
-            "HTTP requests are blocked. Enable HTTP in network settings or use HTTPS.".to_string(),
-        ));
+        return Err(AppError::Validation(t("network_http_blocked").to_string()));
     }
 
     Ok(())

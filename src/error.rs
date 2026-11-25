@@ -7,51 +7,49 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
-/// Application-level error type with user-friendly messages.
+use crate::i18n::{t, tf};
+
+/// Application-level error type with user-friendly messages, in the interface language. The
+/// detail is GitSpace's own sentence, translated where it is written, or the library's text.
 #[derive(Debug, Clone, Error)]
 pub enum AppError {
     /// Git operation failed.
-    #[error("Git operation failed: {0}")]
+    #[error("{}", tf("error_git_detail", &[("detail", .0.as_str())]))]
     Git(String),
 
     /// Network request failed.
-    #[error("Network request failed: {0}")]
+    #[error("{}", tf("error_network_detail", &[("detail", .0.as_str())]))]
     Network(String),
 
     /// File system operation failed.
-    #[error("I/O operation failed: {0}")]
+    #[error("{}", tf("error_io_detail", &[("detail", .0.as_str())]))]
     Io(String),
 
     /// Input validation failed.
-    #[error("Validation failed: {0}")]
+    #[error("{}", tf("error_validation_detail", &[("detail", .0.as_str())]))]
     Validation(String),
 
     /// Configuration error.
-    #[error("Configuration error: {0}")]
+    #[error("{}", tf("error_config_detail", &[("detail", .0.as_str())]))]
     Config(String),
 
     /// Unexpected error.
-    #[error("Unexpected error: {0}")]
+    #[error("{}", tf("error_unknown_detail", &[("detail", .0.as_str())]))]
     Unknown(String),
 }
 
 impl AppError {
     /// Returns a user-friendly message suitable for display.
     pub fn user_message(&self) -> String {
-        match self {
-            Self::Git(_) => "Git operation failed. Please check the repository status.".to_string(),
-            Self::Network(_) => {
-                "Network request failed. Check your connection or proxy settings.".to_string()
-            }
-            Self::Io(_) => {
-                "File system operation failed. Verify permissions and disk space.".to_string()
-            }
-            Self::Validation(_) => {
-                "The provided input is not valid. Please double-check and try again.".to_string()
-            }
-            Self::Config(_) => "Configuration error. Please check your settings.".to_string(),
-            Self::Unknown(_) => "An unexpected error occurred.".to_string(),
-        }
+        let key = match self {
+            Self::Git(_) => "error_git",
+            Self::Network(_) => "error_network",
+            Self::Io(_) => "error_io",
+            Self::Validation(_) => "error_validation",
+            Self::Config(_) => "error_config",
+            Self::Unknown(_) => "error_unknown",
+        };
+        t(key).to_string()
     }
 
     /// Returns the technical detail of the error.
@@ -76,11 +74,11 @@ impl From<git2::Error> for AppError {
 impl From<reqwest::Error> for AppError {
     fn from(value: reqwest::Error) -> Self {
         if value.is_status() {
-            Self::Network(format!("HTTP error: {}", value))
+            Self::Network(tf("error_http_status", &[("error", &value.to_string())]))
         } else if value.is_timeout() {
-            Self::Network("The request timed out.".to_string())
+            Self::Network(t("error_timed_out").to_string())
         } else if value.is_connect() {
-            Self::Network("Failed to connect to server.".to_string())
+            Self::Network(t("error_connect").to_string())
         } else {
             Self::Network(value.to_string())
         }
@@ -95,7 +93,7 @@ impl From<std::io::Error> for AppError {
 
 impl From<serde_json::Error> for AppError {
     fn from(value: serde_json::Error) -> Self {
-        Self::Config(format!("JSON parse error: {}", value))
+        Self::Config(tf("error_json", &[("error", &value.to_string())]))
     }
 }
 
@@ -135,8 +133,20 @@ mod tests {
     fn user_message_is_friendly() {
         let err = AppError::Network("connection refused".to_string());
         let msg = err.user_message();
-        assert!(msg.contains("Network"));
+        assert_eq!(msg, t("error_network"));
         assert!(!msg.contains("connection refused"));
+    }
+
+    #[test]
+    fn messages_come_from_the_label_table() {
+        // The French table has the same keys (checked in i18n), so French shows French.
+        let err = AppError::Git("libgit2 text".to_string());
+        assert_eq!(err.user_message(), t("error_git"));
+        assert_eq!(
+            err.to_string(),
+            tf("error_git_detail", &[("detail", "libgit2 text")])
+        );
+        assert_ne!(t("error_git_detail"), "error_git_detail");
     }
 
     #[test]

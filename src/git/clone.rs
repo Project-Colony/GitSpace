@@ -10,6 +10,7 @@ use crate::error::AppError;
 use crate::git::transport::{
     configure_fetch_options, create_remote_callbacks, validate_transport_url, StallTimer,
 };
+use crate::i18n::tf;
 
 /// Request parameters for cloning a repository.
 #[derive(Debug, Clone)]
@@ -83,8 +84,9 @@ pub fn clone_repository(
         .clone(&request.url, &request.destination)
         .map_err(|err| {
             if timed_out.load(Ordering::SeqCst) {
-                AppError::Network(format!(
-                    "Clone stopped: no data arrived for {timeout_secs} seconds"
+                AppError::Network(tf(
+                    "clone_stalled",
+                    &[("seconds", &timeout_secs.to_string())],
                 ))
             } else {
                 AppError::from(err)

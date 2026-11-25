@@ -15,27 +15,22 @@ use git2::{
 
 use crate::config::NetworkOptions;
 use crate::error::AppError;
+use crate::i18n::t;
 
 /// Validates that a URL conforms to the network policy (SSH/HTTPS/HTTP settings).
 pub fn validate_transport_url(url: &str, network: &NetworkOptions) -> Result<(), AppError> {
     let url_lower = url.to_lowercase();
 
     if is_ssh_url(&url_lower) && !network.allow_ssh {
-        return Err(AppError::Validation(
-            "SSH access is disabled in your network preferences.".to_string(),
-        ));
+        return Err(AppError::Validation(t("network_ssh_blocked").to_string()));
     }
 
     if url_lower.starts_with("https://") && !network.use_https {
-        return Err(AppError::Validation(
-            "HTTPS connections are disabled in your network preferences.".to_string(),
-        ));
+        return Err(AppError::Validation(t("network_https_blocked").to_string()));
     }
 
     if url_lower.starts_with("http://") && network.use_https {
-        return Err(AppError::Validation(
-            "Plain HTTP is blocked. Enable HTTP in settings or use HTTPS.".to_string(),
-        ));
+        return Err(AppError::Validation(t("network_http_blocked").to_string()));
     }
 
     Ok(())
