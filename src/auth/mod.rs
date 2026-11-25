@@ -74,6 +74,15 @@ impl AuthManager {
         }
     }
 
+    /// A manager whose token files live in `dir`, with a fresh key: tests never touch the
+    /// keyring or the real settings folder.
+    #[cfg(test)]
+    pub(crate) fn in_dir(dir: &std::path::Path) -> Self {
+        Self {
+            storage: tests::storage_in(dir),
+        }
+    }
+
     /// Returns the token saved for `host`. An expired OAuth token with a refresh token is
     /// refreshed first, which blocks on one HTTP request; if that fails, the saved access
     /// token is returned and the host will reject it.
@@ -736,6 +745,31 @@ fn token_check(origin: &str) -> Option<TokenCheck> {
     }
 }
 
+/// The account name `token` belongs to on `host`: `login` on GitHub, `username` on GitLab.
+/// `None` for another host or when the request fails.
+pub async fn fetch_login(host: &str, token: &str) -> Option<String> {
+    let (TokenCheck::GitHub(url) | TokenCheck::GitLab(url)) =
+        token_check(&normalize_host(host).ok()?)?;
+    let body: serde_json::Value = get_http_client()
+        .get(url)
+        .bearer_auth(token)
+        .send()
+        .await
+        .ok()?
+        .error_for_status()
+        .ok()?
+        .json()
+        .await
+        .ok()?;
+    user_name(&body)
+}
+
+/// The account name in a GitHub or GitLab `/user` response.
+fn user_name(body: &serde_json::Value) -> Option<String> {
+    let name = body.get("login").or_else(|| body.get("username"))?;
+    name.as_str().map(str::to_string)
+}
+
 async fn validate_github(client: &Client, url: &str, token: &str) -> Result<(), String> {
     let response = client
         .get(url)
@@ -857,7 +891,7 @@ mod tests {
     }
 
     /// A storage in `dir` with a fresh random key, so two calls never share a key.
-    fn storage_in(dir: &std::path::Path) -> TokenStorage {
+    pub(super) fn storage_in(dir: &std::path::Path) -> TokenStorage {
         TokenStorage {
             key: SecureKey(Generate::generate()),
             local_key_path: Some(dir.join(TOKEN_LOCAL_KEY_FILE)),
@@ -1089,6 +1123,15 @@ mod tests {
         }
         assert_eq!(extract_host(""), None);
         assert_eq!(extract_host("file:///home/me/repo"), None);
+    }
+
+    #[test]
+    fn user_name_reads_github_login_and_gitlab_username() {
+        let github = serde_json::json!({ "login": "MotherSphere", "id": 1 });
+        let gitlab = serde_json::json!({ "username": "mother", "name": "Mother" });
+        assert_eq!(user_name(&github).as_deref(), Some("MotherSphere"));
+        assert_eq!(user_name(&gitlab).as_deref(), Some("mother"));
+        assert_eq!(user_name(&serde_json::json!({ "id": 1 })), None);
     }
 
     #[tokio::test]

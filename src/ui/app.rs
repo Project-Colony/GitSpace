@@ -452,7 +452,7 @@ impl GitSpaceApp {
                 } else if self.sidebar.is_menu_open() {
                     self.sidebar.set_menu(None);
                 } else if self.preferences.is_open() {
-                    self.preferences.toggle();
+                    return self.update(Message::Preferences(preferences::Message::Toggle));
                 }
                 Task::none()
             }
@@ -537,15 +537,16 @@ impl GitSpaceApp {
                 Task::none()
             }
             Side::AddRepository => {
-                if self.preferences.is_open() {
-                    self.preferences.toggle();
-                }
+                let closed = if self.preferences.is_open() {
+                    self.update(Message::Preferences(preferences::Message::Toggle))
+                } else {
+                    Task::none()
+                };
                 self.adding = true;
-                Task::none()
+                closed
             }
             Side::TogglePreferences => {
-                self.preferences.toggle();
-                Task::none()
+                self.update(Message::Preferences(preferences::Message::Toggle))
             }
             Side::StatusesLoaded(generation, statuses) => {
                 if self.status_refresh.accept(generation) {

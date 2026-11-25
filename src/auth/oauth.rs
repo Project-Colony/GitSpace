@@ -118,6 +118,10 @@ pub struct OAuthToken {
     pub client_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_url: Option<String>,
+    /// The account name the token belongs to, read once at sign-in. Missing when that read
+    /// failed and from tokens saved by older releases.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login: Option<String>,
 }
 
 impl OAuthToken {
@@ -131,6 +135,7 @@ impl OAuthToken {
             host: provider.host.clone(),
             client_id: Some(provider.client_id.clone()),
             token_url: Some(provider.token_url.clone()),
+            login: None,
         }
     }
 
@@ -935,6 +940,7 @@ mod tests {
             host: "test.com".to_string(),
             client_id: None,
             token_url: None,
+            login: None,
         };
         assert!(token.is_expired()); // Less than 5 minutes = expired
 
@@ -992,6 +998,7 @@ mod tests {
             host: "gitlab.com".to_string(),
             client_id: Some("client".to_string()),
             token_url: Some(format!("http://127.0.0.1:{port}/oauth/token")),
+            login: None,
         };
         assert!(token.is_expired());
         let refreshed = token.refresh().expect("refresh");

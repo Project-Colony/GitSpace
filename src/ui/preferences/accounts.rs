@@ -50,8 +50,9 @@ pub enum Message {
     Disconnected(Result<(), String>),
     /// A received OAuth token was saved, or not.
     OAuthStored(OAuthService, Result<(), String>),
-    /// The saved accounts, read again: host and whether it holds an OAuth token.
-    AccountsLoaded(Vec<(String, bool)>),
+    /// The saved accounts, read again: host, whether it holds an OAuth token, and the
+    /// account name saved with that token.
+    AccountsLoaded(Vec<(String, bool, Option<String>)>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,8 +98,8 @@ pub struct Accounts {
     manual_validating: bool,
     custom_github_client_id: String,
     custom_gitlab_client_id: String,
-    /// Saved accounts (host, OAuth), read again in the background after every change.
-    accounts: Vec<(String, bool)>,
+    /// Saved accounts (host, OAuth, login), read again in the background after every change.
+    accounts: Vec<(String, bool, Option<String>)>,
     /// The error of the last disconnect.
     accounts_status: Status,
 }
@@ -140,8 +141,8 @@ impl Accounts {
                         .into_iter()
                         .filter(|host| !host.starts_with("oauth:"))
                         .map(|host| {
-                            let oauth = auth.has_oauth(&host);
-                            (host, oauth)
+                            let oauth = auth.get_oauth_token(&host);
+                            (host, oauth.is_some(), oauth.and_then(|token| token.login))
                         })
                         .collect()
                 })
@@ -154,7 +155,7 @@ impl Accounts {
 
     /// Whether an account is saved for `host`, as of the last account read.
     pub fn is_connected(&self, host: &str) -> bool {
-        self.accounts.iter().any(|(saved, _)| saved == host)
+        self.accounts.iter().any(|(saved, ..)| saved == host)
     }
 
     fn status_mut(&mut self, service: OAuthService) -> &mut Status {
@@ -164,14 +165,16 @@ impl Accounts {
         }
     }
 
-    /// Ends an OAuth sign-in: a received token is saved in the background.
+    /// Ends an OAuth sign-in: the account name is read and the token saved in the background.
     fn finish_oauth(&mut self, service: OAuthService, result: OAuthResult) -> Task<Message> {
         let status = match result {
-            OAuthResult::Success(token) => {
+            OAuthResult::Success(mut token) => {
                 *self.status_mut(service) = Some(("prefs_signin_saving", String::new()));
                 let auth = self.auth.clone();
                 return Task::perform(
                     async move {
+                        token.login =
+                            crate::auth::fetch_login(&token.host, &token.access_token).await;
                         tokio::task::spawn_blocking(move || auth.store_oauth_token(&token))
                             .await
                             .unwrap_or_else(|err| Err(err.to_string()))
@@ -390,12 +393,8 @@ impl Accounts {
         if self.accounts.is_empty() {
             cards = cards.push(muted(&typo, t("prefs_accounts_none")));
         }
-        for (host, oauth) in &self.accounts {
-            let how = if *oauth {
-                t("prefs_account_oauth")
-            } else {
-                t("prefs_account_token")
-            };
+        for (host, oauth, login) in &self.accounts {
+            let how = account_detail(*oauth, login.as_deref());
             let card = row![
                 avatar(&provider_initials(host), avatar_accent(host), 30.0),
                 column![
@@ -564,6 +563,16 @@ fn client_id(built_in: Option<&str>, typed: &str) -> Option<String> {
         .or_else(|| Some(typed.trim().to_string()).filter(|id| !id.is_empty()))
 }
 
+/// The line under an account's host: the account name for an OAuth sign-in when it is
+/// known, else how the account signs in.
+fn account_detail(oauth: bool, login: Option<&str>) -> String {
+    match (oauth, login) {
+        (true, Some(user)) => tf("prefs_account_oauth_user", &[("user", user)]),
+        (true, None) => t("prefs_account_oauth").to_string(),
+        (false, _) => t("prefs_account_token").to_string(),
+    }
+}
+
 /// "GH" for GitHub, "GL" for GitLab, else the host's own initials.
 fn provider_initials(host: &str) -> String {
     if host.contains("github") {
@@ -651,5 +660,13 @@ mod tests {
         assert_eq!(provider_initials("github.com"), "GH");
         assert_eq!(provider_initials("gitlab.example.com"), "GL");
         assert_eq!(provider_initials("gitea.example.com"), "GE");
+    }
+
+    #[test]
+    fn oauth_cards_name_the_signed_in_user() {
+        assert!(account_detail(true, Some("MotherSphere")).starts_with("MotherSphere"));
+        // Without a saved name the line still says how the account signs in.
+        assert!(!account_detail(true, None).contains("MotherSphere"));
+        assert_ne!(account_detail(true, None), account_detail(false, None));
     }
 }

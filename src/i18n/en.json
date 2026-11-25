@@ -211,6 +211,7 @@
   "open_terminal_failed": "Could not open a terminal",
   "prefs_about_desc": "Version, licence and where GitSpace keeps its files.",
   "prefs_account_oauth": "signed in with OAuth",
+  "prefs_account_oauth_user": "{user} · signed in with OAuth",
   "prefs_account_token": "personal access token",
   "prefs_accounts_desc": "Tokens are kept in the system keyring and only sent to their own host.",
   "prefs_accounts_none": "No account connected yet.",

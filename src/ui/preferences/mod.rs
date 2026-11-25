@@ -50,6 +50,8 @@ pub const FETCH_INTERVALS: [u64; 5] = [1, 5, 15, 30, 60];
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    /// Opens or closes the page; a clone folder typed without Enter is applied first.
+    Toggle,
     Category(usize),
     /// Opens or closes a collapsible section, by key.
     Section(&'static str),
@@ -96,8 +98,8 @@ pub struct PreferencesPage {
     pub expanded: HashSet<String>,
     open: bool,
     pub accounts: accounts::Accounts,
-    /// A typed clone folder not applied yet: it applies on Enter, so a half-typed path
-    /// never starts a folder scan.
+    /// A typed clone folder not applied yet: it applies on Enter or when the page closes,
+    /// so a half-typed path never starts a folder scan.
     clone_path: Option<String>,
     /// The idle timeout as typed; only a valid number reaches the preferences.
     idle_timeout: Option<String>,
@@ -127,13 +129,20 @@ impl PreferencesPage {
     }
 
     /// Opens or closes the page: the identity button, Close, Ctrl+, and Escape.
-    pub fn toggle(&mut self) {
+    fn toggle(&mut self) {
         self.open = !self.open;
         if self.open {
             self.expanded.clear();
             self.clone_path = None;
             self.idle_timeout = None;
             self.confirm_reset = false;
+        }
+    }
+
+    /// Saves the clone folder typed but not applied yet.
+    fn apply_clone_path(&mut self, prefs: &mut Preferences) {
+        if let Some(path) = self.clone_path.take() {
+            prefs.set_default_clone_path(path);
         }
     }
 
@@ -155,6 +164,12 @@ impl PreferencesPage {
         let mut task = Task::none();
         let mut toast = None;
         match message {
+            Message::Toggle => {
+                if self.open {
+                    self.apply_clone_path(prefs);
+                }
+                self.toggle();
+            }
             Message::Category(index) => self.category = index.min(CATEGORIES.len() - 1),
             Message::Section(key) => {
                 if !self.expanded.remove(key) {
@@ -226,11 +241,7 @@ impl PreferencesPage {
             Message::EncryptedTokens(on) => prefs.set_allow_encrypted_tokens(on),
 
             Message::ClonePathChanged(path) => self.clone_path = Some(path),
-            Message::ClonePathSubmitted => {
-                if let Some(path) = self.clone_path.take() {
-                    prefs.set_default_clone_path(path);
-                }
-            }
+            Message::ClonePathSubmitted => self.apply_clone_path(prefs),
             Message::BrowseClonePath => {
                 task = Task::perform(
                     tokio::task::spawn_blocking(|| {
@@ -538,6 +549,23 @@ mod tests {
         for key in CATEGORIES.iter().chain(["prefs_cat_gitspace"].iter()) {
             assert_ne!(category_label(key), *key);
         }
+    }
+
+    #[test]
+    fn closing_the_page_applies_a_typed_clone_folder() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut page = PreferencesPage::new(AuthManager::in_dir(dir.path()));
+        let mut prefs = Preferences::default();
+        let mut logging = LoggingOptions::default();
+        for message in [
+            Message::Toggle,
+            Message::ClonePathChanged("/tmp/gitspace-clones".to_string()),
+            Message::Toggle,
+        ] {
+            let _ = page.update(message, &mut prefs, &mut logging);
+        }
+        assert!(!page.is_open());
+        assert_eq!(prefs.default_clone_path(), "/tmp/gitspace-clones");
     }
 
     #[test]
