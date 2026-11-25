@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use git2::{Diff, DiffFormat, DiffOptions, Oid, Repository, Tree};
+use git2::{Diff, DiffDelta, DiffFormat, DiffOptions, Oid, Patch, Repository, Tree};
 
 use crate::git::repo_cache::with_cached_repo;
 
@@ -9,7 +9,6 @@ const MAX_PATCH_SIZE: usize = 64 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct FileDiff {
-    pub path: String,
     pub additions: usize,
     pub deletions: usize,
     pub patch: String,
@@ -26,20 +25,22 @@ pub struct FileDiffSummary {
     pub is_binary: bool,
 }
 
+/// The path shown for a delta: the new path, or the old one for a deletion.
+fn delta_path(delta: &DiffDelta<'_>) -> String {
+    delta
+        .new_file()
+        .path()
+        .or_else(|| delta.old_file().path())
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "(unknown)".to_string())
+}
+
 fn collect_diff_files(diff: Diff) -> Result<Vec<FileDiff>, git2::Error> {
     let mut files: HashMap<String, FileDiff> = HashMap::new();
 
     diff.print(DiffFormat::Patch, |delta, _hunk, line| {
-        let path = delta
-            .new_file()
-            .path()
-            .or_else(|| delta.old_file().path())
-            .and_then(|p| p.to_str())
-            .unwrap_or("(unknown)")
-            .to_string();
-
-        let entry = files.entry(path.clone()).or_insert_with(|| FileDiff {
-            path: path.clone(),
+        let path = delta_path(&delta);
+        let entry = files.entry(path).or_insert_with(|| FileDiff {
             additions: 0,
             deletions: 0,
             patch: String::with_capacity(1024),
@@ -68,35 +69,26 @@ fn collect_diff_files(diff: Diff) -> Result<Vec<FileDiff>, git2::Error> {
             return true;
         }
 
-        match line.origin() {
-            '\\' => entry.patch.push(' '),
-            other => entry.patch.push(other),
+        // Only content lines carry an origin prefix; headers and the "no newline" marker
+        // (origins F, H, B, =, >, <) already hold their full text.
+        let origin = line.origin();
+        if matches!(origin, '+' | '-' | ' ') {
+            entry.patch.push(origin);
         }
         entry.patch.push_str(content);
 
         true
     })?;
 
-    // For files without textual output (e.g., binary), gather stats separately.
-    let stats = diff.stats()?;
-    if stats.files_changed() > files.len() {
-        for delta in diff.deltas() {
-            let path = delta
-                .new_file()
-                .path()
-                .or_else(|| delta.old_file().path())
-                .and_then(|p| p.to_str())
-                .unwrap_or("(unknown)")
-                .to_string();
-
-            files.entry(path.clone()).or_insert_with(|| FileDiff {
-                path: path.clone(),
-                additions: 0,
-                deletions: 0,
-                patch: String::from("Binary file change\n"),
-                truncated: false,
-            });
-        }
+    // Files without textual output (e.g., binary) get a placeholder.
+    for delta in diff.deltas() {
+        let path = delta_path(&delta);
+        files.entry(path).or_insert_with(|| FileDiff {
+            additions: 0,
+            deletions: 0,
+            patch: String::from("Binary file change\n"),
+            truncated: false,
+        });
     }
 
     Ok(files.into_values().collect())
@@ -104,50 +96,28 @@ fn collect_diff_files(diff: Diff) -> Result<Vec<FileDiff>, git2::Error> {
 
 /// Collect only diff summaries without patch content (for lazy loading)
 fn collect_diff_summaries(diff: &Diff) -> Result<Vec<FileDiffSummary>, git2::Error> {
-    let mut summaries: HashMap<String, FileDiffSummary> = HashMap::new();
-
-    for delta in diff.deltas() {
-        let path = delta
-            .new_file()
-            .path()
-            .or_else(|| delta.old_file().path())
-            .and_then(|p| p.to_str())
-            .unwrap_or("(unknown)")
-            .to_string();
-
-        let is_binary = delta.flags().is_binary();
-
-        summaries
-            .entry(path.clone())
-            .or_insert_with(|| FileDiffSummary {
-                path,
-                additions: 0,
-                deletions: 0,
-                is_binary,
-            });
-    }
-
-    // Count additions/deletions from stats
-    let stats = diff.stats()?;
-    for i in 0..stats.files_changed() {
-        if let Some(delta) = diff.get_delta(i) {
-            let path = delta
-                .new_file()
-                .path()
-                .or_else(|| delta.old_file().path())
-                .and_then(|p| p.to_str())
-                .unwrap_or("(unknown)")
-                .to_string();
-
-            if let Some(summary) = summaries.get_mut(&path) {
-                // We'll get more accurate counts from the diff print if needed
-                summary.additions = delta.new_file().size() as usize;
-                summary.deletions = delta.old_file().size() as usize;
+    let mut summaries = Vec::with_capacity(diff.deltas().len());
+    for (index, delta) in diff.deltas().enumerate() {
+        // `None` for a binary file, which has no lines to count.
+        let patch = Patch::from_diff(diff, index)?;
+        let (additions, deletions) = match &patch {
+            Some(patch) => {
+                let (_context, additions, deletions) = patch.line_stats()?;
+                (additions, deletions)
             }
-        }
+            None => (0, 0),
+        };
+        let is_binary = patch
+            .as_ref()
+            .is_none_or(|patch| patch.delta().flags().is_binary());
+        summaries.push(FileDiffSummary {
+            path: delta_path(&delta),
+            additions,
+            deletions,
+            is_binary,
+        });
     }
-
-    Ok(summaries.into_values().collect())
+    Ok(summaries)
 }
 
 fn head_tree(repo: &Repository) -> Result<Option<Tree<'_>>, git2::Error> {
@@ -165,51 +135,41 @@ fn head_tree(repo: &Repository) -> Result<Option<Tree<'_>>, git2::Error> {
     Ok(Some(commit.tree()?))
 }
 
-/// Get full diff for all files in a commit (prefer commit_diff_summaries + commit_diff_file for lazy loading)
-// Utilise le cache thread-local au lieu d'ouvrir le dépôt à chaque appel
-#[allow(dead_code)] // tested, not used by the iced UI yet
-pub fn commit_diff(repo_path: &str, oid: &str) -> Result<Vec<FileDiff>, git2::Error> {
-    let oid = Oid::from_str(oid)?;
-    with_cached_repo(repo_path, |repo| {
-        let commit = repo.find_commit(oid)?;
-        let tree = commit.tree()?;
+/// Diff of commit `oid` against its first parent, or against nothing for a root commit.
+pub(crate) fn commit_against_parent<'r>(
+    repo: &'r Repository,
+    oid: Oid,
+    options: Option<&mut DiffOptions>,
+) -> Result<Diff<'r>, git2::Error> {
+    let commit = repo.find_commit(oid)?;
+    let parent_tree = commit
+        .parent(0)
+        .ok()
+        .map(|parent| parent.tree())
+        .transpose()?;
+    repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&commit.tree()?), options)
+}
 
-        let parent_tree = if let Ok(parent) = commit.parent(0) {
-            Some(parent.tree()?)
-        } else {
-            None
-        };
-
-        let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)?;
-
-        collect_diff_files(diff)
-    })
+/// Options that limit a diff to exactly `path`, without glob matching, so names such as
+/// `[draft].md` work.
+fn single_path_options(path: &str) -> DiffOptions {
+    let mut options = DiffOptions::new();
+    options.pathspec(path).disable_pathspec_match(true);
+    options
 }
 
 /// Get only summaries for a commit (for lazy loading - no patch content)
-// Résumés de diff pour un commit — lecture seule, utilise le cache
 pub fn commit_diff_summaries(
     repo_path: &str,
     oid: &str,
 ) -> Result<Vec<FileDiffSummary>, git2::Error> {
     let oid = Oid::from_str(oid)?;
     with_cached_repo(repo_path, |repo| {
-        let commit = repo.find_commit(oid)?;
-        let tree = commit.tree()?;
-
-        let parent_tree = if let Ok(parent) = commit.parent(0) {
-            Some(parent.tree()?)
-        } else {
-            None
-        };
-
-        let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)?;
-        collect_diff_summaries(&diff)
+        collect_diff_summaries(&commit_against_parent(repo, oid, None)?)
     })
 }
 
 /// Get the diff for a single file in a commit (for lazy loading)
-// Diff d'un seul fichier dans un commit — chargement paresseux via le cache
 pub fn commit_diff_file(
     repo_path: &str,
     oid: &str,
@@ -217,45 +177,9 @@ pub fn commit_diff_file(
 ) -> Result<Option<FileDiff>, git2::Error> {
     let oid = Oid::from_str(oid)?;
     with_cached_repo(repo_path, |repo| {
-        let commit = repo.find_commit(oid)?;
-        let tree = commit.tree()?;
-
-        let parent_tree = if let Ok(parent) = commit.parent(0) {
-            Some(parent.tree()?)
-        } else {
-            None
-        };
-
-        let mut options = DiffOptions::new();
-        options.pathspec(file_path);
-
-        let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), Some(&mut options))?;
+        let mut options = single_path_options(file_path);
+        let diff = commit_against_parent(repo, oid, Some(&mut options))?;
         Ok(collect_diff_files(diff)?.into_iter().next())
-    })
-}
-
-// Diff de l'arbre de travail — comparaison index/répertoire de travail
-pub fn working_tree_diff(repo_path: &str) -> Result<Vec<FileDiff>, git2::Error> {
-    with_cached_repo(repo_path, |repo| {
-        let mut index = repo.index()?;
-        index.read(true)?;
-        let mut options = DiffOptions::new();
-        options.include_untracked(true);
-        let diff = repo.diff_index_to_workdir(Some(&index), Some(&mut options))?;
-
-        collect_diff_files(diff)
-    })
-}
-
-// Diff des fichiers indexés (staged) — comparaison HEAD/index
-pub fn staged_diff(repo_path: &str) -> Result<Vec<FileDiff>, git2::Error> {
-    with_cached_repo(repo_path, |repo| {
-        let mut index = repo.index()?;
-        index.read(true)?;
-        let base_tree = head_tree(repo)?;
-        let diff = repo.diff_tree_to_index(base_tree.as_ref(), Some(&index), None)?;
-
-        collect_diff_files(diff)
     })
 }
 
@@ -266,17 +190,15 @@ pub fn diff_file(
     staged: bool,
 ) -> Result<Option<FileDiff>, git2::Error> {
     with_cached_repo(repo_path, |repo| {
-        let mut options = DiffOptions::new();
-        options.pathspec(path).context_lines(3);
+        let mut options = single_path_options(path);
+        options.context_lines(3);
+        let mut index = repo.index()?;
+        index.read(true)?;
 
         let diff = if staged {
-            let mut index = repo.index()?;
-            index.read(true)?;
             let base_tree = head_tree(repo)?;
             repo.diff_tree_to_index(base_tree.as_ref(), Some(&index), Some(&mut options))?
         } else {
-            let mut index = repo.index()?;
-            index.read(true)?;
             options.include_untracked(true);
             repo.diff_index_to_workdir(Some(&index), Some(&mut options))?
         };

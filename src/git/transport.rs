@@ -4,7 +4,6 @@
 //! and credential callbacks to avoid code duplication across clone.rs and remote.rs.
 
 // Some utilities are designed for future use or as public API surface
-#![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 use std::sync::Once;
@@ -42,48 +41,20 @@ pub fn validate_transport_url(url: &str, network: &NetworkOptions) -> Result<(),
     Ok(())
 }
 
-/// Detects SSH URLs: the `ssh://` scheme or the SCP-style `user@host:path` form.
+/// Detects URLs that git reaches over SSH: the `ssh://`, `git+ssh://` and `ssh+git://`
+/// schemes, and the scp-like `[user@]host:path` form.
 fn is_ssh_url(url: &str) -> bool {
-    url.to_ascii_lowercase().starts_with("ssh://") || is_scp_style_url(url)
-}
-
-/// Detects SCP-style SSH URLs like `git@github.com:user/repo.git`.
-/// These have format: `[user@]host:path` with no protocol prefix.
-fn is_scp_style_url(url: &str) -> bool {
-    // Not a protocol URL (no ://)
-    if url.contains("://") {
+    let url = url.to_ascii_lowercase();
+    if let Some((scheme, _)) = url.split_once("://") {
+        return matches!(scheme, "ssh" | "git+ssh" | "ssh+git");
+    }
+    // As in git: a colon before any slash makes an scp-like address, otherwise it is a
+    // local path. `C:\repo` and `C:/repo` are Windows drive letters.
+    let Some(colon) = url.find(':') else {
         return false;
-    }
-
-    // Must have @ followed by host:path pattern
-    if let Some(at_pos) = url.find('@') {
-        // Check there's a : after the @ (for the host:path separator)
-        let after_at = &url[at_pos + 1..];
-        // The colon must be present and not at the very beginning (valid host required)
-        if let Some(colon_pos) = after_at.find(':') {
-            // Ensure there's actually a host between @ and :
-            return colon_pos > 0;
-        }
-    }
-
-    false
-}
-
-/// Ensures a URL conforms to HTTPS policy for API requests.
-pub fn enforce_https_policy(url: &str, network: &NetworkOptions) -> Result<(), AppError> {
-    if url.starts_with("https://") && !network.use_https {
-        return Err(AppError::Validation(
-            "HTTPS endpoints are disabled in your network settings.".to_string(),
-        ));
-    }
-
-    if url.starts_with("http://") && network.use_https {
-        return Err(AppError::Validation(
-            "HTTP requests are blocked. Enable HTTP in network settings or use HTTPS.".to_string(),
-        ));
-    }
-
-    Ok(())
+    };
+    let is_drive = colon == 1 && url.as_bytes()[0].is_ascii_alphabetic();
+    colon > 0 && !is_drive && !url[..colon].contains(['/', '\\'])
 }
 
 /// Sends git traffic for `url` through the proxy set in Preferences for its scheme: the HTTPS
@@ -155,15 +126,21 @@ impl StallTimer {
 }
 
 /// Answers a credential request with the saved token, but only over HTTPS: a remote reached
-/// over plain `http://` never receives the token.
+/// over plain `http://`, SSH or any other transport never receives the token.
 fn token_credentials(
     url: &str,
     username_from_url: Option<&str>,
     token: &str,
 ) -> Result<Cred, git2::Error> {
-    if url.to_ascii_lowercase().starts_with("http://") {
+    let url = url.to_ascii_lowercase();
+    if url.starts_with("http://") {
         return Err(git2::Error::from_str(
             "This remote uses plain HTTP: GitSpace never sends a token over it. Use an https:// remote URL.",
+        ));
+    }
+    if !url.starts_with("https://") {
+        return Err(git2::Error::from_str(
+            "GitSpace sends a saved token only to https:// remotes.",
         ));
     }
     Cred::userpass_plaintext(username_from_url.unwrap_or("git"), token)
@@ -385,32 +362,56 @@ mod tests {
     }
 
     #[test]
-    fn enforce_https_blocks_http() {
-        let network = default_network();
-        assert!(enforce_https_policy("http://api.github.com", &network).is_err());
+    fn ssh_detection_covers_schemes_and_scp_form() {
+        for url in [
+            "ssh://git@github.com/repo.git",
+            "git+ssh://git@github.com/repo.git",
+            "SSH+GIT://github.com/repo.git",
+            "git@github.com:user/repo.git",
+            "user@host.example.com:path/to/repo",
+            "github.com:user/repo.git",
+        ] {
+            assert!(is_ssh_url(url), "{url}");
+        }
+
+        for url in [
+            "https://user@github.com/repo.git",
+            "http://github.com/repo.git",
+            "file:///srv/repo.git",
+            "git://github.com/repo.git",
+            "user@host",
+            "/srv/repo.git",
+            "./repo:old",
+            "C:\\repos\\project",
+            "C:/repos/project",
+        ] {
+            assert!(!is_ssh_url(url), "{url}");
+        }
     }
 
     #[test]
-    fn enforce_https_allows_https() {
-        let network = default_network();
-        assert!(enforce_https_policy("https://api.github.com", &network).is_ok());
+    fn validate_blocks_scheme_and_userless_ssh_when_disabled() {
+        let mut network = default_network();
+        network.allow_ssh = false;
+        assert!(validate_transport_url("git+ssh://github.com/repo.git", &network).is_err());
+        assert!(validate_transport_url("github.com:user/repo.git", &network).is_err());
+        assert!(validate_transport_url("C:\\repos\\project", &network).is_ok());
     }
 
     #[test]
-    fn scp_style_detection_works() {
-        // Valid SCP-style URLs
-        assert!(is_scp_style_url("git@github.com:user/repo.git"));
-        assert!(is_scp_style_url("user@host.example.com:path/to/repo"));
-
-        // Not SCP-style (has protocol prefix)
-        assert!(!is_scp_style_url("https://user@github.com/repo.git"));
-        assert!(!is_scp_style_url("ssh://git@github.com/repo.git"));
-
-        // Not SCP-style (no colon after @)
-        assert!(!is_scp_style_url("user@host"));
-
-        // Not SCP-style (no @ at all)
-        assert!(!is_scp_style_url("github.com:user/repo.git"));
+    fn token_is_offered_only_over_https() {
+        for url in [
+            "ssh://git@github.com/repo.git",
+            "git+ssh://github.com/repo.git",
+            "github.com:user/repo.git",
+            "git://github.com/repo.git",
+        ] {
+            assert!(token_credentials(url, None, "secret").is_err(), "{url}");
+            let mut picker = CredentialPicker::new(Some("secret".into()), Vec::new());
+            assert!(picker
+                .next(url, None, CredentialType::USER_PASS_PLAINTEXT)
+                .is_err());
+        }
     }
 
     #[test]

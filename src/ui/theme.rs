@@ -118,33 +118,9 @@ pub struct Theme {
 }
 
 impl Theme {
-    pub fn latte() -> Self {
+    fn with_palette(palette: Palette) -> Self {
         Self {
-            palette: Palette::latte(),
-            typography: Typography::default(),
-            spacing: Spacing::default(),
-        }
-    }
-
-    pub fn frappe() -> Self {
-        Self {
-            palette: Palette::frappe(),
-            typography: Typography::default(),
-            spacing: Spacing::default(),
-        }
-    }
-
-    pub fn macchiato() -> Self {
-        Self {
-            palette: Palette::macchiato(),
-            typography: Typography::default(),
-            spacing: Spacing::default(),
-        }
-    }
-
-    pub fn mocha() -> Self {
-        Self {
-            palette: Palette::mocha(),
+            palette,
             typography: Typography::default(),
             spacing: Spacing::default(),
         }
@@ -152,10 +128,10 @@ impl Theme {
 
     pub fn from_mode(mode: ThemeMode) -> Self {
         match mode {
-            ThemeMode::Latte => Self::latte(),
-            ThemeMode::Frappe => Self::frappe(),
-            ThemeMode::Macchiato => Self::macchiato(),
-            ThemeMode::Mocha => Self::mocha(),
+            ThemeMode::Latte => Self::with_palette(Palette::latte()),
+            ThemeMode::Frappe => Self::with_palette(Palette::frappe()),
+            ThemeMode::Macchiato => Self::with_palette(Palette::macchiato()),
+            ThemeMode::Mocha => Self::with_palette(Palette::mocha()),
         }
     }
 

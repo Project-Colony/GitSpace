@@ -34,7 +34,9 @@ GitSpace never saves over a file it could not read:
   GitSpace started or `GITSPACE_TOKEN_MASTER_PASSWORD` changed or is no longer set: saving or
   removing a token fails with an error and the file is left as it is. Unlock the keyring or set
   the same master password, then restart GitSpace. If the key is gone for good, move
-  `tokens.enc` aside to start over.
+  `tokens.enc` aside to start over. Tokens saved while the keyring was locked are encrypted
+  with `token-local-key.bin`; the next start with the keyring unlocked reads them with that
+  key and saves them again under the keyring key.
 - **`token-hosts.json` cannot be read**: the host list is left as it is and the error is
   logged.
 
@@ -76,5 +78,4 @@ count set in Preferences are deleted at startup. Logs never contain a token.
 |---|---|
 | `GITSPACE_LOG` | the log filter, in [`tracing` `EnvFilter`](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html) syntax. The default is `gitspace=info,info`; `GITSPACE_LOG=gitspace=debug` shows GitSpace's own debug messages |
 | `GITSPACE_TOKEN_MASTER_PASSWORD` | only used when the system keyring is unavailable: a password mixed (Argon2id, salt in `token-salt.bin`) into `token-local-key.bin`, the key that then encrypts `tokens.enc`. In that case it must be set to the same value every time GitSpace starts, or saved tokens cannot be decrypted. It is ignored while the keyring holds the key |
-| `GITSPACE_PROFILE_UI` | when set, logs how long each part of the interface takes to draw, for profiling |
 | `GITSPACE_GITHUB_CLIENT_ID`, `GITSPACE_GITLAB_CLIENT_ID` | read when GitSpace is **built**, not when it runs: the OAuth client IDs compiled into the binary, used instead of any ID entered in **Configure OAuth Apps** on the Auth tab. Without them, OAuth sign-in needs a client ID entered there: a GitHub OAuth app with "Enable Device Flow" ticked, or a GitLab application with "Confidential" unticked and the redirect URI `http://127.0.0.1:9876/callback` |

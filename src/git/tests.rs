@@ -2,24 +2,17 @@ use std::fs;
 use std::path::Path;
 
 use git2::build::CheckoutBuilder;
-use git2::{
-    BranchType, Commit, Oid, Repository, RepositoryInitOptions, ResetType, Signature,
-    WorktreeAddOptions,
-};
+use git2::{BranchType, Commit, Oid, Repository, RepositoryInitOptions, ResetType, Signature};
 
 use crate::config::NetworkOptions;
 use crate::git::branch;
-use crate::git::branch::{
-    list_branches, list_tracking_branches, rename_branch, set_upstream, unset_upstream, BranchKind,
-};
-use crate::git::diff::{commit_diff, diff_file, staged_diff, working_tree_diff};
-use crate::git::discovery::{find_repo_root, is_git_repo, list_submodules, list_worktrees};
+use crate::git::branch::{list_branches, rename_branch, BranchKind};
+use crate::git::diff::{commit_diff_file, commit_diff_summaries, diff_file};
 use crate::git::log::{read_commit_log, CommitFilter};
-use crate::git::remote::{
-    fetch_remote, list_remotes, prune_remotes, pull_branch, push_branch, PullOutcome,
-};
+use crate::git::merge::detect_conflicts;
+use crate::git::remote::{fetch_remote, list_remotes, pull_branch, push_branch, PullOutcome};
 use crate::git::stash::{apply_stash, create_stash, drop_stash, list_stashes};
-use crate::git::status::{read_repo_status, read_working_tree_status};
+use crate::git::status::read_repo_status;
 
 fn init_temp_repo() -> (tempfile::TempDir, Repository) {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -114,90 +107,6 @@ fn branch_lifecycle_is_managed() {
 }
 
 #[test]
-fn upstreams_are_set_and_listed() {
-    let (_dir, repo) = init_temp_repo();
-    let base = write_commit(&repo, "upstream.txt", "base", "base");
-    let root = repo.path().parent().unwrap();
-
-    branch::create_branch(root, "feature/upstream", Some("main")).expect("create branch");
-
-    repo.remote("origin", "https://example.com/remote.git")
-        .expect("create remote");
-    let reference_name = "refs/remotes/origin/feature/upstream";
-    repo.reference(reference_name, base, true, "create remote ref")
-        .expect("remote ref");
-
-    set_upstream(root, "feature/upstream", "origin/feature/upstream").expect("set upstream");
-    let tracking = list_tracking_branches(root).expect("list tracking");
-    assert!(tracking.iter().any(|entry| {
-        entry.local == "feature/upstream" && entry.upstream == "origin/feature/upstream"
-    }));
-
-    unset_upstream(root, "feature/upstream").expect("unset upstream");
-    let tracking = list_tracking_branches(root).expect("list tracking");
-    assert!(!tracking
-        .iter()
-        .any(|entry| entry.local == "feature/upstream"));
-}
-
-#[test]
-fn commit_diff_tracks_file_changes() {
-    let (_dir, repo) = init_temp_repo();
-    write_commit(&repo, "diff.txt", "one", "initial");
-    let second = write_commit(&repo, "diff.txt", "one\ntwo\nthree\n", "expand");
-
-    let diffs = commit_diff(
-        repo.path().parent().unwrap().to_str().unwrap(),
-        &second.to_string(),
-    )
-    .expect("diffs");
-    let entry = diffs
-        .iter()
-        .find(|diff| diff.path.ends_with("diff.txt"))
-        .expect("diff entry");
-
-    assert!(entry.additions >= 2);
-    assert!(entry.deletions <= 1);
-    assert!(entry.patch.contains("+two"));
-    assert!(entry.patch.contains("diff.txt"));
-}
-
-#[test]
-fn working_tree_and_staged_diffs_are_reported() {
-    let (_dir, repo) = init_temp_repo();
-    write_commit(&repo, "change.txt", "one\n", "initial");
-    let repo_root = repo.path().parent().unwrap();
-    let file_path = repo_root.join("change.txt");
-    fs::write(&file_path, "one\ntwo\n").expect("update file");
-
-    let unstaged = working_tree_diff(repo_root.to_str().unwrap()).expect("working tree diff");
-    let unstaged_entry = unstaged
-        .iter()
-        .find(|diff| diff.path.ends_with("change.txt"))
-        .expect("unstaged entry");
-    assert!(unstaged_entry.patch.contains("+two"));
-
-    let unstaged_file =
-        diff_file(repo_root.to_str().unwrap(), "change.txt", false).expect("file diff");
-    assert!(unstaged_file.is_some());
-
-    let mut index = repo.index().expect("index");
-    index.add_path(Path::new("change.txt")).expect("stage file");
-    index.write().expect("write index");
-
-    let staged = staged_diff(repo_root.to_str().unwrap()).expect("staged diff");
-    let staged_entry = staged
-        .iter()
-        .find(|diff| diff.path.ends_with("change.txt"))
-        .expect("staged entry");
-    assert!(staged_entry.patch.contains("+two"));
-
-    let staged_file =
-        diff_file(repo_root.to_str().unwrap(), "change.txt", true).expect("staged file diff");
-    assert!(staged_file.is_some());
-}
-
-#[test]
 fn commit_logs_respect_filters() {
     let (_dir, repo) = init_temp_repo();
     write_commit(&repo, "log.txt", "alpha", "alpha commit");
@@ -252,7 +161,7 @@ fn remotes_are_discovered() {
 }
 
 #[test]
-fn fetch_push_pull_and_prune_work_with_local_remote() {
+fn fetch_push_and_pull_work_with_local_remote() {
     let (_dir, repo) = init_temp_repo();
     let commit = write_commit(&repo, "push.txt", "content", "initial");
 
@@ -267,13 +176,16 @@ fn fetch_push_pull_and_prune_work_with_local_remote() {
         repo.path().parent().unwrap(),
         "origin",
         "main",
+        "main",
         &network,
         None,
     )
     .expect("push");
 
     let fetch_dir = tempfile::tempdir().expect("create fetch dir");
-    let fetch_repo = Repository::init(fetch_dir.path()).expect("init fetch repo");
+    let mut init = RepositoryInitOptions::new();
+    init.initial_head("main");
+    let fetch_repo = Repository::init_opts(fetch_dir.path(), &init).expect("init fetch repo");
     fetch_repo
         .remote("origin", remote_dir.path().to_str().expect("remote path"))
         .expect("add remote");
@@ -285,18 +197,138 @@ fn fetch_push_pull_and_prune_work_with_local_remote() {
         .expect("remote ref");
     assert_eq!(remote_ref.target(), Some(commit));
 
-    fetch_repo
-        .reference("refs/remotes/origin/obsolete", commit, true, "obsolete")
-        .expect("create obsolete ref");
-    prune_remotes(fetch_dir.path(), "origin", &network, None).expect("prune");
-    assert!(fetch_repo
-        .find_reference("refs/remotes/origin/obsolete")
-        .is_err());
-
-    let outcome = pull_branch(fetch_dir.path(), "origin", "main", &network, None).expect("pull");
+    let outcome =
+        pull_branch(fetch_dir.path(), "origin", "main", "main", &network, None).expect("pull");
     assert_eq!(outcome, PullOutcome::FastForward);
     let head = fetch_repo.head().expect("head");
     assert_eq!(head.target(), Some(commit));
+}
+
+/// A clone of a bare remote on `main`, with a `feature` branch checked out that tracks
+/// `origin/main`, and the remote one commit ahead.
+fn clone_with_feature_tracking_main() -> (tempfile::TempDir, tempfile::TempDir, Repository) {
+    let (work_dir, work) = init_temp_repo();
+    write_commit(&work, "shared.txt", "one\n", "initial");
+    let remote_dir = tempfile::tempdir().expect("remote dir");
+    let mut init = RepositoryInitOptions::new();
+    init.bare(true).initial_head("main");
+    Repository::init_opts(remote_dir.path(), &init).expect("init bare");
+    let remote_url = remote_dir.path().to_str().unwrap();
+    work.remote("origin", remote_url).expect("add remote");
+    let network = NetworkOptions::default();
+    let work_root = work.path().parent().unwrap().to_path_buf();
+    push_branch(&work_root, "origin", "main", "main", &network, None).expect("push");
+    fetch_remote(&work_root, "origin", &network, None).expect("fetch");
+
+    let head = work.head().unwrap().peel_to_commit().unwrap().id();
+    work.branch("feature", &work.find_commit(head).unwrap(), false)
+        .expect("feature");
+    work.set_head("refs/heads/feature").expect("switch");
+    ensure_remote_tracking(&work, "feature", "origin/main", head);
+
+    // Advance origin/main from a second clone.
+    let other_dir = tempfile::tempdir().expect("other dir");
+    let other = Repository::clone(remote_url, other_dir.path()).expect("clone");
+    write_commit(&other, "shared.txt", "one\ntwo\n", "remote change");
+    push_branch(other_dir.path(), "origin", "main", "main", &network, None).expect("push");
+    (work_dir, remote_dir, work)
+}
+
+#[test]
+fn pull_fast_forwards_the_checked_out_branch_only() {
+    let (_work_dir, _remote_dir, work) = clone_with_feature_tracking_main();
+    let root = work.path().parent().unwrap();
+    let main_before = work.refname_to_id("refs/heads/main").unwrap();
+    let network = NetworkOptions::default();
+
+    let outcome = pull_branch(root, "origin", "feature", "main", &network, None).expect("pull");
+    assert_eq!(outcome, PullOutcome::FastForward);
+    assert_eq!(
+        work.find_reference("HEAD")
+            .unwrap()
+            .symbolic_target()
+            .unwrap(),
+        Some("refs/heads/feature")
+    );
+    assert_eq!(
+        work.refname_to_id("refs/heads/feature").unwrap(),
+        work.refname_to_id("refs/remotes/origin/main").unwrap()
+    );
+    assert_eq!(work.refname_to_id("refs/heads/main").unwrap(), main_before);
+    // A Windows checkout may turn line endings into CRLF (core.autocrlf).
+    assert_eq!(
+        fs::read_to_string(root.join("shared.txt"))
+            .unwrap()
+            .replace("\r\n", "\n"),
+        "one\ntwo\n"
+    );
+
+    // A branch that is not checked out is refused.
+    assert!(pull_branch(root, "origin", "main", "main", &network, None).is_err());
+}
+
+#[test]
+fn pull_refuses_to_overwrite_uncommitted_changes() {
+    let (_work_dir, _remote_dir, work) = clone_with_feature_tracking_main();
+    let root = work.path().parent().unwrap();
+    let feature_before = work.refname_to_id("refs/heads/feature").unwrap();
+    fs::write(root.join("shared.txt"), "local edit\n").unwrap();
+
+    let result = pull_branch(
+        root,
+        "origin",
+        "feature",
+        "main",
+        &NetworkOptions::default(),
+        None,
+    );
+    assert!(result.is_err());
+    assert_eq!(
+        fs::read_to_string(root.join("shared.txt")).unwrap(),
+        "local edit\n"
+    );
+    assert_eq!(
+        work.refname_to_id("refs/heads/feature").unwrap(),
+        feature_before
+    );
+}
+
+#[test]
+fn push_maps_the_local_branch_to_the_upstream_name() {
+    let (_dir, repo) = init_temp_repo();
+    let commit = write_commit(&repo, "a.txt", "a", "initial");
+    let remote_dir = tempfile::tempdir().expect("remote dir");
+    let remote = Repository::init_bare(remote_dir.path()).expect("init bare");
+    repo.remote("origin", remote_dir.path().to_str().unwrap())
+        .expect("add remote");
+
+    push_branch(
+        repo.path().parent().unwrap(),
+        "origin",
+        "main",
+        "release",
+        &NetworkOptions::default(),
+        None,
+    )
+    .expect("push");
+
+    assert_eq!(remote.refname_to_id("refs/heads/release").unwrap(), commit);
+    assert!(remote.find_reference("refs/heads/main").is_err());
+}
+
+#[test]
+fn remotes_report_a_separate_push_url() {
+    let (_dir, repo) = init_temp_repo();
+    repo.remote("origin", "https://example.com/fetch.git")
+        .expect("create remote");
+    repo.remote_set_pushurl("origin", Some("https://push.example.com/push.git"))
+        .expect("set push url");
+
+    let remotes = list_remotes(repo.path().parent().unwrap()).expect("list remotes");
+    assert_eq!(
+        remotes[0].push_url.as_deref(),
+        Some("https://push.example.com/push.git")
+    );
 }
 
 #[test]
@@ -320,93 +352,223 @@ fn stashes_round_trip_changes() {
     assert_eq!(stashes.len(), 1);
     assert!(stashes[0].message.contains("test stash"));
 
-    apply_stash(working_dir.to_str().unwrap(), 0).expect("apply stash");
-    drop_stash(working_dir.to_str().unwrap(), 0).expect("drop stash");
+    apply_stash(working_dir.to_str().unwrap(), 0, &stashes[0].id).expect("apply stash");
+    drop_stash(working_dir.to_str().unwrap(), 0, &stashes[0].id).expect("drop stash");
 
     let restored = fs::read_to_string(&file_path).expect("read file");
     assert_eq!(restored, "modified");
 }
 
 #[test]
-fn working_tree_status_groups_files() {
+fn stash_drop_refuses_a_changed_stash_list() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    let path = root.to_str().unwrap();
+    write_commit(&repo, "a.txt", "base", "initial");
+    fs::write(root.join("a.txt"), "first").unwrap();
+    create_stash(path, "first", false).expect("stash");
+    let first = list_stashes(path).unwrap().remove(0);
+
+    // Another stash pushes the first one to index 1.
+    fs::write(root.join("a.txt"), "second").unwrap();
+    create_stash(path, "second", false).expect("stash");
+
+    let err = drop_stash(path, first.index, &first.id).expect_err("stale index");
+    assert!(err.message().contains("refresh"), "{}", err.message());
+    assert_eq!(list_stashes(path).unwrap().len(), 2);
+    assert!(apply_stash(path, first.index, &first.id).is_err());
+}
+
+#[test]
+fn stash_apply_keeps_edits_in_other_files() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    let path = root.to_str().unwrap();
+    write_commit(&repo, "a.txt", "a", "add a");
+    write_commit(&repo, "b.txt", "b", "add b");
+    fs::write(root.join("a.txt"), "stashed").unwrap();
+    create_stash(path, "a", false).expect("stash");
+    fs::write(root.join("b.txt"), "unsaved").unwrap();
+
+    let stash = list_stashes(path).unwrap().remove(0);
+    apply_stash(path, stash.index, &stash.id).expect("apply");
+
+    assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "stashed");
+    assert_eq!(fs::read_to_string(root.join("b.txt")).unwrap(), "unsaved");
+}
+
+#[test]
+fn stash_uses_the_configured_signature() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    let mut config = repo.config().unwrap();
+    config.set_str("user.name", "Ada").unwrap();
+    config.set_str("user.email", "ada@example.com").unwrap();
+    write_commit(&repo, "a.txt", "a", "initial");
+    fs::write(root.join("a.txt"), "changed").unwrap();
+
+    create_stash(root.to_str().unwrap(), "sig", false).expect("stash");
+    let stash = repo.refname_to_id("refs/stash").unwrap();
+    let commit = repo.find_commit(stash).unwrap();
+    assert_eq!(commit.author().email().unwrap(), "ada@example.com");
+}
+
+#[test]
+fn checkout_refuses_to_overwrite_a_modified_file() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    let first = write_commit(&repo, "a.txt", "one", "initial");
+    repo.branch("other", &repo.find_commit(first).unwrap(), false)
+        .unwrap();
+    write_commit(&repo, "a.txt", "two", "change");
+    fs::write(root.join("a.txt"), "dirty").unwrap();
+
+    assert!(branch::checkout_branch(root, "other").is_err());
+    assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "dirty");
+    assert_eq!(repo.head().unwrap().shorthand().unwrap(), "main");
+}
+
+#[test]
+fn commit_diff_summaries_count_lines() {
+    let (_dir, repo) = init_temp_repo();
+    let path = repo.path().parent().unwrap().to_str().unwrap().to_string();
+    write_commit(&repo, "lines.txt", "one\nold\n", "initial");
+    let second = write_commit(&repo, "lines.txt", "one\ntwo\nthree\n", "edit");
+
+    let summaries = commit_diff_summaries(&path, &second.to_string()).expect("summaries");
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].path, "lines.txt");
+    assert_eq!((summaries[0].additions, summaries[0].deletions), (2, 1));
+    assert!(!summaries[0].is_binary);
+}
+
+#[test]
+fn patch_text_prefixes_only_content_lines() {
+    let (_dir, repo) = init_temp_repo();
+    let path = repo.path().parent().unwrap().to_str().unwrap().to_string();
+    write_commit(&repo, "p.txt", "a\n", "initial");
+    let second = write_commit(&repo, "p.txt", "a\nb", "no newline at end");
+
+    let diff = commit_diff_file(&path, &second.to_string(), "p.txt")
+        .expect("diff")
+        .expect("entry");
+    let lines: Vec<&str> = diff.patch.lines().collect();
+    assert!(lines[0].starts_with("diff --git"), "{}", diff.patch);
+    assert!(lines.iter().any(|line| line.starts_with("@@")));
+    assert!(lines.contains(&"+b"));
+    assert!(lines.contains(&"\\ No newline at end of file"));
+}
+
+#[test]
+fn single_file_diffs_take_the_path_literally() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    let path = root.to_str().unwrap();
+    write_commit(&repo, "d.md", "other\n", "decoy");
+    let commit = write_commit(&repo, "[draft].md", "draft\n", "add draft");
+
+    let in_commit = commit_diff_file(path, &commit.to_string(), "[draft].md")
+        .expect("commit diff")
+        .expect("entry");
+    assert!(
+        in_commit.patch.contains("[draft].md"),
+        "{}",
+        in_commit.patch
+    );
+
+    fs::write(root.join("[draft].md"), "draft\nmore\n").unwrap();
+    fs::write(root.join("d.md"), "changed\n").unwrap();
+    let in_workdir = diff_file(path, "[draft].md", false)
+        .expect("diff")
+        .expect("entry");
+    assert!(
+        in_workdir.patch.contains("[draft].md"),
+        "{}",
+        in_workdir.patch
+    );
+}
+
+#[test]
+fn log_limit_counts_matching_commits() {
+    let (_dir, repo) = init_temp_repo();
+    let path = repo.path().parent().unwrap().to_str().unwrap().to_string();
+    write_commit(&repo, "f.txt", "0", "needle in the oldest commit");
+    for i in 1..5 {
+        write_commit(&repo, "f.txt", &i.to_string(), &format!("hay {i}"));
+    }
+
+    let filter = CommitFilter {
+        search: Some("needle".to_string()),
+        ..Default::default()
+    };
+    let commits = read_commit_log(&path, &filter, 2, false).expect("log");
+    assert_eq!(commits.len(), 1);
+    assert!(commits[0].summary.contains("needle"));
+}
+
+#[test]
+fn log_branch_filter_accepts_remote_branches() {
+    let (_dir, repo) = init_temp_repo();
+    let path = repo.path().parent().unwrap().to_str().unwrap().to_string();
+    let first = write_commit(&repo, "f.txt", "1", "first");
+    write_commit(&repo, "f.txt", "2", "second");
+    repo.reference("refs/remotes/origin/x", first, true, "test")
+        .unwrap();
+
+    let filter = CommitFilter {
+        branch: Some("origin/x".to_string()),
+        ..Default::default()
+    };
+    let commits = read_commit_log(&path, &filter, 10, false).expect("log");
+    assert_eq!(commits.len(), 1);
+    assert_eq!(commits[0].id, first.to_string());
+}
+
+#[test]
+fn unborn_repository_has_a_branch_and_an_empty_log() {
     let (_dir, repo) = init_temp_repo();
     let root = repo.path().parent().unwrap();
 
-    write_commit(&repo, "status.txt", "base", "initial");
-    let head = repo.head().expect("head").peel_to_commit().expect("commit");
-    repo.reset(head.as_object(), ResetType::Hard, None)
-        .expect("reset head");
+    let status = read_repo_status(root).expect("status");
+    assert_eq!(status.branch.as_deref(), Some("main"));
+    assert!(status.upstream.is_none());
 
-    let tracked_path = root.join("status.txt");
-    fs::write(&tracked_path, "updated").expect("modify tracked file");
-
-    let new_path = root.join("new_file.txt");
-    fs::write(&new_path, "new content").expect("write new file");
-
-    let status = read_working_tree_status(root).expect("working tree status");
-
-    assert!(status.staged.is_empty());
-    assert_eq!(status.unstaged, vec!["status.txt".to_string()]);
-    assert_eq!(status.untracked, vec!["new_file.txt".to_string()]);
-    assert!(status.conflicted.is_empty());
+    let log =
+        read_commit_log(root.to_str().unwrap(), &CommitFilter::default(), 10, false).expect("log");
+    assert!(log.is_empty());
 }
 
 #[test]
-fn repo_discovery_and_contents_are_reported() {
+fn conflicts_written_by_another_handle_are_detected() {
     let (_dir, repo) = init_temp_repo();
-    write_commit(&repo, "README.md", "hello", "initial");
-    repo.set_head("refs/heads/main").expect("set head");
+    let root = repo.path().parent().unwrap();
+    let base = write_commit(&repo, "c.txt", "base\n", "base");
+    repo.branch("other", &repo.find_commit(base).unwrap(), false)
+        .unwrap();
+    write_commit(&repo, "c.txt", "ours\n", "ours");
 
-    let repo_root = repo.path().parent().unwrap();
-    let nested = repo_root.join("nested");
-    fs::create_dir_all(&nested).expect("create nested");
+    // Caches the repository with its clean index.
+    assert!(detect_conflicts(root).unwrap().is_empty());
 
-    assert!(is_git_repo(repo_root));
-    assert!(is_git_repo(&nested));
+    // Commit on `other` and merge it from a separate handle, as `git merge` would.
+    let mut tree = repo.treebuilder(None).unwrap();
+    tree.insert("c.txt", repo.blob(b"theirs\n").unwrap(), 0o100644)
+        .unwrap();
+    let tree = repo.find_tree(tree.write().unwrap()).unwrap();
+    let sig = Signature::now("Tester", "tester@example.com").unwrap();
+    let parent = repo.find_commit(base).unwrap();
+    let theirs = repo
+        .commit(
+            Some("refs/heads/other"),
+            &sig,
+            &sig,
+            "theirs",
+            &tree,
+            &[&parent],
+        )
+        .unwrap();
+    let annotated = repo.find_annotated_commit(theirs).unwrap();
+    repo.merge(&[&annotated], None, None).unwrap();
 
-    let other_dir = tempfile::tempdir().expect("other temp dir");
-    assert!(!is_git_repo(other_dir.path()));
-
-    let discovered = find_repo_root(&nested).expect("find repo root");
-    assert_eq!(discovered.as_deref(), Some(repo_root));
-    let none = find_repo_root(other_dir.path()).expect("no repo root");
-    assert!(none.is_none());
-}
-
-#[test]
-fn worktrees_and_submodules_are_listed() {
-    let (_dir, repo) = init_temp_repo();
-    write_commit(&repo, "README.md", "hello", "initial");
-
-    let sub_repo_dir = tempfile::tempdir().expect("submodule repo dir");
-    let sub_repo = Repository::init(sub_repo_dir.path()).expect("init submodule repo");
-    write_commit(&sub_repo, "lib.txt", "submodule", "init submodule");
-
-    let submodule_path = repo.path().parent().unwrap().join("vendor/submodule");
-    fs::create_dir_all(&submodule_path).expect("create submodule path");
-
-    // Forward slashes: a backslash starts an escape in git config values.
-    let submodule_url = sub_repo_dir.path().to_string_lossy().replace('\\', "/");
-    let gitmodules = format!(
-        "[submodule \"vendor/submodule\"]\n\tpath = vendor/submodule\n\turl = {submodule_url}\n",
-    );
-    write_commit(&repo, ".gitmodules", &gitmodules, "add submodule");
-
-    let submodules = list_submodules(repo.path().parent().unwrap()).expect("list submodules");
-    assert_eq!(submodules.len(), 1);
-    assert_eq!(submodules[0].path, "vendor/submodule");
-    assert_eq!(submodules[0].url.as_deref(), Some(submodule_url.as_str()));
-
-    let worktree_parent = tempfile::tempdir().expect("worktree dir");
-    let worktree_dir = worktree_parent.path().join("worktree");
-    let opts = WorktreeAddOptions::new();
-    repo.worktree("worktree-feature", &worktree_dir, Some(&opts))
-        .expect("create worktree");
-
-    let worktrees = list_worktrees(repo.path().parent().unwrap()).expect("list worktrees");
-    // libgit2 stores the resolved path (/private/var on macOS, forward slashes on Windows).
-    let expected = fs::canonicalize(&worktree_dir).expect("canonical worktree path");
-    assert!(worktrees
-        .iter()
-        .any(|path| fs::canonicalize(path).ok().as_ref() == Some(&expected)));
+    assert_eq!(detect_conflicts(root).unwrap(), vec!["c.txt".to_string()]);
 }

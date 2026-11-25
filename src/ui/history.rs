@@ -1,14 +1,16 @@
 // Panneau d'historique des commits pour l'interface Iced.
 // Affiche la liste des commits avec filtres, et un volet de details
 // avec les fichiers modifies et les diffs expansibles.
+// Les lectures git tournent en tache de fond ; view() ne lit que l'etat du panneau.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use chrono::{Datelike, NaiveDate, TimeZone, Utc};
 use iced::widget::{
-    button, column, container, horizontal_rule, row, scrollable, text, text_input, Space,
+    button, column, container, horizontal_rule, pick_list, row, scrollable, text, text_input, Space,
 };
-use iced::{Element, Length};
+use iced::{Element, Length, Task};
 
 use crate::ui::theme::Theme;
 
@@ -17,6 +19,7 @@ use crate::git::{
     log::{list_local_branches, read_commit_log, CommitFilter, CommitInfo},
 };
 use crate::ui::context::RepoContext;
+use crate::ui::stage::git_task;
 
 /// Nombre maximal de commits charges au total.
 const MAX_COMMITS: usize = 200;
@@ -38,6 +41,29 @@ pub struct HistoryFilters {
     pub until: String,
 }
 
+impl HistoryFilters {
+    /// Filtre git correspondant aux champs saisis ; un champ vide ne filtre pas.
+    fn to_commit_filter(&self) -> CommitFilter {
+        let non_empty = |value: &str| (!value.is_empty()).then(|| value.to_string());
+        CommitFilter {
+            branch: non_empty(&self.branch),
+            author: non_empty(&self.author),
+            search: non_empty(&self.search),
+            since: parse_date(&self.since),
+            until: parse_date(&self.until),
+        }
+    }
+}
+
+/// Une page de commits et les branches locales proposees dans le filtre.
+#[derive(Debug, Clone)]
+pub struct LogPage {
+    commits: Vec<CommitInfo>,
+    branches: Vec<String>,
+    /// Nombre de commits demandes : une page pleine signale qu'il en reste.
+    limit: usize,
+}
+
 // ---------------------------------------------------------------------------
 // Messages
 // ---------------------------------------------------------------------------
@@ -47,11 +73,13 @@ pub struct HistoryFilters {
 pub enum Message {
     /// Filtre de branche modifie.
     BranchFilterChanged(String),
+    /// Branche locale choisie dans la liste (appliquee tout de suite).
+    BranchPicked(String),
     /// Filtre d'auteur modifie.
     AuthorChanged(String),
     /// Recherche textuelle modifiee.
     SearchChanged(String),
-    /// Application differee de la recherche apres debounce (version, texte).
+    /// Application differee de la recherche apres debounce (version).
     ApplyDebouncedSearch(u32),
     /// Date de debut modifiee (format YYYY-MM-DD).
     SinceChanged(String),
@@ -65,6 +93,12 @@ pub enum Message {
     ExpandFile(String),
     /// Charger la page suivante de commits.
     LoadMore,
+    /// Resultat d'une lecture du journal (numero de requete, page).
+    Loaded(Arc<str>, u64, Result<LogPage, String>),
+    /// Fichiers modifies d'un commit (identifiant, resumes).
+    SummariesLoaded(Arc<str>, String, Result<Vec<FileDiffSummary>, String>),
+    /// Patch d'un fichier (identifiant du commit, chemin, patch).
+    PatchLoaded(Arc<str>, String, String, FileDiff),
 }
 
 // ---------------------------------------------------------------------------
@@ -73,7 +107,11 @@ pub enum Message {
 
 /// Panneau d'historique affichant les commits et leurs details.
 pub struct HistoryPanel {
+    repo: Option<Arc<str>>,
     filters: HistoryFilters,
+    /// Filtre de la derniere recherche lancee, reutilise par la pagination.
+    applied: CommitFilter,
+    /// Branches locales proposees dans le filtre de branche.
     branches: Vec<String>,
     commits: Vec<CommitInfo>,
     selected_commit: Option<String>,
@@ -82,15 +120,14 @@ pub struct HistoryPanel {
     /// Diffs complets charges a la demande (cle = chemin du fichier).
     loaded_patches: HashMap<String, FileDiff>,
     /// Ensemble des fichiers dont le diff est actuellement affiche.
-    expanded_files: std::collections::HashSet<String>,
-    last_repo: Option<String>,
+    expanded_files: HashSet<String>,
     error: Option<String>,
     diff_error: Option<String>,
-    pending_refresh: bool,
     /// Compteur de version pour le debounce de la recherche.
     search_debounce_version: u32,
-    /// Nombre de commits actuellement charges (pour la pagination).
-    loaded_count: usize,
+    /// Numero de la derniere lecture du journal ; les reponses plus anciennes sont ignorees.
+    request: u64,
+    loading: bool,
     /// Indique s'il reste des commits a charger.
     has_more: bool,
 }
@@ -99,33 +136,49 @@ impl HistoryPanel {
     /// Cree un nouveau panneau d'historique.
     pub fn new() -> Self {
         Self {
+            repo: None,
             filters: HistoryFilters::default(),
+            applied: CommitFilter::default(),
             branches: Vec::new(),
             commits: Vec::new(),
             selected_commit: None,
             diff_summaries: Vec::new(),
             loaded_patches: HashMap::new(),
-            expanded_files: std::collections::HashSet::new(),
-            last_repo: None,
+            expanded_files: HashSet::new(),
             error: None,
             diff_error: None,
-            pending_refresh: false,
             search_debounce_version: 0,
-            loaded_count: 0,
+            request: 0,
+            loading: false,
             has_more: false,
         }
     }
 
-    /// Positionne le filtre de branche et declenche un rafraichissement.
-    pub fn set_branch_filter(&mut self, branch: String, repo: Option<&RepoContext>) {
-        self.filters.branch = branch;
-        self.selected_commit = None;
-        if let Some(repo) = repo {
-            self.refresh(repo);
-            self.pending_refresh = false;
-        } else {
-            self.pending_refresh = true;
+    /// Oublie le depot precedent et charge l'historique de `repo` en tache de fond.
+    /// Les filtres saisis sont conserves, sauf la branche quand on change de depot.
+    pub fn load(&mut self, repo: &RepoContext) -> Task<Message> {
+        let mut filters = std::mem::take(&mut self.filters);
+        if self.repo.is_some() && !self.is_current(repo.path()) {
+            filters.branch.clear();
         }
+        *self = Self {
+            repo: Some(repo.path_arc()),
+            filters,
+            // Keep request numbers growing so a reply from before the reset is ignored.
+            request: self.request,
+            ..Self::new()
+        };
+        self.refresh()
+    }
+
+    /// Affiche l'historique de `branch` dans `repo`.
+    pub fn show_branch(&mut self, branch: String, repo: &RepoContext) -> Task<Message> {
+        if !self.is_current(repo.path()) {
+            // Only the reset is wanted: a task that is never run never starts its job.
+            let _ = self.load(repo);
+        }
+        self.filters.branch = branch;
+        self.refresh()
     }
 
     // -----------------------------------------------------------------------
@@ -133,10 +186,15 @@ impl HistoryPanel {
     // -----------------------------------------------------------------------
 
     /// Traite un message et effectue les operations correspondantes.
-    pub fn update(&mut self, message: Message, repo: Option<&RepoContext>) -> iced::Task<Message> {
+    pub fn update(&mut self, message: Message, _repo: Option<&RepoContext>) -> Task<Message> {
         match message {
             Message::BranchFilterChanged(value) => {
                 self.filters.branch = value;
+            }
+
+            Message::BranchPicked(value) => {
+                self.filters.branch = value;
+                return self.refresh();
             }
 
             Message::AuthorChanged(value) => {
@@ -150,7 +208,7 @@ impl HistoryPanel {
                 self.search_debounce_version += 1;
                 let version = self.search_debounce_version;
                 // Retourner une tache qui attend 250ms puis envoie ApplyDebouncedSearch
-                return iced::Task::perform(
+                return Task::perform(
                     async move {
                         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                     },
@@ -169,48 +227,78 @@ impl HistoryPanel {
             Message::ApplyDebouncedSearch(version) => {
                 // Appliquer uniquement si aucune frappe plus recente n'a eu lieu
                 if version == self.search_debounce_version {
-                    if let Some(repo) = repo {
-                        self.refresh(repo);
-                    }
+                    return self.refresh();
                 }
             }
 
             Message::ApplyFilters => {
-                if let Some(repo) = repo {
-                    self.refresh(repo);
-                }
+                return self.refresh();
             }
 
             Message::SelectCommit(id) => {
                 self.selected_commit = Some(id);
-                self.expanded_files.clear();
-                self.load_diff();
+                return self.load_diff();
             }
 
             Message::LoadMore => {
-                // Charger la page suivante de commits
-                if self.has_more {
-                    if let Some(repo) = repo {
-                        self.load_next_page(repo);
-                    }
+                // La page suivante relit les premiers commits correspondants, plus une page
+                if self.has_more && !self.loading {
+                    let limit = (self.commits.len() + PAGE_SIZE).min(MAX_COMMITS);
+                    return self.fetch(limit);
                 }
             }
 
             Message::ExpandFile(path) => {
                 // Basculer l'etat d'expansion du fichier
-                if self.expanded_files.contains(&path) {
-                    self.expanded_files.remove(&path);
-                } else {
-                    // Charger le patch si necessaire
-                    if !self.loaded_patches.contains_key(&path) {
-                        self.load_file_patch(&path);
+                if self.expanded_files.remove(&path) {
+                    return Task::none();
+                }
+                self.expanded_files.insert(path.clone());
+                if !self.loaded_patches.contains_key(&path) {
+                    return self.load_file_patch(path);
+                }
+            }
+
+            // -- Resultats des taches de fond --
+            Message::Loaded(repo, request, result) => {
+                if !self.is_current(&repo) || request != self.request {
+                    return Task::none();
+                }
+                self.loading = false;
+                match result {
+                    Ok(page) => {
+                        self.has_more =
+                            page.commits.len() == page.limit && page.limit < MAX_COMMITS;
+                        self.commits = page.commits;
+                        self.branches = page.branches;
                     }
-                    self.expanded_files.insert(path);
+                    Err(err) => {
+                        self.commits.clear();
+                        self.has_more = false;
+                        self.error = Some(format!("Echec de lecture des commits : {err}"));
+                    }
+                }
+            }
+
+            Message::SummariesLoaded(repo, id, result) => {
+                if self.is_current(&repo) && self.selected_commit.as_ref() == Some(&id) {
+                    match result {
+                        Ok(summaries) => self.diff_summaries = summaries,
+                        Err(err) => {
+                            self.diff_error = Some(format!("Echec du chargement du diff : {err}"));
+                        }
+                    }
+                }
+            }
+
+            Message::PatchLoaded(repo, id, path, diff) => {
+                if self.is_current(&repo) && self.selected_commit.as_ref() == Some(&id) {
+                    self.loaded_patches.insert(path, diff);
                 }
             }
         }
 
-        iced::Task::none()
+        Task::none()
     }
 
     // -----------------------------------------------------------------------
@@ -231,20 +319,19 @@ impl HistoryPanel {
             .push(text("Explore commits, filter by branch or author, and inspect diffs.").size(14));
 
         // Sans depot, message d'aide
-        let Some(_repo) = repo else {
+        if repo.is_none() {
             main_col = main_col
                 .push(text("Select or clone a repository to view its commit history.").size(14));
-            return main_col.into();
-        };
-
-        // Erreur globale
-        if let Some(error) = &self.error {
-            main_col = main_col.push(text(error.as_str()).size(14));
             return main_col.into();
         }
 
         // Section des filtres
         main_col = main_col.push(self.view_filters());
+
+        // Erreur globale, sous les filtres pour pouvoir les corriger
+        if let Some(error) = &self.error {
+            main_col = main_col.push(text(error.as_str()).size(14).style(text::danger));
+        }
 
         main_col = main_col.push(horizontal_rule(1));
 
@@ -268,12 +355,19 @@ impl HistoryPanel {
         // Premiere ligne : branche et auteur
         let branch_input =
             text_input("All branches", &self.filters.branch).on_input(Message::BranchFilterChanged);
+        let branch_pick = pick_list(
+            self.branches.as_slice(),
+            None::<String>,
+            Message::BranchPicked,
+        )
+        .placeholder("Branches locales");
         let author_input =
             text_input("name or email", &self.filters.author).on_input(Message::AuthorChanged);
 
         let first_row = row![
             text("Branch").size(14),
             branch_input,
+            branch_pick,
             Space::with_width(Length::Fixed(8.0)),
             text("Author").size(14),
             author_input,
@@ -311,7 +405,12 @@ impl HistoryPanel {
         let mut col = column![].spacing(4);
 
         if self.commits.is_empty() {
-            col = col.push(text("No commits match the current filters.").size(14));
+            let empty = if self.loading {
+                "Chargement..."
+            } else {
+                "No commits match the current filters."
+            };
+            col = col.push(text(empty).size(14));
             return scrollable(col).into();
         }
 
@@ -360,7 +459,7 @@ impl HistoryPanel {
         if self.has_more {
             col = col.push(
                 button(text("Charger plus...").size(14))
-                    .on_press(Message::LoadMore)
+                    .on_press_maybe((!self.loading).then_some(Message::LoadMore))
                     .padding(8)
                     .width(Length::Fill),
             );
@@ -490,169 +589,102 @@ impl HistoryPanel {
     // Logique interne
     // -----------------------------------------------------------------------
 
-    /// Recharge la liste des commits selon les filtres courants.
-    fn refresh(&mut self, repo: &RepoContext) {
+    fn is_current(&self, repo: &str) -> bool {
+        self.repo.as_deref() == Some(repo)
+    }
+
+    /// Relance la recherche avec les filtres saisis, depuis la premiere page.
+    fn refresh(&mut self) -> Task<Message> {
         self.error = None;
         self.diff_error = None;
-        self.last_repo = Some(repo.path().to_string());
         self.selected_commit = None;
         self.diff_summaries.clear();
         self.loaded_patches.clear();
         self.expanded_files.clear();
-
-        // Charger les branches locales si necessaire
-        if self.branches.is_empty() {
-            if let Ok(branches) = list_local_branches(repo.path()) {
-                self.branches = branches;
-            }
-        }
-
-        // Construire le filtre git
-        let filter = CommitFilter {
-            branch: if self.filters.branch.is_empty() {
-                None
-            } else {
-                Some(self.filters.branch.clone())
-            },
-            author: if self.filters.author.is_empty() {
-                None
-            } else {
-                Some(self.filters.author.clone())
-            },
-            search: if self.filters.search.is_empty() {
-                None
-            } else {
-                Some(self.filters.search.clone())
-            },
-            since: parse_date(&self.filters.since),
-            until: parse_date(&self.filters.until),
-        };
-
-        // Chargement initial : une seule page
-        match read_commit_log(repo.path(), &filter, PAGE_SIZE, false) {
-            Ok(commits) => {
-                let count = commits.len();
-                self.commits = commits;
-                self.loaded_count = count;
-                // Il reste des commits si la page est pleine et qu'on n'a pas atteint le max
-                self.has_more = (count == PAGE_SIZE) && (self.loaded_count < MAX_COMMITS);
-            }
-            Err(err) => {
-                self.commits.clear();
-                self.loaded_count = 0;
-                self.has_more = false;
-                self.error = Some(format!("Echec de lecture des commits : {err}"));
-            }
-        }
+        self.applied = self.filters.to_commit_filter();
+        self.fetch(PAGE_SIZE)
     }
 
-    /// Charge la page suivante de commits en augmentant la limite.
-    fn load_next_page(&mut self, repo: &RepoContext) {
-        let new_limit = (self.loaded_count + PAGE_SIZE).min(MAX_COMMITS);
-
-        // Reconstruire le filtre identique a celui de refresh()
-        let filter = CommitFilter {
-            branch: if self.filters.branch.is_empty() {
-                None
-            } else {
-                Some(self.filters.branch.clone())
-            },
-            author: if self.filters.author.is_empty() {
-                None
-            } else {
-                Some(self.filters.author.clone())
-            },
-            search: if self.filters.search.is_empty() {
-                None
-            } else {
-                Some(self.filters.search.clone())
-            },
-            since: parse_date(&self.filters.since),
-            until: parse_date(&self.filters.until),
+    /// Lit les `limit` premiers commits du filtre applique.
+    fn fetch(&mut self, limit: usize) -> Task<Message> {
+        let Some(repo) = self.repo.clone() else {
+            return Task::none();
         };
-
-        match read_commit_log(repo.path(), &filter, new_limit, false) {
-            Ok(commits) => {
-                let count = commits.len();
-                self.commits = commits;
-                self.loaded_count = count;
-                // Verifier s'il reste des commits a charger
-                self.has_more = (count == new_limit) && (self.loaded_count < MAX_COMMITS);
-            }
-            Err(err) => {
-                self.error = Some(format!("Echec de lecture des commits : {err}"));
-                self.has_more = false;
-            }
-        }
+        self.request += 1;
+        self.loading = true;
+        let request = self.request;
+        let filter = self.applied.clone();
+        git_task(
+            repo,
+            move |repo| read_page(repo, &filter, limit),
+            move |repo, result| Message::Loaded(repo, request, result),
+        )
     }
 
     /// Charge les resumes de diff pour le commit selectionne.
-    fn load_diff(&mut self) {
+    fn load_diff(&mut self) -> Task<Message> {
+        self.diff_summaries.clear();
         self.loaded_patches.clear();
         self.expanded_files.clear();
+        self.diff_error = None;
 
-        let Some(repo) = self.last_repo.clone() else {
-            return;
+        let (Some(repo), Some(id)) = (self.repo.clone(), self.selected_commit.clone()) else {
+            return Task::none();
         };
-        let Some(commit_id) = &self.selected_commit else {
-            return;
-        };
-
-        match commit_diff_summaries(&repo, commit_id) {
-            Ok(summaries) => {
-                self.diff_summaries = summaries;
-                self.diff_error = None;
-            }
-            Err(err) => {
-                self.diff_summaries.clear();
-                self.diff_error = Some(format!("Echec du chargement du diff : {err}"));
-            }
-        }
+        git_task(
+            repo,
+            {
+                let id = id.clone();
+                move |repo| commit_diff_summaries(repo, &id).map_err(|err| err.to_string())
+            },
+            move |repo, result| Message::SummariesLoaded(repo, id.clone(), result),
+        )
     }
 
     /// Charge le patch d'un fichier a la demande (chargement paresseux).
-    fn load_file_patch(&mut self, file_path: &str) {
-        if self.loaded_patches.contains_key(file_path) {
-            return; // Deja charge
-        }
-
-        let (Some(repo), Some(commit_id)) =
-            (self.last_repo.as_ref(), self.selected_commit.as_ref())
-        else {
-            return;
+    fn load_file_patch(&self, file_path: String) -> Task<Message> {
+        let (Some(repo), Some(id)) = (self.repo.clone(), self.selected_commit.clone()) else {
+            return Task::none();
         };
-
-        match commit_diff_file(repo, commit_id, file_path) {
-            Ok(Some(diff)) => {
-                self.loaded_patches.insert(file_path.to_string(), diff);
-            }
-            Ok(None) => {
-                // Fichier absent du diff, inserer un espace reservé
-                self.loaded_patches.insert(
-                    file_path.to_string(),
-                    FileDiff {
-                        path: file_path.to_string(),
-                        additions: 0,
-                        deletions: 0,
-                        patch: String::from("(pas de modifications)"),
-                        truncated: false,
-                    },
-                );
-            }
-            Err(err) => {
-                self.loaded_patches.insert(
-                    file_path.to_string(),
-                    FileDiff {
-                        path: file_path.to_string(),
-                        additions: 0,
-                        deletions: 0,
-                        patch: format!("Erreur de chargement du diff : {err}"),
-                        truncated: false,
-                    },
-                );
-            }
-        }
+        let job_id = id.clone();
+        let job_path = file_path.clone();
+        git_task(
+            repo,
+            move |repo| match commit_diff_file(repo, &job_id, &job_path) {
+                Ok(Some(diff)) => Ok(diff),
+                // Fichier absent du diff, inserer un espace reserve
+                Ok(None) => Ok(placeholder_diff("(pas de modifications)")),
+                Err(err) => Err(err.to_string()),
+            },
+            move |repo, result| {
+                let diff = result.unwrap_or_else(|err| {
+                    placeholder_diff(&format!("Erreur de chargement du diff : {err}"))
+                });
+                Message::PatchLoaded(repo, id.clone(), file_path.clone(), diff)
+            },
+        )
     }
+}
+
+/// Diff sans contenu reel, affiche a la place d'un patch absent ou en erreur.
+fn placeholder_diff(patch: &str) -> FileDiff {
+    FileDiff {
+        additions: 0,
+        deletions: 0,
+        patch: patch.to_string(),
+        truncated: false,
+    }
+}
+
+/// Lit les `limit` premiers commits correspondant a `filter` et les branches locales.
+fn read_page(repo: &str, filter: &CommitFilter, limit: usize) -> Result<LogPage, String> {
+    let commits = read_commit_log(repo, filter, limit, false).map_err(|err| err.to_string())?;
+    let branches = list_local_branches(repo).unwrap_or_default();
+    Ok(LogPage {
+        commits,
+        branches,
+        limit,
+    })
 }
 
 /// Convertit une chaine au format YYYY-MM-DD en timestamp Unix.
@@ -668,4 +700,34 @@ fn parse_date(input: &str) -> Option<i64> {
                 .earliest()
         })
         .map(|dt| dt.timestamp())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_full_page_means_more_commits_may_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let sig = git2::Signature::now("Test", "test@example.com").unwrap();
+        let tree = repo
+            .find_tree(repo.index().unwrap().write_tree().unwrap())
+            .unwrap();
+        let mut parent: Option<git2::Commit> = None;
+        for i in 0..3 {
+            let parents: Vec<_> = parent.iter().collect();
+            let oid = repo
+                .commit(Some("HEAD"), &sig, &sig, &format!("c{i}"), &tree, &parents)
+                .unwrap();
+            parent = Some(repo.find_commit(oid).unwrap());
+        }
+        let path = dir.path().to_str().unwrap();
+
+        let page = read_page(path, &CommitFilter::default(), 2).unwrap();
+        assert_eq!(page.commits.len(), page.limit);
+        let page = read_page(path, &CommitFilter::default(), 4).unwrap();
+        assert_eq!(page.commits.len(), 3);
+        assert!(!page.branches.is_empty());
+    }
 }

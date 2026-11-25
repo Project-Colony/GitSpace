@@ -3,9 +3,6 @@
 //! This module provides a unified error type for the application with
 //! automatic conversion from common error types and user-friendly messages.
 
-// Public API variants and methods designed for future use
-#![allow(dead_code)]
-
 use std::path::PathBuf;
 
 use thiserror::Error;
@@ -33,10 +30,6 @@ pub enum AppError {
     #[error("Configuration error: {0}")]
     Config(String),
 
-    /// Authentication error.
-    #[error("Authentication failed: {0}")]
-    Auth(String),
-
     /// Unexpected error.
     #[error("Unexpected error: {0}")]
     Unknown(String),
@@ -57,7 +50,6 @@ impl AppError {
                 "The provided input is not valid. Please double-check and try again.".to_string()
             }
             Self::Config(_) => "Configuration error. Please check your settings.".to_string(),
-            Self::Auth(_) => "Authentication failed. Please verify your credentials.".to_string(),
             Self::Unknown(_) => "An unexpected error occurred.".to_string(),
         }
     }
@@ -70,39 +62,8 @@ impl AppError {
             | Self::Io(msg)
             | Self::Validation(msg)
             | Self::Config(msg)
-            | Self::Auth(msg)
             | Self::Unknown(msg) => msg,
         }
-    }
-
-    /// Creates a Git error with context.
-    pub fn git(msg: impl Into<String>) -> Self {
-        Self::Git(msg.into())
-    }
-
-    /// Creates a Network error with context.
-    pub fn network(msg: impl Into<String>) -> Self {
-        Self::Network(msg.into())
-    }
-
-    /// Creates an I/O error with context.
-    pub fn io(msg: impl Into<String>) -> Self {
-        Self::Io(msg.into())
-    }
-
-    /// Creates a Validation error with context.
-    pub fn validation(msg: impl Into<String>) -> Self {
-        Self::Validation(msg.into())
-    }
-
-    /// Creates a Config error with context.
-    pub fn config(msg: impl Into<String>) -> Self {
-        Self::Config(msg.into())
-    }
-
-    /// Creates an Auth error with context.
-    pub fn auth(msg: impl Into<String>) -> Self {
-        Self::Auth(msg.into())
     }
 }
 
@@ -187,9 +148,8 @@ mod tests {
 
     #[test]
     fn from_git2_error() {
-        // git2::Error is not easily constructible, so we test the pattern
-        let err = AppError::git("merge conflict");
-        assert!(matches!(err, AppError::Git(_)));
+        let err: AppError = git2::Error::from_str("merge conflict").into();
+        assert!(matches!(err, AppError::Git(ref msg) if msg == "merge conflict"));
     }
 
     #[test]
@@ -203,18 +163,5 @@ mod tests {
     fn from_string() {
         let err: AppError = "something went wrong".into();
         assert!(matches!(err, AppError::Unknown(_)));
-    }
-
-    #[test]
-    fn constructor_helpers() {
-        assert!(matches!(AppError::git("test"), AppError::Git(_)));
-        assert!(matches!(AppError::network("test"), AppError::Network(_)));
-        assert!(matches!(AppError::io("test"), AppError::Io(_)));
-        assert!(matches!(
-            AppError::validation("test"),
-            AppError::Validation(_)
-        ));
-        assert!(matches!(AppError::config("test"), AppError::Config(_)));
-        assert!(matches!(AppError::auth("test"), AppError::Auth(_)));
     }
 }

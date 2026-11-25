@@ -5,6 +5,7 @@ use std::ffi::OsStr;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::process::Command as ProcessCommand;
+use std::sync::Arc;
 
 use iced::widget::{button, container, horizontal_rule, text, Column, Row};
 use iced::{Element, Length, Task};
@@ -21,20 +22,34 @@ use crate::ui::context::RepoContext;
 
 // ── Structures auxiliaires ─────────────────────────────────────────────────
 
-/// Contexte nécessaire pour l'auto-fetch en arrière-plan.
-#[derive(Debug, Clone)]
-pub struct AutoFetchContext {
-    pub repo_path: String,
-    pub remote_name: String,
-    pub token: Option<String>,
-    pub network: NetworkOptions,
+/// Opération réseau lancée sur le remote du dépôt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteAction {
+    Fetch,
+    Pull,
+    Push,
+}
+
+impl RemoteAction {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Fetch => "Fetch",
+            Self::Pull => "Pull",
+            Self::Push => "Push",
+        }
+    }
 }
 
 /// Sélection résolue d'un remote et d'une branche.
 #[derive(Debug, Clone)]
 struct RemoteSelection {
     remote_name: String,
+    /// URL used to look up the token, `None` when the remote has none.
+    url: Option<String>,
+    /// The checked-out branch.
     branch: Option<String>,
+    /// The branch it tracks on the remote, when an upstream is set.
+    upstream_branch: Option<String>,
 }
 
 // ── Messages du panneau ────────────────────────────────────────────────────
@@ -52,6 +67,19 @@ pub enum Message {
     OpenTerminal,
     /// Ouvrir l'explorateur de fichiers dans le dépôt.
     OpenFileExplorer,
+    /// Statut et remotes lus pour le dépôt `path`.
+    StateLoaded {
+        path: Arc<str>,
+        status: Result<RepoStatus, String>,
+        remotes: Result<Vec<RemoteInfo>, String>,
+    },
+    /// Fin d'une opération réseau sur le dépôt `path`. `auto` marque un auto-fetch.
+    ActionFinished {
+        path: Arc<str>,
+        action: RemoteAction,
+        auto: bool,
+        result: Result<String, String>,
+    },
 }
 
 // ── Panneau principal ──────────────────────────────────────────────────────
@@ -63,6 +91,8 @@ pub struct RepoOverviewPanel {
     error: Option<String>,
     action_status: Option<String>,
     network: NetworkOptions,
+    /// A state load or a network operation is running for `last_repo`.
+    busy: bool,
 }
 
 impl RepoOverviewPanel {
@@ -75,6 +105,7 @@ impl RepoOverviewPanel {
             error: None,
             action_status: None,
             network,
+            busy: false,
         }
     }
 
@@ -83,9 +114,9 @@ impl RepoOverviewPanel {
         self.network = network;
     }
 
-    /// Définit un message de statut d'action.
-    pub fn set_action_status<S: Into<String>>(&mut self, status: Option<S>) {
-        self.action_status = status.map(Into::into);
+    /// Vrai pendant un chargement d'état ou une opération réseau sur le dépôt courant.
+    pub fn is_busy(&self) -> bool {
+        self.busy
     }
 
     /// Traite un message et retourne une commande Iced.
@@ -95,64 +126,77 @@ impl RepoOverviewPanel {
         repo: Option<&RepoContext>,
         auth: &AuthManager,
     ) -> Task<Message> {
+        let Some(repo) = repo else {
+            return Task::none();
+        };
         match message {
-            Message::Fetch => {
-                if let Some(repo) = repo {
-                    let result = self.do_fetch(repo, auth);
-                    if result.is_ok() {
-                        self.reload_repo_state(repo);
-                    }
-                    self.action_status = Some(match result {
-                        Ok(msg) => msg,
-                        Err(err) => format!("Fetch failed: {err}"),
-                    });
-                }
-            }
-            Message::Pull => {
-                if let Some(repo) = repo {
-                    let result = self.do_pull(repo, auth);
-                    if result.is_ok() {
-                        self.reload_repo_state(repo);
-                    }
-                    self.action_status = Some(match result {
-                        Ok(msg) => msg,
-                        Err(err) => format!("Pull failed: {err}"),
-                    });
-                }
-            }
-            Message::Push => {
-                if let Some(repo) = repo {
-                    let result = self.do_push(repo, auth);
-                    if result.is_ok() {
-                        self.reload_repo_state(repo);
-                    }
-                    self.action_status = Some(match result {
-                        Ok(msg) => msg,
-                        Err(err) => format!("Push failed: {err}"),
-                    });
-                }
-            }
+            Message::Fetch => self.start_action(repo, auth, RemoteAction::Fetch, false),
+            Message::Pull => self.start_action(repo, auth, RemoteAction::Pull, false),
+            Message::Push => self.start_action(repo, auth, RemoteAction::Push, false),
             Message::OpenTerminal => {
-                if let Some(repo) = repo {
-                    match self.open_terminal(repo) {
-                        Ok(msg) => self.action_status = Some(msg),
-                        Err(err) => self.action_status = Some(format!("Terminal failed: {err}")),
-                    }
-                }
+                self.action_status = Some(match self.open_terminal(repo) {
+                    Ok(msg) => msg,
+                    Err(err) => format!("Terminal failed: {err}"),
+                });
+                Task::none()
             }
             Message::OpenFileExplorer => {
-                if let Some(repo) = repo {
-                    match self.open_file_explorer(repo) {
-                        Ok(msg) => self.action_status = Some(msg),
-                        Err(err) => {
-                            self.action_status = Some(format!("File explorer failed: {err}"))
-                        }
+                self.action_status = Some(match open_folder(repo.path()) {
+                    Ok(()) => "File explorer opened".to_string(),
+                    Err(err) => format!("File explorer failed: {err}"),
+                });
+                Task::none()
+            }
+            Message::StateLoaded {
+                path,
+                status,
+                remotes,
+            } => {
+                if *path != *repo.path() {
+                    return Task::none();
+                }
+                self.busy = false;
+                self.error = None;
+                self.status = status
+                    .map_err(|err| {
+                        self.error = Some(format!("Failed to read repository status: {err}"));
+                    })
+                    .ok();
+                self.remotes = remotes
+                    .map_err(|err| {
+                        self.error
+                            .get_or_insert_with(|| format!("Failed to read remotes: {err}"));
+                    })
+                    .unwrap_or_default();
+                Task::none()
+            }
+            Message::ActionFinished {
+                path,
+                action,
+                auto,
+                result,
+            } => {
+                if *path != *repo.path() {
+                    return Task::none();
+                }
+                self.busy = false;
+                let prefix = if auto { "Auto-fetch" } else { action.label() };
+                match result {
+                    Ok(msg) => {
+                        self.action_status = Some(if auto {
+                            format!("{prefix}: {msg}")
+                        } else {
+                            msg
+                        });
+                        self.reload_repo_state(repo)
+                    }
+                    Err(err) => {
+                        self.action_status = Some(format!("{prefix} failed: {err}"));
+                        Task::none()
                     }
                 }
             }
         }
-
-        Task::none()
     }
 
     /// Construit la vue du panneau.
@@ -291,23 +335,17 @@ impl RepoOverviewPanel {
 
         col = col.push(text("Quick actions").size(16));
 
+        let network_button = |label, message| {
+            button(text(label).size(13))
+                .on_press_maybe((!self.busy).then_some(message))
+                .padding(6)
+        };
+
         let actions_row = Row::new()
             .spacing(8)
-            .push(
-                button(text("Fetch").size(13))
-                    .on_press(Message::Fetch)
-                    .padding(6),
-            )
-            .push(
-                button(text("Pull").size(13))
-                    .on_press(Message::Pull)
-                    .padding(6),
-            )
-            .push(
-                button(text("Push").size(13))
-                    .on_press(Message::Push)
-                    .padding(6),
-            )
+            .push(network_button("Fetch", Message::Fetch))
+            .push(network_button("Pull", Message::Pull))
+            .push(network_button("Push", Message::Push))
             .push(
                 button(text("Open terminal").size(13))
                     .on_press(Message::OpenTerminal)
@@ -326,113 +364,110 @@ impl RepoOverviewPanel {
     // ── Rafraîchissement de l'état ─────────────────────────────────────
 
     /// Rafraîchit l'état du dépôt si le chemin a changé.
-    pub fn refresh(&mut self, repo: &RepoContext) {
+    pub fn refresh(&mut self, repo: &RepoContext) -> Task<Message> {
         if self.last_repo.as_deref() == Some(repo.path()) {
-            return;
+            return Task::none();
         }
         self.action_status = None;
-        self.reload_repo_state(repo);
+        self.reload_repo_state(repo)
     }
 
-    /// Recharge complètement l'état du dépôt (statut + remotes).
-    pub fn reload_repo_state(&mut self, repo: &RepoContext) {
-        self.last_repo = Some(repo.path().to_string());
-        self.status = None;
-        self.remotes.clear();
-        self.error = None;
-
-        match read_repo_status(repo.path()) {
-            Ok(status) => self.status = Some(status),
-            Err(err) => {
-                self.error = Some(format!("Failed to read repository status: {err}"));
-            }
-        }
-
-        match list_remotes(repo.path()) {
-            Ok(remotes) => self.remotes = remotes,
-            Err(err) => {
-                self.error
-                    .get_or_insert_with(|| format!("Failed to read remotes: {err}"));
-            }
-        }
-    }
-
-    // ── Contexte d'auto-fetch ──────────────────────────────────────────
-
-    /// Construit le contexte pour l'auto-fetch en arrière-plan.
-    pub fn auto_fetch_context(
-        &mut self,
-        repo: &RepoContext,
-        auth: &AuthManager,
-    ) -> Result<AutoFetchContext, String> {
+    /// Relit le statut et les remotes du dépôt hors du thread UI.
+    pub fn reload_repo_state(&mut self, repo: &RepoContext) -> Task<Message> {
         if self.last_repo.as_deref() != Some(repo.path()) {
-            self.reload_repo_state(repo);
+            self.last_repo = Some(repo.path().to_string());
+            self.status = None;
+            self.remotes.clear();
+            self.error = None;
         }
-        let selection = self.resolve_remote_selection()?;
-        let token = self.resolve_remote_token(auth, &selection.remote_name);
-        Ok(AutoFetchContext {
-            repo_path: repo.path().to_string(),
-            remote_name: selection.remote_name,
-            token,
-            network: self.network.clone(),
-        })
+        self.busy = true;
+
+        let path = repo.path_arc();
+        Task::perform(
+            async move {
+                let repo_path = Arc::clone(&path);
+                let (status, remotes) = tokio::task::spawn_blocking(move || {
+                    let status = read_repo_status(&*repo_path).map_err(|err| err.to_string());
+                    let remotes = list_remotes(&*repo_path).map_err(|err| err.to_string());
+                    (status, remotes)
+                })
+                .await
+                .unwrap_or_else(|err| (Err(err.to_string()), Err(err.to_string())));
+                Message::StateLoaded {
+                    path,
+                    status,
+                    remotes,
+                }
+            },
+            std::convert::identity,
+        )
     }
 
     // ── Opérations git ─────────────────────────────────────────────────
 
-    /// Effectue un fetch sur le remote résolu.
-    fn do_fetch(&self, repo: &RepoContext, auth: &AuthManager) -> Result<String, String> {
-        let selection = self.resolve_remote_selection()?;
-        let token = self.resolve_remote_token(auth, &selection.remote_name);
-        fetch_remote(repo.path(), &selection.remote_name, &self.network, token)
-            .map_err(|err| err.to_string())?;
-        Ok(format!("Fetched {}", selection.remote_name))
+    /// Lance un fetch en arrière-plan pour l'auto-fetch. Ne fait rien, sans message, si une
+    /// opération est en cours, si l'état du dépôt n'est pas encore lu ou s'il n'a pas de remote.
+    pub fn auto_fetch(&mut self, repo: &RepoContext, auth: &AuthManager) -> Task<Message> {
+        if self.busy
+            || self.last_repo.as_deref() != Some(repo.path())
+            || self.resolve_remote_selection(false).is_err()
+        {
+            return Task::none();
+        }
+        self.start_action(repo, auth, RemoteAction::Fetch, true)
     }
 
-    /// Effectue un pull sur la branche courante.
-    fn do_pull(&self, repo: &RepoContext, auth: &AuthManager) -> Result<String, String> {
-        let selection = self.resolve_remote_selection()?;
-        let branch = selection
-            .branch
-            .ok_or_else(|| "No branch checked out for pull.".to_string())?;
-        let token = self.resolve_remote_token(auth, &selection.remote_name);
-        let outcome = pull_branch(
-            repo.path(),
-            &selection.remote_name,
-            &branch,
-            &self.network,
-            token,
-        )
-        .map_err(|err| err.to_string())?;
-        let message = match outcome {
-            PullOutcome::UpToDate => "Already up to date.".to_string(),
-            PullOutcome::FastForward => {
-                format!("Pulled {} from {}", branch, selection.remote_name)
+    /// Lance fetch, pull ou push hors du thread UI. Le token est résolu dans la tâche :
+    /// la lecture du trousseau et le rafraîchissement OAuth peuvent bloquer.
+    fn start_action(
+        &mut self,
+        repo: &RepoContext,
+        auth: &AuthManager,
+        action: RemoteAction,
+        auto: bool,
+    ) -> Task<Message> {
+        if self.busy {
+            return Task::none();
+        }
+        let selection = match self.resolve_remote_selection(action == RemoteAction::Push) {
+            Ok(selection) => selection,
+            Err(err) => {
+                self.action_status = Some(format!("{} failed: {err}", action.label()));
+                return Task::none();
             }
         };
-        Ok(message)
-    }
+        self.busy = true;
+        self.action_status = Some(format!("{} {}...", action.label(), selection.remote_name));
 
-    /// Effectue un push de la branche courante.
-    fn do_push(&self, repo: &RepoContext, auth: &AuthManager) -> Result<String, String> {
-        let selection = self.resolve_remote_selection()?;
-        let branch = selection
-            .branch
-            .ok_or_else(|| "No branch checked out for push.".to_string())?;
-        let token = self.resolve_remote_token(auth, &selection.remote_name);
-        push_branch(
-            repo.path(),
-            &selection.remote_name,
-            &branch,
-            &self.network,
-            token,
+        let path = repo.path_arc();
+        let auth = auth.clone();
+        let network = self.network.clone();
+        Task::perform(
+            async move {
+                let repo_path = Arc::clone(&path);
+                let result = tokio::task::spawn_blocking(move || {
+                    let token = selection
+                        .url
+                        .as_deref()
+                        .and_then(|url| auth.resolve_for_url(url));
+                    run_remote_action(&repo_path, action, &selection, &network, token)
+                })
+                .await
+                .unwrap_or_else(|err| Err(err.to_string()));
+                Message::ActionFinished {
+                    path,
+                    action,
+                    auto,
+                    result,
+                }
+            },
+            std::convert::identity,
         )
-        .map_err(|err| err.to_string())?;
-        Ok(format!("Pushed {} to {}", branch, selection.remote_name))
     }
 
-    /// Résout le remote et la branche à utiliser pour les opérations réseau.
-    fn resolve_remote_selection(&self) -> Result<RemoteSelection, String> {
+    /// Résout le remote et la branche à utiliser pour les opérations réseau, avec l'URL de
+    /// push quand `push` est vrai.
+    fn resolve_remote_selection(&self, push: bool) -> Result<RemoteSelection, String> {
         let status = self.status.clone().unwrap_or_default();
         let upstream = status.upstream.as_deref().and_then(split_upstream);
         let (remote_name, upstream_branch) = if let Some((remote, branch)) = upstream {
@@ -446,21 +481,22 @@ impl RepoOverviewPanel {
             (remote, None)
         };
 
-        let branch = upstream_branch.or(status.branch);
+        let url = self
+            .remotes
+            .iter()
+            .find(|r| r.name == remote_name)
+            .map(|remote| match &remote.push_url {
+                Some(push_url) if push => push_url.clone(),
+                _ => remote.url.clone(),
+            })
+            .filter(|url| url != "(no url)");
+
         Ok(RemoteSelection {
             remote_name,
-            branch,
+            url,
+            branch: status.branch,
+            upstream_branch,
         })
-    }
-
-    /// Résout le token d'authentification pour un remote donné.
-    fn resolve_remote_token(&self, auth: &AuthManager, remote_name: &str) -> Option<String> {
-        let remote = self.remotes.iter().find(|r| r.name == remote_name)?;
-        if remote.url == "(no url)" {
-            return None;
-        }
-        auth.resolve_for_url(&remote.url)
-            .or_else(|| auth.resolve_for_host(&remote.url))
     }
 
     // ── Actions système ────────────────────────────────────────────────
@@ -484,38 +520,47 @@ impl RepoOverviewPanel {
             _ => "No supported terminal emulator found on PATH".to_string(),
         })
     }
-
-    /// Ouvre l'explorateur de fichiers dans le répertoire du dépôt.
-    fn open_file_explorer(&self, repo: &RepoContext) -> Result<String, String> {
-        #[cfg(target_os = "windows")]
-        let mut command = {
-            let mut cmd = ProcessCommand::new("explorer");
-            cmd.arg(repo.path());
-            cmd
-        };
-
-        #[cfg(target_os = "macos")]
-        let mut command = {
-            let mut cmd = ProcessCommand::new("open");
-            cmd.arg(repo.path());
-            cmd
-        };
-
-        #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-        let mut command = {
-            let mut cmd = ProcessCommand::new("xdg-open");
-            cmd.arg(repo.path());
-            cmd
-        };
-
-        command.spawn().map_err(|err| err.to_string())?;
-        Ok("File explorer opened".to_string())
-    }
 }
 
 // ── Fonctions utilitaires ──────────────────────────────────────────────────
 
-/// Sépare un upstream "remote/branch" en ses deux composants.
+/// Ouvre un dossier dans le gestionnaire de fichiers du système, sans attendre sa fermeture.
+pub fn open_folder(path: &str) -> Result<(), String> {
+    open::that_detached(path).map_err(|err| err.to_string())
+}
+
+/// Exécute fetch, pull ou push. Bloquant : à appeler hors du thread UI.
+fn run_remote_action(
+    path: &str,
+    action: RemoteAction,
+    selection: &RemoteSelection,
+    network: &NetworkOptions,
+    token: Option<String>,
+) -> Result<String, String> {
+    let remote = &selection.remote_name;
+    if action == RemoteAction::Fetch {
+        fetch_remote(path, remote, network, token).map_err(|err| err.to_string())?;
+        return Ok(format!("Fetched {remote}"));
+    }
+    let branch = selection.branch.as_deref().ok_or_else(|| {
+        format!(
+            "No branch checked out for {}.",
+            action.label().to_lowercase()
+        )
+    })?;
+    let upstream = selection.upstream_branch.as_deref().unwrap_or(branch);
+    if action == RemoteAction::Pull {
+        let outcome = pull_branch(path, remote, branch, upstream, network, token)
+            .map_err(|err| err.to_string())?;
+        return Ok(match outcome {
+            PullOutcome::UpToDate => "Already up to date.".to_string(),
+            PullOutcome::FastForward => format!("Pulled {branch} from {remote}"),
+        });
+    }
+    push_branch(path, remote, branch, upstream, network, token).map_err(|err| err.to_string())?;
+    Ok(format!("Pushed {branch} to {remote}"))
+}
+
 /// The terminal emulators to try, in order, each opening in `path`.
 ///
 /// The path is only ever the working directory or a whole argument, never part of a shell
@@ -554,6 +599,7 @@ fn terminal_commands(path: &Path) -> Vec<ProcessCommand> {
         .collect()
 }
 
+/// Sépare un upstream "remote/branch" en ses deux composants.
 fn split_upstream(upstream: &str) -> Option<(&str, &str)> {
     upstream.split_once('/')
 }

@@ -15,7 +15,7 @@ use oauth2::basic::{BasicClient, BasicTokenResponse};
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, CsrfToken, DeviceAuthorizationUrl,
     DeviceCodeErrorResponse, DeviceCodeErrorResponseType, EndpointNotSet, EndpointSet, HttpRequest,
-    HttpResponse, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope,
+    HttpResponse, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RefreshToken, Scope,
     StandardDeviceAuthorizationResponse, TokenResponse, TokenUrl,
 };
 use reqwest::blocking::Client;
@@ -41,6 +41,10 @@ const SLOW_DOWN_STEP: Duration = Duration::from_secs(5);
 
 /// Longest wait between polls while the token endpoint cannot be reached.
 const MAX_POLL_BACKOFF: Duration = Duration::from_secs(60);
+
+/// Answer to a request on the callback port that is not this sign-in's redirect.
+const BAD_REQUEST: &str =
+    "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
 
 const CODE_EXPIRED: &str = "The code expired before it was approved. Start the sign-in again.";
 
@@ -108,27 +112,63 @@ pub struct OAuthToken {
     pub expires_at: Option<i64>,
     pub provider: String,
     pub host: String,
+    /// Client ID and token endpoint the refresh token is exchanged with. Missing from tokens
+    /// saved by older releases, which then cannot be refreshed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_url: Option<String>,
 }
 
 impl OAuthToken {
     /// Creates a new OAuth token from a token response.
     pub fn from_response(response: &BasicTokenResponse, provider: &OAuthProvider) -> Self {
-        let expires_at = response.expires_in().map(|duration| {
-            let now = chrono::Utc::now().timestamp();
-            now + duration.as_secs() as i64
-        });
-
         Self {
             access_token: response.access_token().secret().to_string(),
             refresh_token: response.refresh_token().map(|t| t.secret().to_string()),
-            expires_at,
+            expires_at: expires_at(response),
             provider: provider.name.clone(),
             host: provider.host.clone(),
+            client_id: Some(provider.client_id.clone()),
+            token_url: Some(provider.token_url.clone()),
         }
     }
 
+    /// Exchanges the refresh token for a new access token. Blocks on one HTTP request.
+    ///
+    /// A response without a new refresh token keeps the current one.
+    pub fn refresh(&self) -> Result<OAuthToken, String> {
+        let refresh_token = self
+            .refresh_token
+            .as_ref()
+            .ok_or("The OAuth token has no refresh token")?;
+        let (Some(client_id), Some(token_url)) = (&self.client_id, &self.token_url) else {
+            return Err(format!(
+                "The {} token was saved without its client ID; sign in again",
+                self.provider
+            ));
+        };
+        let client = BasicClient::new(ClientId::new(client_id.clone())).set_token_uri(
+            TokenUrl::new(token_url.clone()).map_err(|e| format!("Invalid token URL: {e}"))?,
+        );
+        let http_client = http_client()?;
+        let response = client
+            .exchange_refresh_token(&RefreshToken::new(refresh_token.clone()))
+            .request(&|request| send(&http_client, request))
+            .map_err(|e| format!("Token refresh failed: {e}"))?;
+
+        Ok(Self {
+            access_token: response.access_token().secret().to_string(),
+            refresh_token: response
+                .refresh_token()
+                .map(|t| t.secret().to_string())
+                .or_else(|| self.refresh_token.clone()),
+            expires_at: expires_at(&response),
+            ..self.clone()
+        })
+    }
+
     /// Checks if the token is expired or about to expire (within 5 minutes).
-    #[allow(dead_code)] // token refresh is not wired yet
     pub fn is_expired(&self) -> bool {
         if let Some(expires_at) = self.expires_at {
             let now = chrono::Utc::now().timestamp();
@@ -138,6 +178,13 @@ impl OAuthToken {
             false
         }
     }
+}
+
+/// Unix time at which the access token of `response` expires, if it says.
+fn expires_at(response: &BasicTokenResponse) -> Option<i64> {
+    response
+        .expires_in()
+        .map(|duration| chrono::Utc::now().timestamp() + duration.as_secs() as i64)
 }
 
 /// Result of an OAuth flow.
@@ -270,22 +317,26 @@ impl OAuthFlow {
             // Try to accept connection
             match listener.accept() {
                 Ok((mut stream, _)) => {
-                    let mut buffer = [0; 4096];
+                    // On macOS and Windows the accepted socket inherits non-blocking mode from
+                    // the listener, and read() would fail with WouldBlock.
+                    stream.set_nonblocking(false).ok();
                     stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
-
-                    if let Ok(size) = stream.read(&mut buffer) {
-                        let request = String::from_utf8_lossy(&buffer[..size]);
-
-                        // Parse the callback
-                        if let Some(result) = parse_callback(&request, &expected_state) {
-                            // Send response to browser
+                    let mut buffer = [0; 4096];
+                    let Ok(size) = stream.read(&mut buffer) else {
+                        continue;
+                    };
+                    let request = String::from_utf8_lossy(&buffer[..size]);
+                    match parse_callback(&request, &expected_state) {
+                        Callback::Ignored => {
+                            let _ = stream.write_all(BAD_REQUEST.as_bytes());
+                        }
+                        Callback::Answer(result) => {
                             let response = match &result {
                                 Ok(_) => create_success_response(&self.provider.name),
                                 Err(err) => create_error_response(err),
                             };
                             let _ = stream.write_all(response.as_bytes());
                             let _ = stream.flush();
-
                             return result;
                         }
                     }
@@ -560,46 +611,72 @@ fn send(client: &Client, request: HttpRequest) -> Result<HttpResponse, io::Error
     builder.body(body).map_err(io::Error::other)
 }
 
-/// Parses the OAuth callback request.
-fn parse_callback(request: &str, expected_state: &str) -> Option<Result<String, String>> {
-    // Parse GET request
-    let first_line = request.lines().next()?;
-    if !first_line.starts_with("GET /callback") {
-        return None;
-    }
+/// What a request on the callback port is.
+#[derive(Debug, PartialEq)]
+enum Callback {
+    /// Not this sign-in's redirect: another path, or a missing or wrong state. It gets a 400
+    /// answer and the wait goes on.
+    Ignored,
+    /// The provider's redirect, with the authorization code or the error it reports.
+    Answer(Result<String, String>),
+}
 
-    // Extract query parameters
-    let path = first_line.split_whitespace().nth(1)?;
-    let query_start = path.find('?')?;
-    let query = &path[query_start + 1..];
-
-    let params: HashMap<_, _> = query
-        .split('&')
-        .filter_map(|param| {
-            let mut parts = param.splitn(2, '=');
-            Some((parts.next()?, parts.next().unwrap_or("")))
-        })
+/// Reads one request on the callback port.
+///
+/// The state is checked before anything else: any web page can send a request to the loopback
+/// port, so only one that carries the state of this sign-in may end it.
+fn parse_callback(request: &str, expected_state: &str) -> Callback {
+    let Some(query) = request
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("GET /callback?"))
+        .and_then(|rest| rest.split_whitespace().next())
+    else {
+        return Callback::Ignored;
+    };
+    let params: HashMap<String, String> = url::form_urlencoded::parse(query.as_bytes())
+        .into_owned()
         .collect();
 
-    // Check for error
+    match params.get("state") {
+        Some(state) if !expected_state.is_empty() && state == expected_state => {}
+        _ => {
+            warn!(
+                target: "gitspace::auth::oauth",
+                "Ignoring an OAuth callback without the expected state"
+            );
+            return Callback::Ignored;
+        }
+    }
+
     if let Some(error) = params.get("error") {
-        let description = params.get("error_description").unwrap_or(&"Unknown error");
-        return Some(Err(format!("{}: {}", error, description)));
+        let description = params
+            .get("error_description")
+            .map_or("Unknown error", String::as_str);
+        return Callback::Answer(Err(format!("{error}: {description}")));
     }
-
-    // Verify state (CSRF protection)
-    let state = params.get("state").unwrap_or(&"");
-    if *state != expected_state {
-        warn!(
-            target: "gitspace::auth::oauth",
-            "CSRF state mismatch in OAuth callback"
-        );
-        return Some(Err("Security error: state mismatch".to_string()));
+    match params.get("code") {
+        Some(code) => Callback::Answer(Ok(code.clone())),
+        None => Callback::Answer(Err(
+            "The sign-in callback has no authorization code".to_string()
+        )),
     }
+}
 
-    // Extract authorization code
-    let code = params.get("code")?;
-    Some(Ok((*code).to_string()))
+/// Escapes `text` for an HTML page.
+fn escape_html(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&#39;"),
+            _ => escaped.push(c),
+        }
+    }
+    escaped
 }
 
 /// Creates an HTML success response for the browser.
@@ -669,7 +746,7 @@ fn create_error_response(error: &str) -> String {
     </div>
 </body>
 </html>"#,
-        error
+        escape_html(error)
     );
 
     format!(
@@ -802,7 +879,7 @@ mod tests {
     fn parse_callback_extracts_code() {
         let request = "GET /callback?code=abc123&state=xyz HTTP/1.1\r\nHost: localhost\r\n\r\n";
         let result = parse_callback(request, "xyz");
-        assert_eq!(result, Some(Ok("abc123".to_string())));
+        assert_eq!(result, Callback::Answer(Ok("abc123".to_string())));
     }
 
     #[test]
@@ -810,14 +887,42 @@ mod tests {
         let request =
             "GET /callback?error=access_denied&error_description=User+denied&state=xyz HTTP/1.1\r\n";
         let result = parse_callback(request, "xyz");
-        assert!(matches!(result, Some(Err(_))));
+        assert_eq!(
+            result,
+            Callback::Answer(Err("access_denied: User denied".to_string()))
+        );
     }
 
     #[test]
-    fn parse_callback_rejects_wrong_state() {
-        let request = "GET /callback?code=abc123&state=wrong HTTP/1.1\r\n";
-        let result = parse_callback(request, "expected");
-        assert!(matches!(result, Some(Err(_))));
+    fn parse_callback_ignores_requests_without_the_state() {
+        for request in [
+            "GET /callback?code=abc123&state=wrong HTTP/1.1\r\n",
+            "GET /callback?code=abc123 HTTP/1.1\r\n",
+            // A stray page cannot end the sign-in with an error either.
+            "GET /callback?error=access_denied HTTP/1.1\r\n",
+            "GET /callback?error=access_denied&state=wrong HTTP/1.1\r\n",
+            "GET /favicon.ico HTTP/1.1\r\n",
+            "GET /callback HTTP/1.1\r\n",
+            "",
+        ] {
+            assert_eq!(
+                parse_callback(request, "expected"),
+                Callback::Ignored,
+                "{request}"
+            );
+        }
+        // No expected state means no request can match.
+        let request = "GET /callback?code=abc123&state= HTTP/1.1\r\n";
+        assert_eq!(parse_callback(request, ""), Callback::Ignored);
+    }
+
+    #[test]
+    fn error_page_escapes_the_provider_error() {
+        let page = create_error_response("<script>alert('x')</script> & \"more\"");
+        assert!(!page.contains("<script>"));
+        assert!(
+            page.contains("&lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt; &amp; &quot;more&quot;")
+        );
     }
 
     #[test]
@@ -828,6 +933,8 @@ mod tests {
             expires_at: Some(chrono::Utc::now().timestamp() + 60), // 1 minute
             provider: "Test".to_string(),
             host: "test.com".to_string(),
+            client_id: None,
+            token_url: None,
         };
         assert!(token.is_expired()); // Less than 5 minutes = expired
 
@@ -836,5 +943,79 @@ mod tests {
             ..token.clone()
         };
         assert!(!token2.is_expired());
+    }
+
+    #[test]
+    fn refresh_exchanges_the_refresh_token() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            // Read the headers and the whole form body, which may come in several reads.
+            let mut request = String::new();
+            let mut chunk = [0; 4096];
+            loop {
+                let size = stream.read(&mut chunk).unwrap();
+                request.push_str(&String::from_utf8_lossy(&chunk[..size]));
+                let complete = request.split_once("\r\n\r\n").is_some_and(|(head, body)| {
+                    let length = head
+                        .lines()
+                        .find_map(|line| {
+                            let line = line.to_ascii_lowercase();
+                            line.strip_prefix("content-length:")?
+                                .trim()
+                                .parse::<usize>()
+                                .ok()
+                        })
+                        .unwrap_or(0);
+                    body.len() >= length
+                });
+                if complete || size == 0 {
+                    break;
+                }
+            }
+            let body = r#"{"access_token":"new-access","token_type":"bearer","expires_in":7200}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+            request
+        });
+
+        let token = OAuthToken {
+            access_token: "old-access".to_string(),
+            refresh_token: Some("refresh-1".to_string()),
+            expires_at: Some(0),
+            provider: "GitLab".to_string(),
+            host: "gitlab.com".to_string(),
+            client_id: Some("client".to_string()),
+            token_url: Some(format!("http://127.0.0.1:{port}/oauth/token")),
+        };
+        assert!(token.is_expired());
+        let refreshed = token.refresh().expect("refresh");
+        let request = server.join().unwrap();
+
+        assert!(request.contains("grant_type=refresh_token"), "{request}");
+        assert!(request.contains("refresh_token=refresh-1"), "{request}");
+        assert!(request.contains("client_id=client"), "{request}");
+        assert_eq!(refreshed.access_token, "new-access");
+        // No new refresh token in the answer: the current one is kept.
+        assert_eq!(refreshed.refresh_token.as_deref(), Some("refresh-1"));
+        assert!(!refreshed.is_expired());
+        assert_eq!(refreshed.host, "gitlab.com");
+    }
+
+    #[test]
+    fn token_saved_by_an_older_release_loads_but_cannot_refresh() {
+        let token: OAuthToken = serde_json::from_str(
+            r#"{"access_token":"a","refresh_token":"r","expires_at":0,
+                "provider":"GitLab","host":"gitlab.com"}"#,
+        )
+        .unwrap();
+        assert_eq!(token.client_id, None);
+        let err = token.refresh().expect_err("no client ID");
+        assert!(err.contains("sign in again"), "{err}");
     }
 }

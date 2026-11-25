@@ -1,4 +1,4 @@
-use git2::{Diff, DiffOptions, Oid, Repository};
+use git2::{Diff, Oid, Repository};
 // Utilise le cache thread-local pour éviter de réouvrir le dépôt à chaque appel
 use crate::git::repo_cache::with_cached_repo;
 
@@ -13,8 +13,6 @@ pub struct BranchCommit {
     pub id: String,
     pub summary: String,
     pub author: String,
-    #[allow(dead_code)] // not displayed by the comparison view yet
-    pub time: git2::Time,
 }
 
 #[derive(Debug, Clone)]
@@ -70,13 +68,11 @@ fn branch_commit(
         .unwrap_or_default()
         .to_string();
     let author = commit.author().name().unwrap_or("Unknown").to_string();
-    let time = commit.time();
 
     Ok(Some(BranchCommit {
         id,
         summary,
         author,
-        time,
     }))
 }
 
@@ -97,18 +93,8 @@ fn diff_summary_between(
         None => None,
     };
 
-    let diff = repo.diff_tree_to_tree(
-        from_tree.as_ref(),
-        to_tree.as_ref(),
-        Some(&mut diff_options()),
-    )?;
+    let diff = repo.diff_tree_to_tree(from_tree.as_ref(), to_tree.as_ref(), None)?;
     Ok(Some(diff_summary(diff)?))
-}
-
-fn diff_options() -> DiffOptions {
-    let mut options = DiffOptions::new();
-    options.include_untracked(true);
-    options
 }
 
 fn diff_summary(diff: Diff) -> Result<DiffSummary, git2::Error> {

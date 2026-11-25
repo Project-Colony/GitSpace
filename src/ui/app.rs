@@ -3,8 +3,7 @@
 //! Centralise le modèle, les messages, le dispatch update/view,
 //! les subscriptions (auto-fetch, notifications, clavier) et le thème.
 
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use iced::widget::{column, container, row};
 use iced::{Element, Length, Subscription, Task};
@@ -12,20 +11,18 @@ use iced::{Element, Length, Subscription, Task};
 use crate::auth::AuthManager;
 use crate::config::{AppConfig, LoggingOptions, Preferences};
 use crate::error::logs_directory;
-use crate::git::remote::fetch_remote;
 use crate::ui::{
     auth::AuthPanel,
-    branches::BranchPanel,
+    branches::{self, BranchPanel},
     clone::{self, ClonePanel},
     context::RepoContext,
-    dev_gallery::DevGalleryPanel,
     history::HistoryPanel,
     layout::{self, LayoutMessage, MainTab},
     notifications::{Notification, NotificationAction, NotificationCenter},
     preferences::PreferencesPanel,
     recent::RecentList,
-    repo_overview::RepoOverviewPanel,
-    stage::StagePanel,
+    repo_overview::{self, RepoOverviewPanel},
+    stage::{self, StagePanel},
     theme::Theme,
 };
 
@@ -46,7 +43,6 @@ pub enum Message {
     Branches(crate::ui::branches::Message),
     Auth(crate::ui::auth::Message),
     Preferences(crate::ui::preferences::Message),
-    DevGallery(crate::ui::dev_gallery::Message),
 
     // Notifications
     Notification(crate::ui::notifications::Message),
@@ -54,16 +50,14 @@ pub enum Message {
     // Chargement async du contexte d'un depot
     RepoContextLoaded(String, Option<RepoContext>),
 
-    // Mises a jour automatiques
-
-    // Auto-fetch
-    AutoFetchResult(AutoFetchOutcome),
-
     // Tick de nettoyage notifications
     NotificationTick,
 
     // Auto-fetch timer tick
-    AutoFetchTick(Instant),
+    AutoFetchTick,
+
+    /// Ctrl+N (Cmd+N on macOS): show the tab at position N of the tab strip.
+    TabShortcut(usize),
 }
 
 // ─── Modele principal ──────────────────────────────────────────────────────
@@ -83,20 +77,14 @@ pub struct GitSpaceApp {
     branches_panel: BranchPanel,
     auth_panel: AuthPanel,
     preferences_panel: PreferencesPanel,
-    dev_gallery_panel: DevGalleryPanel,
 
     // Etat global
     config: AppConfig,
     current_repo: Option<RepoContext>,
+    /// Dernier depot demande : seul son resultat de chargement est applique.
+    pending_repo: Option<String>,
     auth_manager: AuthManager,
     notifications: NotificationCenter,
-
-    // Mise a jour
-
-    // Auto-fetch
-    auto_fetch_last: Option<Instant>,
-    auto_fetch_in_progress: bool,
-    auto_fetch_repo: Option<Arc<str>>,
 }
 
 impl GitSpaceApp {
@@ -109,20 +97,12 @@ impl GitSpaceApp {
         let theme = Theme::from_mode(preferences.theme_mode());
         let auth_manager =
             AuthManager::with_encrypted_fallback(preferences.allow_encrypted_tokens());
-        let current_repo = config
+        let last_repo = config
             .recent_repos()
             .first()
-            .and_then(|entry| RepoContext::from_path(&entry.path));
+            .map(|entry| entry.path.clone());
 
-        let tab_order = {
-            let mut tabs = MainTab::ALL.to_vec();
-            if !cfg!(debug_assertions) {
-                tabs.retain(|tab| *tab != MainTab::DevGallery);
-            }
-            tabs
-        };
-
-        let app = Self {
+        let mut app = Self {
             clone_panel: ClonePanel::new(default_clone_path, preferences.network().clone()),
             recent_list: RecentList::new(),
             repo_overview: RepoOverviewPanel::new(preferences.network().clone()),
@@ -131,20 +111,22 @@ impl GitSpaceApp {
             stage_panel: StagePanel::new(),
             auth_panel: AuthPanel::new(auth_manager.clone()),
             preferences_panel: PreferencesPanel::new(preferences, logging),
-            dev_gallery_panel: DevGalleryPanel::new(),
             theme,
             config,
-            current_repo,
+            current_repo: None,
+            pending_repo: None,
             auth_manager,
             active_tab: MainTab::Clone,
-            tab_order,
+            tab_order: MainTab::ALL.to_vec(),
             notifications: NotificationCenter::new(),
-            auto_fetch_last: None,
-            auto_fetch_in_progress: false,
-            auto_fetch_repo: None,
         };
 
-        (app, Task::none())
+        let accounts = app.auth_panel.refresh_accounts().map(Message::Auth);
+        let repo = match last_repo {
+            Some(path) => app.load_repo_context_async(path),
+            None => Task::none(),
+        };
+        (app, Task::batch([accounts, repo]))
     }
 
     // ─── Update ────────────────────────────────────────────────────────
@@ -161,12 +143,14 @@ impl GitSpaceApp {
                     LayoutMessage::HeaderClicked => {
                         self.preferences_panel.toggle();
                     }
-                    LayoutMessage::SidebarNav(tab) => {
-                        self.active_tab = tab;
-                    }
                     LayoutMessage::OpenFileManager => {
                         if let Some(repo) = &self.current_repo {
-                            let _ = open::that(repo.path());
+                            if let Err(err) = repo_overview::open_folder(repo.path()) {
+                                self.notifications.push(Notification::error(
+                                    "Impossible d'ouvrir le dossier",
+                                    format!("{} : {err}", repo.path()),
+                                ));
+                            }
                         }
                     }
                     LayoutMessage::CopyPath => {
@@ -203,16 +187,55 @@ impl GitSpaceApp {
 
             // ── Repo overview ──────────────────────────────────────────
             Message::RepoOverview(msg) => {
-                let task =
-                    self.repo_overview
-                        .update(msg, self.current_repo.as_ref(), &self.auth_manager);
-                task.map(Message::RepoOverview)
+                self.notify_auto_fetch_failure(&msg);
+                let mut pulled = false;
+                if let repo_overview::Message::ActionFinished {
+                    path,
+                    action,
+                    auto: false,
+                    result,
+                } = &msg
+                {
+                    let current = self.current_repo.as_ref().map(|repo| repo.path());
+                    if current != Some(&**path) {
+                        // The panel only shows results for the open repository.
+                        let detail = match result {
+                            Ok(msg) => msg.clone(),
+                            Err(err) => format!("Échec : {err}"),
+                        };
+                        self.notifications.push(Notification::error(
+                            format!("{} sur {path}", action.label()),
+                            detail,
+                        ));
+                    } else {
+                        pulled =
+                            matches!(action, repo_overview::RemoteAction::Pull) && result.is_ok();
+                    }
+                }
+                let task = self
+                    .repo_overview
+                    .update(msg, self.current_repo.as_ref(), &self.auth_manager)
+                    .map(Message::RepoOverview);
+                if pulled {
+                    Task::batch([task, self.reload_other_panels(MainTab::RepoOverview)])
+                } else {
+                    task
+                }
             }
 
             // ── Stage ──────────────────────────────────────────────────
             Message::Stage(msg) => {
-                let task = self.stage_panel.update(msg, self.current_repo.as_ref());
-                task.map(Message::Stage)
+                // A commit moves HEAD: the other panels show the old state until reloaded.
+                let changed = matches!(&msg, stage::Message::Committed(_, Ok(_)));
+                let task = self
+                    .stage_panel
+                    .update(msg, self.current_repo.as_ref())
+                    .map(Message::Stage);
+                if changed {
+                    Task::batch([task, self.reload_other_panels(MainTab::Stage)])
+                } else {
+                    task
+                }
             }
 
             // ── History ────────────────────────────────────────────────
@@ -223,13 +246,29 @@ impl GitSpaceApp {
 
             // ── Branches ───────────────────────────────────────────────
             Message::Branches(msg) => {
-                let task = self.branches_panel.update(msg, self.current_repo.as_ref());
+                // Checkout, merge and rebase change the working tree and HEAD.
+                let changed = matches!(
+                    &msg,
+                    branches::Message::ActionDone(_, Ok(_)) | branches::Message::MergeDone(_, _)
+                );
+                let mut tasks = vec![self
+                    .branches_panel
+                    .update(msg, self.current_repo.as_ref())
+                    .map(Message::Branches)];
+                if changed {
+                    tasks.push(self.reload_other_panels(MainTab::Branches));
+                }
 
                 // Gerer la demande de navigation vers l'historique d'une branche
                 if let Some(branch) = self.branches_panel.take_history_request() {
                     self.active_tab = MainTab::History;
-                    self.history_panel
-                        .set_branch_filter(branch, self.current_repo.as_ref());
+                    if let Some(repo) = &self.current_repo {
+                        tasks.push(
+                            self.history_panel
+                                .show_branch(branch, repo)
+                                .map(Message::History),
+                        );
+                    }
                 }
 
                 // Persister les branches epinglees
@@ -237,10 +276,13 @@ impl GitSpaceApp {
                     let mut prefs = self.config.preferences().clone();
                     prefs.set_pinned_branches(pinned);
                     self.config.set_preferences(prefs);
+                    // Sinon une validation ulterieure des preferences restaurerait l'ancienne liste.
+                    self.preferences_panel
+                        .set_preferences(self.config.preferences().clone());
                     self.save_config();
                 }
 
-                task.map(Message::Branches)
+                Task::batch(tasks)
             }
 
             // ── Auth ───────────────────────────────────────────────────
@@ -254,12 +296,6 @@ impl GitSpaceApp {
                 let panel_task = self.preferences_panel.update(msg);
                 let extra_task = self.handle_preferences_changes();
                 Task::batch([panel_task.map(Message::Preferences), extra_task])
-            }
-
-            // ── Dev gallery ────────────────────────────────────────────
-            Message::DevGallery(msg) => {
-                let task = self.dev_gallery_panel.update(msg);
-                task.map(Message::DevGallery)
             }
 
             // ── Notifications ──────────────────────────────────────────
@@ -276,26 +312,64 @@ impl GitSpaceApp {
 
             // ── Chargement async du contexte depot ──────────────────────
             Message::RepoContextLoaded(path, context) => {
-                self.current_repo = context;
+                // Un chargement plus recent a ete demande : ce resultat est perime.
+                if self.pending_repo.as_deref() != Some(path.as_str()) {
+                    return Task::none();
+                }
+                self.pending_repo = None;
+                let Some(repo) = context else {
+                    self.notifications.push(Notification::error(
+                        "Impossible d'ouvrir le dépôt",
+                        format!("{path} n'est pas un dépôt Git lisible."),
+                    ));
+                    return Task::none();
+                };
                 if self.config.touch_recent(std::path::Path::new(&path)) {
                     self.save_config();
                 }
-                if let Some(repo) = &self.current_repo {
-                    self.repo_overview.refresh(repo);
-                    self.stage_panel.refresh_if_needed(repo);
-                }
-                Task::none()
+                let tasks = [
+                    self.repo_overview.refresh(&repo).map(Message::RepoOverview),
+                    self.stage_panel.load(&repo).map(Message::Stage),
+                    self.branches_panel.load(&repo).map(Message::Branches),
+                    self.history_panel.load(&repo).map(Message::History),
+                ];
+                self.current_repo = Some(repo);
+                Task::batch(tasks)
             }
 
             // ── Auto-fetch ─────────────────────────────────────────────
-            Message::AutoFetchTick(_now) => self.maybe_start_auto_fetch(),
+            Message::AutoFetchTick => self.maybe_start_auto_fetch(),
 
-            Message::AutoFetchResult(outcome) => {
-                self.auto_fetch_in_progress = false;
-                self.handle_auto_fetch_result(outcome);
+            Message::TabShortcut(index) => {
+                if let Some(tab) = self.tab_order.get(index) {
+                    self.active_tab = *tab;
+                }
                 Task::none()
             }
         }
+    }
+
+    /// Reloads every repository panel except `origin` after it changed the repository.
+    fn reload_other_panels(&mut self, origin: MainTab) -> Task<Message> {
+        let Some(repo) = self.current_repo.clone() else {
+            return Task::none();
+        };
+        let mut tasks = Vec::new();
+        if origin != MainTab::RepoOverview {
+            tasks.push(
+                self.repo_overview
+                    .reload_repo_state(&repo)
+                    .map(Message::RepoOverview),
+            );
+        }
+        if origin != MainTab::Stage {
+            tasks.push(self.stage_panel.load(&repo).map(Message::Stage));
+        }
+        if origin != MainTab::Branches {
+            tasks.push(self.branches_panel.load(&repo).map(Message::Branches));
+        }
+        tasks.push(self.history_panel.load(&repo).map(Message::History));
+        Task::batch(tasks)
     }
 
     // ─── View ──────────────────────────────────────────────────────────
@@ -401,7 +475,6 @@ impl GitSpaceApp {
                 .view(theme, self.current_repo.as_ref())
                 .map(Message::Branches),
             MainTab::Auth => self.auth_panel.view(theme).map(Message::Auth),
-            MainTab::DevGallery => self.dev_gallery_panel.view(theme).map(Message::DevGallery),
         }
     }
 
@@ -424,19 +497,22 @@ impl GitSpaceApp {
         let mut subs = Vec::new();
 
         // Tick pour le dismiss automatique des notifications
-        if self.notifications.has_visible() {
+        if !self.notifications.is_empty() {
             subs.push(iced::time::every(Duration::from_secs(1)).map(|_| Message::NotificationTick));
         }
 
-        // Timer auto-fetch
+        // Timer auto-fetch. Il est recree apres chaque operation du panneau, donc le prochain
+        // auto-fetch part un intervalle apres la derniere operation reseau ou le dernier chargement.
         if self.config.preferences().auto_fetch_enabled()
             && self.current_repo.is_some()
-            && !self.auto_fetch_in_progress
+            && !self.repo_overview.is_busy()
         {
             let interval =
                 Duration::from_secs(self.config.preferences().auto_fetch_interval_minutes() * 60);
-            subs.push(iced::time::every(interval).map(Message::AutoFetchTick));
+            subs.push(iced::time::every(interval).map(|_| Message::AutoFetchTick));
         }
+
+        subs.push(iced::keyboard::on_key_press(tab_shortcut));
 
         Subscription::batch(subs)
     }
@@ -456,7 +532,8 @@ impl GitSpaceApp {
     /// Lance le chargement async du contexte d'un depot.
     /// Les I/O git sont deplacees dans un thread bloquant pour ne pas
     /// bloquer le thread UI.
-    fn load_repo_context_async(&self, path: String) -> Task<Message> {
+    fn load_repo_context_async(&mut self, path: String) -> Task<Message> {
+        self.pending_repo = Some(path.clone());
         Task::perform(
             async move {
                 let p = path.clone();
@@ -471,19 +548,19 @@ impl GitSpaceApp {
     }
 
     /// Applique les changements de preferences depuis le panneau preferences.
-    /// Retourne une Task si une verification de mise a jour est demandee.
     fn handle_preferences_changes(&mut self) -> Task<Message> {
+        let mut task = Task::none();
         if let Some(prefs) = self.preferences_panel.take_changes() {
-            self.apply_preferences(prefs);
+            task = self.apply_preferences(prefs);
         }
         if let Some(logging) = self.preferences_panel.take_logging_changes() {
             self.apply_logging(logging);
         }
-        Task::none()
+        task
     }
 
     /// Applique un jeu de preferences mis a jour a toute l'application.
-    fn apply_preferences(&mut self, preferences: Preferences) {
+    fn apply_preferences(&mut self, preferences: Preferences) -> Task<Message> {
         self.config.set_preferences(preferences.clone());
         self.theme = Theme::from_mode(preferences.theme_mode());
 
@@ -498,10 +575,14 @@ impl GitSpaceApp {
             .set_pinned_branches(preferences.pinned_branches().to_vec());
         self.auth_manager
             .set_encrypted_fallback(preferences.allow_encrypted_tokens());
-        self.auth_panel.set_auth_manager(self.auth_manager.clone());
+        let accounts = self
+            .auth_panel
+            .set_auth_manager(self.auth_manager.clone())
+            .map(Message::Auth);
         self.preferences_panel.set_preferences(preferences);
 
         self.save_config();
+        accounts
     }
 
     /// Applique les options de logging mises a jour.
@@ -533,120 +614,77 @@ impl GitSpaceApp {
     fn notify_clone_failure(&mut self, message: &clone::Message) {
         let (title, err, can_retry) = match message {
             clone::Message::CloneResult(Err(err)) => ("Échec du clonage", err, true),
-            clone::Message::SearchResult(Err(err)) => ("Échec de la recherche", err, false),
+            clone::Message::SearchResult(version, Err(err))
+                if self.clone_panel.is_current_search(*version) =>
+            {
+                ("Échec de la recherche", err, false)
+            }
             _ => return,
         };
-        let log_path = logs_directory();
         let mut notification = Notification::error(title, err.user_message());
         if can_retry {
             notification = notification.with_action(NotificationAction::RetryClone);
         }
-        notification = notification
-            .with_action(NotificationAction::CopyLogPath(log_path.clone()))
-            .with_log_path(log_path);
+        notification = notification.with_action(NotificationAction::CopyLogPath(logs_directory()));
         notification.detail = Some(err.detail().to_string());
         self.notifications.push(notification);
     }
 
-    /// Demarre l'auto-fetch si les conditions sont remplies.
+    /// Signale l'echec d'un auto-fetch sur le depot courant.
+    fn notify_auto_fetch_failure(&mut self, message: &repo_overview::Message) {
+        if let repo_overview::Message::ActionFinished {
+            path,
+            auto: true,
+            result: Err(err),
+            ..
+        } = message
+        {
+            if self.current_repo.as_ref().map(RepoContext::path) == Some(&**path) {
+                self.notifications
+                    .push(Notification::error("Auto-fetch echoue", err.clone()));
+            }
+        }
+    }
+
+    /// Demarre l'auto-fetch du depot courant si l'option est active.
     fn maybe_start_auto_fetch(&mut self) -> Task<Message> {
-        if self.auto_fetch_in_progress {
+        if !self.config.preferences().auto_fetch_enabled() {
             return Task::none();
         }
-
-        let preferences = self.config.preferences();
-        if !preferences.auto_fetch_enabled() {
-            return Task::none();
-        }
-
         let Some(repo) = self.current_repo.as_ref() else {
             return Task::none();
         };
-
-        // Reinitialiser si le depot a change
-        if self.auto_fetch_repo.as_deref() != Some(repo.path()) {
-            self.auto_fetch_repo = Some(repo.path_arc());
-            self.auto_fetch_last = Some(Instant::now());
-            return Task::none();
-        }
-
-        let context = match self
-            .repo_overview
-            .auto_fetch_context(repo, &self.auth_manager)
-        {
-            Ok(ctx) => ctx,
-            Err(err) => {
-                self.repo_overview
-                    .set_action_status(Some(format!("Auto-fetch echoue: {err}")));
-                self.notifications
-                    .push(Notification::error("Auto-fetch echoue", err));
-                return Task::none();
-            }
-        };
-
-        self.auto_fetch_in_progress = true;
-        self.auto_fetch_last = Some(Instant::now());
         self.repo_overview
-            .set_action_status(Some(format!("Auto-fetch {}...", context.remote_name)));
-
-        let repo_path = context.repo_path.clone();
-        let remote_name = context.remote_name.clone();
-        let token = context.token.clone();
-        let network = context.network.clone();
-
-        Task::perform(
-            async move {
-                tokio::task::spawn_blocking(move || {
-                    let result = fetch_remote(&repo_path, &remote_name, &network, token)
-                        .map(|_| ())
-                        .map_err(|err| err.to_string());
-                    AutoFetchOutcome {
-                        repo_path,
-                        remote_name,
-                        result,
-                    }
-                })
-                .await
-                .unwrap_or_else(|err| AutoFetchOutcome {
-                    repo_path: String::new(),
-                    remote_name: String::new(),
-                    result: Err(err.to_string()),
-                })
-            },
-            Message::AutoFetchResult,
-        )
-    }
-
-    /// Traite le resultat d'un auto-fetch.
-    fn handle_auto_fetch_result(&mut self, outcome: AutoFetchOutcome) {
-        match outcome.result {
-            Ok(()) => {
-                if let Some(repo) = &self.current_repo {
-                    if repo.path() == outcome.repo_path {
-                        self.repo_overview.reload_repo_state(repo);
-                    }
-                }
-                self.repo_overview
-                    .set_action_status(Some(format!("Auto-fetch {} termine", outcome.remote_name)));
-            }
-            Err(err) => {
-                self.repo_overview
-                    .set_action_status(Some(format!("Auto-fetch echoue: {err}")));
-                self.notifications.push(Notification::error(
-                    "Auto-fetch echoue",
-                    format!("{} ({})", err, outcome.remote_name),
-                ));
-            }
-        }
+            .auto_fetch(repo, &self.auth_manager)
+            .map(Message::RepoOverview)
     }
 }
 
-// ─── Helpers hors impl ─────────────────────────────────────────────────────
+/// Maps Ctrl+1 to Ctrl+9 (Cmd on macOS) to a tab position, counted from 0.
+fn tab_shortcut(key: iced::keyboard::Key, modifiers: iced::keyboard::Modifiers) -> Option<Message> {
+    let iced::keyboard::Key::Character(c) = key else {
+        return None;
+    };
+    let digit = c.parse::<usize>().ok().filter(|d| (1..=9).contains(d))?;
+    (modifiers.command() && !modifiers.alt() && !modifiers.shift())
+        .then(|| Message::TabShortcut(digit - 1))
+}
 
-/// Resultat d'une operation d'auto-fetch.
-#[derive(Debug, Clone)]
-pub struct AutoFetchOutcome {
-    pub repo_path: String,
-    pub remote_name: String,
-    pub result: Result<(), String>,
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iced::keyboard::{Key, Modifiers};
+
+    #[test]
+    fn ctrl_digit_selects_a_tab_position() {
+        let key = |c: &str| Key::Character(c.into());
+        assert!(matches!(
+            tab_shortcut(key("3"), Modifiers::COMMAND),
+            Some(Message::TabShortcut(2))
+        ));
+        assert!(tab_shortcut(key("3"), Modifiers::empty()).is_none());
+        assert!(tab_shortcut(key("0"), Modifiers::COMMAND).is_none());
+        assert!(tab_shortcut(key("a"), Modifiers::COMMAND).is_none());
+        assert!(tab_shortcut(key("3"), Modifiers::COMMAND | Modifiers::SHIFT).is_none());
+    }
 }

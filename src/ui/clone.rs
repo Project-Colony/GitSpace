@@ -6,14 +6,13 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::str::FromStr;
 
 use iced::futures::{SinkExt, Stream};
 use iced::widget::{
     button, column, container, pick_list, progress_bar, row, text, text_input, Space,
 };
 use iced::{Alignment, Element, Length, Task};
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue, USER_AGENT};
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
 use reqwest::Client;
 use reqwest::StatusCode;
 use serde::Deserialize;
@@ -23,6 +22,7 @@ use crate::auth::AuthManager;
 use crate::config::NetworkOptions;
 use crate::error::AppError;
 use crate::git::clone::{clone_repository, CloneProgress, CloneRequest};
+use crate::ui::recent;
 use crate::ui::theme::Theme;
 
 // ---------------------------------------------------------------------------
@@ -118,8 +118,8 @@ pub enum Message {
     DestinationChanged(String),
     /// Lancer la recherche de dépôts.
     Search,
-    /// Résultat de la recherche asynchrone.
-    SearchResult(Result<Vec<RemoteRepo>, AppError>),
+    /// Résultat de la recherche asynchrone, avec la version de la requête.
+    SearchResult(u32, Result<Vec<RemoteRepo>, AppError>),
     /// Un dépôt a été sélectionné dans la liste.
     SelectRepo(usize),
     /// Ouvrir le sélecteur de dossier natif.
@@ -172,8 +172,9 @@ pub struct ClonePanel {
     last_request: Option<CloneRequest>,
     /// Options réseau courantes.
     network: NetworkOptions,
-    /// Compteur de version pour le anti-rebond de la recherche.
-    search_debounce: u32,
+    /// Version de la recherche : chaque frappe, recherche ou changement de fournisseur
+    /// l'incrémente, et seuls le délai et le résultat de la version courante sont appliqués.
+    search_version: u32,
 }
 
 impl ClonePanel {
@@ -194,8 +195,13 @@ impl ClonePanel {
             active_destination: None,
             last_request: None,
             network,
-            search_debounce: 0,
+            search_version: 0,
         }
+    }
+
+    /// Vrai si `version` est celle de la recherche en cours, pas d'une requête remplacée.
+    pub fn is_current_search(&self, version: u32) -> bool {
+        version == self.search_version
     }
 
     /// Met à jour le chemin de destination par défaut.
@@ -222,15 +228,18 @@ impl ClonePanel {
                 self.provider = provider;
                 self.search_results.clear();
                 self.selected_repo = None;
+                self.search_status = None;
+                // Abandonner la recherche en cours sur l'ancien fournisseur.
+                self.search_version += 1;
                 (Task::none(), None)
             }
 
             Message::QueryChanged(query) => {
                 self.repo_query = query;
                 self.search_status = None;
-                // Incrémenter le compteur et programmer une recherche différée (250 ms)
-                self.search_debounce += 1;
-                let version = self.search_debounce;
+                // Incrémenter la version et programmer une recherche différée (250 ms)
+                self.search_version += 1;
+                let version = self.search_version;
                 let task = Task::perform(
                     async move {
                         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
@@ -251,41 +260,10 @@ impl ClonePanel {
                 (Task::none(), None)
             }
 
-            Message::Search => {
-                let query = self.repo_query.trim().to_string();
-                if query.len() < 2 {
-                    return (Task::none(), None);
-                }
-                let provider = self.provider;
-                let token = self.resolve_search_token(auth);
-                let network = self.network.clone();
-                self.search_status = Some("Recherche en cours...".into());
+            Message::Search => (self.start_search(auth), None),
 
-                let task = Task::perform(
-                    async move {
-                        search_repositories(provider, &query, token.as_deref(), network).await
-                    },
-                    Message::SearchResult,
-                );
-                (task, None)
-            }
-
-            Message::SearchResult(result) => {
-                match result {
-                    Ok(results) => {
-                        let count = results.len();
-                        self.search_results = results;
-                        self.search_status = Some(format!("{count} résultat(s)"));
-                        // Sélectionner automatiquement le premier résultat
-                        if let Some(repo) = self.search_results.first().cloned() {
-                            self.selected_repo = Some(0);
-                            self.update_selection(&repo);
-                        }
-                    }
-                    Err(err) => {
-                        self.search_status = Some(err.user_message());
-                    }
-                }
+            Message::SearchResult(version, result) => {
+                self.apply_search_result(version, result);
                 (Task::none(), None)
             }
 
@@ -298,22 +276,8 @@ impl ClonePanel {
             }
 
             Message::ChooseDestination => {
-                let current = self.destination.clone();
-                let task = Task::perform(
-                    async move {
-                        tokio::task::spawn_blocking(move || {
-                            rfd::FileDialog::new()
-                                .set_directory(&current)
-                                .pick_folder()
-                                .map(|p| p.display().to_string())
-                        })
-                        .await
-                    },
-                    |join_result| match join_result {
-                        Ok(result) => Message::ChooseDestinationResult(result),
-                        Err(_) => Message::ChooseDestinationResult(None),
-                    },
-                );
+                let task = recent::pick_folder(Some(self.destination.clone()))
+                    .map(Message::ChooseDestinationResult);
                 (task, None)
             }
 
@@ -328,14 +292,14 @@ impl ClonePanel {
             Message::StartClone => {
                 let url = self.repo_url.trim().to_string();
                 let destination = PathBuf::from(self.destination.trim());
-                let token = auth.resolve_for_url(&url);
+                // Le token est résolu dans la tâche de clonage.
                 let request = CloneRequest {
                     url,
                     destination,
-                    token,
+                    token: None,
                     network: self.network.clone(),
                 };
-                let task = self.begin_clone(request);
+                let task = self.begin_clone(request, auth);
                 (task, None)
             }
 
@@ -365,7 +329,7 @@ impl ClonePanel {
                     return (Task::none(), None);
                 }
                 if let Some(request) = self.last_request.clone() {
-                    let task = self.begin_clone(request);
+                    let task = self.begin_clone(request, auth);
                     (task, None)
                 } else {
                     (Task::none(), None)
@@ -373,40 +337,77 @@ impl ClonePanel {
             }
 
             Message::DebouncedSearch(version) => {
-                // Ignorer si une frappe plus récente a incrémenté le compteur
-                if version != self.search_debounce {
+                // Ignorer si une frappe ou une recherche plus récente a incrémenté la version
+                if !self.is_current_search(version) {
                     return (Task::none(), None);
                 }
-                // Même logique que Message::Search
-                let query = self.repo_query.trim().to_string();
-                if query.len() < 2 {
-                    return (Task::none(), None);
-                }
-                let provider = self.provider;
-                let token = self.resolve_search_token(auth);
-                let network = self.network.clone();
-                self.search_status = Some("Recherche en cours...".into());
+                (self.start_search(auth), None)
+            }
+        }
+    }
 
-                let task = Task::perform(
-                    async move {
-                        search_repositories(provider, &query, token.as_deref(), network).await
-                    },
-                    Message::SearchResult,
-                );
-                (task, None)
+    /// Lance la recherche pour la requête courante sous une nouvelle version. Le token est
+    /// résolu dans la tâche : la lecture du trousseau peut bloquer.
+    fn start_search(&mut self, auth: &AuthManager) -> Task<Message> {
+        let query = self.repo_query.trim().to_string();
+        if query.len() < 2 {
+            return Task::none();
+        }
+        self.search_version += 1;
+        let version = self.search_version;
+        let provider = self.provider;
+        let network = self.network.clone();
+        let auth = auth.clone();
+        self.search_status = Some("Recherche en cours...".into());
+
+        Task::perform(
+            async move {
+                let host_url = format!("https://{}", provider.host());
+                let token = tokio::task::spawn_blocking(move || auth.resolve_for_url(&host_url))
+                    .await
+                    .ok()
+                    .flatten();
+                search_repositories(provider, &query, token.as_deref(), network).await
+            },
+            move |result| Message::SearchResult(version, result),
+        )
+    }
+
+    /// Applique le résultat d'une recherche, sauf s'il répond à une requête remplacée.
+    fn apply_search_result(&mut self, version: u32, result: Result<Vec<RemoteRepo>, AppError>) {
+        if !self.is_current_search(version) {
+            return;
+        }
+        match result {
+            Ok(results) => {
+                let count = results.len();
+                self.search_results = results;
+                self.selected_repo = None;
+                self.search_status = Some(format!("{count} résultat(s)"));
+                // Sélectionner automatiquement le premier résultat
+                if let Some(repo) = self.search_results.first().cloned() {
+                    self.selected_repo = Some(0);
+                    self.update_selection(&repo);
+                }
+            }
+            Err(err) => {
+                self.search_status = Some(err.user_message());
             }
         }
     }
 
     /// Lance le clonage en arrière-plan et renvoie la tâche Iced correspondante.
-    fn begin_clone(&mut self, request: CloneRequest) -> Task<Message> {
+    fn begin_clone(&mut self, request: CloneRequest, auth: &AuthManager) -> Task<Message> {
         self.last_request = Some(request.clone());
         self.active_destination = Some(request.destination.clone());
         self.progress = None;
         self.clone_status = Some("Démarrage du clonage...".into());
         self.cloning = true;
 
-        Task::run(clone_with_progress(request), std::convert::identity)
+        Task::run(
+            clone_with_progress(request, auth.clone()),
+            std::convert::identity,
+        )
     }
 
     /// Met à jour l'URL et la destination d'après le dépôt sélectionné.
@@ -426,16 +427,6 @@ impl ClonePanel {
             self.base_destination.clone()
         };
         Some(base.join(repo_name).display().to_string())
-    }
-
-    /// Résout le jeton d'authentification pour la recherche sur le fournisseur actuel.
-    fn resolve_search_token(&self, auth: &AuthManager) -> Option<String> {
-        match self.provider {
-            Provider::GitHub => auth
-                .resolve_for_host(self.provider.host())
-                .or_else(|| auth.resolve_for_host("api.github.com")),
-            Provider::GitLab => auth.resolve_for_host(self.provider.host()),
-        }
     }
 
     // -----------------------------------------------------------------------
@@ -618,23 +609,13 @@ impl ClonePanel {
     ///
     /// On mappe la sélection vers `SelectRepo(index)` en cherchant l'index par nom.
     fn view_results_pick_list<'a>(&'a self, _theme: &'a Theme) -> Element<'a, Message> {
-        let selected = self
-            .selected_repo
-            .and_then(|idx| self.search_results.get(idx))
-            .cloned();
+        let results = self.search_results.as_slice();
+        let selected = self.selected_repo.and_then(|idx| results.get(idx));
 
-        let results = self.search_results.clone();
-
-        pick_list(results, selected, {
-            let search_results = self.search_results.clone();
-            move |repo: RemoteRepo| {
-                // Trouver l'index correspondant au dépôt sélectionné
-                let index = search_results
-                    .iter()
-                    .position(|r| r.name == repo.name && r.url == repo.url)
-                    .unwrap_or(0);
-                Message::SelectRepo(index)
-            }
+        pick_list(results, selected, move |repo: RemoteRepo| {
+            // Trouver l'index correspondant au dépôt sélectionné
+            let index = results.iter().position(|r| *r == repo).unwrap_or(0);
+            Message::SelectRepo(index)
         })
         .placeholder("Sélectionnez un dépôt")
         .width(520)
@@ -785,9 +766,10 @@ async fn search_repositories(
 }
 
 /// Construit un client HTTP avec les en-têtes nécessaires (auth, proxy, timeout).
+/// Le token part en `Authorization: Bearer`, que GitHub et GitLab acceptent pour un token
+/// OAuth comme pour un jeton d'accès personnel.
 async fn client_with_headers(
     token: Option<&str>,
-    token_header: Option<&str>,
     header: Option<(&'static str, &'static str)>,
     network: &NetworkOptions,
 ) -> Result<Client, AppError> {
@@ -798,17 +780,9 @@ async fn client_with_headers(
             .map_err(|err| AppError::Validation(err.to_string()))?,
     );
     if let Some(token) = token {
-        let header_name = token_header.unwrap_or("Authorization");
-        let value = if header_name.eq_ignore_ascii_case("authorization") {
-            format!("Bearer {}", token)
-        } else {
-            token.to_string()
-        };
-        let name = HeaderName::from_str(header_name)
+        let auth_value = HeaderValue::from_str(&format!("Bearer {token}"))
             .map_err(|err| AppError::Validation(err.to_string()))?;
-        let auth_value =
-            HeaderValue::from_str(&value).map_err(|err| AppError::Validation(err.to_string()))?;
-        headers.insert(name, auth_value);
+        headers.insert(AUTHORIZATION, auth_value);
     }
     if let Some((key, value)) = header {
         headers.insert(
@@ -887,46 +861,20 @@ async fn search_github(
         return Ok(Vec::new());
     }
 
-    let client = client_with_headers(token, None, None, network).await?;
+    let client = client_with_headers(token, None, network).await?;
     let mut unique = HashSet::new();
-    let mut repositories = Vec::new();
 
-    let public_user_url = format!("https://api.github.com/users/{}/repos", account);
-    repositories.extend(
-        fetch_github_repos(&client, &public_user_url, &[("type", "public")], network)
-            .await
-            .unwrap_or_default(),
-    );
-
-    let public_org_url = format!("https://api.github.com/orgs/{}/repos", account);
-    repositories.extend(
-        fetch_github_repos(&client, &public_org_url, &[("type", "public")], network)
-            .await
-            .unwrap_or_default(),
-    );
-
+    let public_user_url = github_api_url(&["users", account, "repos"]);
+    let public_org_url = github_api_url(&["orgs", account, "repos"]);
+    let mut parts = vec![
+        fetch_github_repos(&client, &public_user_url, &[("type", "public")], network).await,
+        fetch_github_repos(&client, &public_org_url, &[("type", "public")], network).await,
+    ];
     if token.is_some() {
-        if let Some(login) = fetch_github_login(&client, network).await? {
-            if login.eq_ignore_ascii_case(account) {
-                let private_repos = fetch_github_repos(
-                    &client,
-                    "https://api.github.com/user/repos",
-                    &[
-                        ("visibility", "all"),
-                        ("affiliation", "owner,collaborator,organization_member"),
-                    ],
-                    network,
-                )
-                .await?;
-
-                repositories.extend(
-                    private_repos
-                        .into_iter()
-                        .filter(|repo| repo.owner.login.eq_ignore_ascii_case(account)),
-                );
-            }
-        }
+        parts.push(fetch_github_private_repos(&client, account, network).await);
     }
+    // Une requête refusée (limite de débit, réseau) ne masque pas les résultats des autres.
+    let repositories = merge_partial_results(parts)?;
 
     let results = repositories
         .into_iter()
@@ -956,13 +904,7 @@ async fn search_gitlab(
 ) -> Result<Vec<RemoteRepo>, AppError> {
     let base_url = "https://gitlab.com/api/v4/projects";
     enforce_https_policy(base_url, network)?;
-    let client = client_with_headers(
-        token,
-        Some("PRIVATE-TOKEN"),
-        Some(("Accept", "application/json")),
-        network,
-    )
-    .await?;
+    let client = client_with_headers(token, Some(("Accept", "application/json")), network).await?;
 
     let mut all_projects = Vec::new();
     let per_page = 100;
@@ -1011,6 +953,68 @@ async fn search_gitlab(
             url: project.http_url_to_repo,
         })
         .collect())
+}
+
+/// Dépôts privés du compte authentifié quand il s'agit de `account`, vide sinon.
+async fn fetch_github_private_repos(
+    client: &Client,
+    account: &str,
+    network: &NetworkOptions,
+) -> Result<Vec<GithubRepoItem>, AppError> {
+    match fetch_github_login(client, network).await? {
+        Some(login) if login.eq_ignore_ascii_case(account) => {
+            let repos = fetch_github_repos(
+                client,
+                "https://api.github.com/user/repos",
+                &[
+                    ("visibility", "all"),
+                    ("affiliation", "owner,collaborator,organization_member"),
+                ],
+                network,
+            )
+            .await?;
+            Ok(repos
+                .into_iter()
+                .filter(|repo| repo.owner.login.eq_ignore_ascii_case(account))
+                .collect())
+        }
+        _ => Ok(Vec::new()),
+    }
+}
+
+/// URL de l'API GitHub dont chaque segment est encodé, pour qu'un nom saisi ne change pas le
+/// chemin appelé.
+fn github_api_url(segments: &[&str]) -> String {
+    let mut url = Url::parse("https://api.github.com").expect("static URL");
+    url.path_segments_mut()
+        .expect("https URL has a path")
+        .extend(segments);
+    url.into()
+}
+
+/// Réunit les résultats de plusieurs requêtes : les réponses obtenues sont gardées, et la
+/// première erreur n'est renvoyée que si aucune requête n'a abouti.
+fn merge_partial_results<T>(
+    parts: impl IntoIterator<Item = Result<Vec<T>, AppError>>,
+) -> Result<Vec<T>, AppError> {
+    let mut items = Vec::new();
+    let mut first_error = None;
+    let mut any_ok = false;
+    for part in parts {
+        match part {
+            Ok(part) => {
+                any_ok = true;
+                items.extend(part);
+            }
+            Err(err) => {
+                first_error.get_or_insert(err);
+            }
+        }
+    }
+    match first_error {
+        Some(err) if !any_ok => Err(err),
+        _ => Ok(items),
+    }
 }
 
 /// Récupère le login de l'utilisateur GitHub authentifié.
@@ -1074,10 +1078,17 @@ async fn fetch_github_repos(
 }
 
 /// Clone bloquant lancé dans un thread dédié, qui envoie sa progression puis son résultat.
-fn clone_with_progress(request: CloneRequest) -> impl Stream<Item = Message> {
+/// Le token de l'URL est résolu dans ce thread quand la requête n'en porte pas.
+fn clone_with_progress(
+    mut request: CloneRequest,
+    auth: AuthManager,
+) -> impl Stream<Item = Message> {
     iced::stream::channel(16, move |mut output| async move {
         let mut progress = output.clone();
         let result = tokio::task::spawn_blocking(move || {
+            if request.token.is_none() {
+                request.token = auth.resolve_for_url(&request.url);
+            }
             // shortcut: an update is dropped when the UI is 16 behind; the next one replaces it.
             clone_repository(request, move |update| {
                 let _ = progress.try_send(Message::CloneProgress(update));
@@ -1091,4 +1102,57 @@ fn clone_with_progress(request: CloneRequest) -> impl Stream<Item = Message> {
         });
         let _ = output.send(Message::CloneResult(result)).await;
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn repo(name: &str) -> RemoteRepo {
+        RemoteRepo {
+            name: name.to_string(),
+            url: format!("https://example.com/{name}.git"),
+        }
+    }
+
+    #[test]
+    fn a_result_for_a_replaced_search_is_dropped() {
+        let mut panel = ClonePanel::new(String::new(), NetworkOptions::default());
+        panel.search_version = 3;
+
+        panel.apply_search_result(2, Ok(vec![repo("old")]));
+        assert!(panel.search_results.is_empty());
+        assert_eq!(panel.search_status, None);
+
+        panel.apply_search_result(3, Ok(vec![repo("new")]));
+        assert_eq!(panel.search_results, vec![repo("new")]);
+        assert_eq!(panel.selected_repo, Some(0));
+    }
+
+    #[test]
+    fn partial_results_survive_a_failed_request() {
+        let merged = merge_partial_results([
+            Ok(vec![1, 2]),
+            Err(AppError::Network("rate limited".into())),
+            Ok(vec![3]),
+        ]);
+        assert_eq!(merged.unwrap(), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn the_first_error_is_returned_when_every_request_fails() {
+        let merged: Result<Vec<i32>, _> = merge_partial_results([
+            Err(AppError::Network("first".into())),
+            Err(AppError::Network("second".into())),
+        ]);
+        assert!(matches!(merged, Err(AppError::Network(msg)) if msg == "first"));
+    }
+
+    #[test]
+    fn github_api_url_encodes_the_account() {
+        assert_eq!(
+            github_api_url(&["users", "a/b c?x", "repos"]),
+            "https://api.github.com/users/a%2Fb%20c%3Fx/repos"
+        );
+    }
 }

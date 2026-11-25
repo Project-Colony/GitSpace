@@ -7,7 +7,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 
 use iced::futures::{SinkExt, Stream};
 use iced::widget::{button, column, container, row, scrollable, text, text_input, Space};
-use iced::{Alignment, Element, Font, Length, Task};
+use iced::{Alignment, Element, Length, Task};
 
 use crate::auth::{AuthManager, DeviceFlow, OAuthProvider, OAuthResult};
 use crate::ui::theme::Theme;
@@ -53,6 +53,28 @@ pub enum Message {
     GitlabClientIdChanged(String),
     /// Déconnecter un compte (par hôte).
     Disconnect(String),
+    /// Résultat de la déconnexion d'un compte.
+    Disconnected(Result<(), String>),
+    /// Résultat de l'enregistrement d'un token OAuth reçu.
+    OAuthStored(OAuthService, Result<(), String>),
+    /// Comptes enregistrés relus : hôte et présence d'un token OAuth.
+    AccountsLoaded(Vec<(String, bool)>),
+}
+
+/// Fournisseur d'une connexion OAuth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OAuthService {
+    GitHub,
+    GitLab,
+}
+
+impl OAuthService {
+    fn label(self) -> &'static str {
+        match self {
+            Self::GitHub => "GitHub",
+            Self::GitLab => "GitLab",
+        }
+    }
 }
 
 /// Étape envoyée par la tâche de fond d'une connexion GitHub.
@@ -105,6 +127,10 @@ pub struct AuthPanel {
     custom_github_client_id: String,
     /// Identifiant client GitLab personnalisé.
     custom_gitlab_client_id: String,
+    /// Comptes enregistrés (hôte, OAuth), relus en tâche de fond après chaque changement.
+    accounts: Vec<(String, bool)>,
+    /// Erreur de la dernière déconnexion.
+    accounts_status: Option<String>,
 }
 
 impl AuthPanel {
@@ -123,12 +149,68 @@ impl AuthPanel {
             manual_validating: false,
             custom_github_client_id: String::new(),
             custom_gitlab_client_id: String::new(),
+            accounts: Vec::new(),
+            accounts_status: None,
         }
     }
 
-    /// Met à jour le gestionnaire d'authentification.
-    pub fn set_auth_manager(&mut self, auth: AuthManager) {
+    /// Met à jour le gestionnaire d'authentification et relit les comptes.
+    pub fn set_auth_manager(&mut self, auth: AuthManager) -> Task<Message> {
         self.auth = auth;
+        self.refresh_accounts()
+    }
+
+    /// Relit les comptes enregistrés hors du thread UI : la liste des hôtes lit un fichier et
+    /// chaque test OAuth interroge le trousseau.
+    pub fn refresh_accounts(&self) -> Task<Message> {
+        let auth = self.auth.clone();
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    auth.known_hosts()
+                        .into_iter()
+                        .filter(|host| !host.starts_with("oauth:"))
+                        .map(|host| {
+                            let oauth = auth.has_oauth(&host);
+                            (host, oauth)
+                        })
+                        .collect()
+                })
+                .await
+                .unwrap_or_default()
+            },
+            Message::AccountsLoaded,
+        )
+    }
+
+    /// Message de statut de la connexion OAuth d'un fournisseur.
+    fn status_mut(&mut self, service: OAuthService) -> &mut Option<String> {
+        match service {
+            OAuthService::GitHub => &mut self.github_status,
+            OAuthService::GitLab => &mut self.gitlab_status,
+        }
+    }
+
+    /// Traite la fin d'une connexion OAuth : un token reçu est enregistré en tâche de fond.
+    fn finish_oauth(&mut self, service: OAuthService, result: OAuthResult) -> Task<Message> {
+        let status = match result {
+            OAuthResult::Success(token) => {
+                *self.status_mut(service) = Some("Enregistrement du token...".to_string());
+                let auth = self.auth.clone();
+                return Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || auth.store_oauth_token(&token))
+                            .await
+                            .unwrap_or_else(|err| Err(err.to_string()))
+                    },
+                    move |result| Message::OAuthStored(service, result),
+                );
+            }
+            OAuthResult::Cancelled => "Connexion annulée".to_string(),
+            OAuthResult::Error(e) => format!("Erreur de connexion : {e}"),
+        };
+        *self.status_mut(service) = Some(status);
+        Task::none()
     }
 
     /// Traite un message et renvoie une tâche Iced.
@@ -205,23 +287,7 @@ impl AuthPanel {
                     GithubSignInEvent::Finished(result) => result,
                 };
                 self.github_sign_in = None;
-                match result {
-                    OAuthResult::Success(token) => match self.auth.store_oauth_token(&token) {
-                        Ok(()) => {
-                            self.github_status = Some("Connexion GitHub réussie !".to_string());
-                        }
-                        Err(e) => {
-                            self.github_status = Some(format!("Erreur de stockage du token : {e}"));
-                        }
-                    },
-                    OAuthResult::Cancelled => {
-                        self.github_status = Some("Connexion annulée".to_string());
-                    }
-                    OAuthResult::Error(e) => {
-                        self.github_status = Some(format!("Erreur de connexion : {e}"));
-                    }
-                }
-                Task::none()
+                self.finish_oauth(OAuthService::GitHub, result)
             }
 
             Message::CancelGithubSignIn => {
@@ -248,23 +314,15 @@ impl AuthPanel {
 
             Message::GitlabOAuthResult(result) => {
                 self.gitlab_in_progress = false;
-                match result {
-                    OAuthResult::Success(token) => match self.auth.store_oauth_token(&token) {
-                        Ok(()) => {
-                            self.gitlab_status = Some("Connexion GitLab réussie !".to_string());
-                        }
-                        Err(e) => {
-                            self.gitlab_status = Some(format!("Erreur de stockage du token : {e}"));
-                        }
-                    },
-                    OAuthResult::Cancelled => {
-                        self.gitlab_status = Some("Connexion annulée".to_string());
-                    }
-                    OAuthResult::Error(e) => {
-                        self.gitlab_status = Some(format!("Erreur de connexion : {e}"));
-                    }
-                }
-                Task::none()
+                self.finish_oauth(OAuthService::GitLab, result)
+            }
+
+            Message::OAuthStored(service, result) => {
+                *self.status_mut(service) = Some(match result {
+                    Ok(()) => format!("Connexion {} réussie !", service.label()),
+                    Err(e) => format!("Erreur de stockage du token : {e}"),
+                });
+                self.refresh_accounts()
             }
 
             Message::ManualHostChanged(value) => {
@@ -305,6 +363,7 @@ impl AuthPanel {
                     Ok(()) => {
                         self.manual_status = Some("Token validé et enregistré !".to_string());
                         self.manual_token.clear();
+                        return self.refresh_accounts();
                     }
                     Err(e) => {
                         self.manual_status = Some(format!("Validation échouée : {e}"));
@@ -324,12 +383,34 @@ impl AuthPanel {
             }
 
             Message::Disconnect(host) => {
-                // Supprimer le token OAuth ou le token simple selon le cas.
-                if self.auth.has_oauth(&host) {
-                    let _ = self.auth.clear_oauth_token(&host);
-                } else {
-                    let _ = self.auth.clear_token(&host);
+                self.accounts_status = None;
+                let auth = self.auth.clone();
+                Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            // Supprimer le token OAuth ou le token simple selon le cas.
+                            if auth.has_oauth(&host) {
+                                auth.clear_oauth_token(&host)
+                            } else {
+                                auth.clear_token(&host)
+                            }
+                        })
+                        .await
+                        .unwrap_or_else(|err| Err(err.to_string()))
+                    },
+                    Message::Disconnected,
+                )
+            }
+
+            Message::Disconnected(result) => {
+                if let Err(e) = result {
+                    self.accounts_status = Some(format!("Déconnexion échouée : {e}"));
                 }
+                self.refresh_accounts()
+            }
+
+            Message::AccountsLoaded(accounts) => {
+                self.accounts = accounts;
                 Task::none()
             }
         }
@@ -395,21 +476,17 @@ impl AuthPanel {
             .size(typo.label)
             .color(palette.text_secondary);
 
-        let hosts = self.auth.known_hosts();
-        let oauth_hosts: Vec<_> = hosts.iter().filter(|h| !h.starts_with("oauth:")).collect();
-
         let mut items = column![].spacing(theme.spacing.xs);
 
-        if oauth_hosts.is_empty() {
+        if self.accounts.is_empty() {
             items = items.push(
                 text("Aucun compte connecte. Utilisez les boutons ci-dessous pour vous connecter.")
                     .size(typo.body)
                     .color(palette.text_secondary),
             );
         } else {
-            for host in &oauth_hosts {
-                let has_oauth = self.auth.has_oauth(host);
-                let auth_type = if has_oauth { "OAuth" } else { "Token" };
+            for (host, has_oauth) in &self.accounts {
+                let auth_type = if *has_oauth { "OAuth" } else { "Token" };
 
                 // Icône selon le fournisseur.
                 let icon_str = if host.contains("github") {
@@ -437,6 +514,13 @@ impl AuthPanel {
 
                 items = items.push(account_row);
             }
+        }
+        if let Some(status) = &self.accounts_status {
+            items = items.push(
+                text(status.as_str())
+                    .size(typo.label)
+                    .color(palette.text_secondary),
+            );
         }
 
         column![title, subtitle, Space::with_height(theme.spacing.sm), items]
@@ -475,7 +559,6 @@ impl AuthPanel {
                     .color(palette.text_secondary),
                 text(user_code.as_str())
                     .size(typo.heading)
-                    .font(Font::MONOSPACE)
                     .color(palette.text_primary),
                 row![
                     small_button("Copier le code", Message::CopyGithubCode),

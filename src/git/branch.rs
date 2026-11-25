@@ -17,49 +17,24 @@ pub struct BranchEntry {
     pub name: String,
     pub kind: BranchKind,
     pub is_head: bool,
-    #[allow(dead_code)] // tested, not used by the iced UI yet
-    pub upstream: Option<String>,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub struct TrackingBranch {
-    pub local: String,
-    pub upstream: String,
 }
 
 pub fn list_branches<P: AsRef<Path>>(repo_path: P) -> Result<Vec<BranchEntry>, Error> {
     // Utilise le cache thread-local au lieu de Repository::open()
     with_cached_repo(repo_path, |repo| {
-        let head_name = repo
-            .head()
-            .ok()
-            .and_then(|head| head.shorthand().ok().map(|s| s.to_string()));
-
         let mut entries = Vec::new();
         for branch_result in repo.branches(None)? {
             let (branch, branch_type) = branch_result?;
             if let Some(name) = branch.name()? {
-                let upstream = branch
-                    .upstream()
-                    .ok()
-                    .and_then(|upstream| upstream.name().ok().flatten().map(|s| s.to_string()));
-
                 let kind = match branch_type {
                     BranchType::Local => BranchKind::Local,
                     BranchType::Remote => BranchKind::Remote,
                 };
 
-                let is_head = head_name
-                    .as_ref()
-                    .map(|current| current == name)
-                    .unwrap_or(false);
-
                 entries.push(BranchEntry {
                     name: name.to_string(),
                     kind,
-                    is_head,
-                    upstream,
+                    is_head: branch.is_head(),
                 });
             }
         }
@@ -101,56 +76,6 @@ pub fn create_tracking_branch<P: AsRef<Path>>(
     })
 }
 
-#[allow(dead_code)]
-pub fn set_upstream<P: AsRef<Path>>(
-    repo_path: P,
-    local: &str,
-    upstream: &str,
-) -> Result<(), Error> {
-    // Configure l'upstream via le dépôt mis en cache
-    with_cached_repo(repo_path, |repo| {
-        let mut branch = repo.find_branch(local, BranchType::Local)?;
-        branch.set_upstream(Some(upstream))?;
-        Ok(())
-    })
-}
-
-#[allow(dead_code)]
-pub fn unset_upstream<P: AsRef<Path>>(repo_path: P, local: &str) -> Result<(), Error> {
-    // Supprime l'upstream via le dépôt mis en cache
-    with_cached_repo(repo_path, |repo| {
-        let mut branch = repo.find_branch(local, BranchType::Local)?;
-        branch.set_upstream(None)?;
-        Ok(())
-    })
-}
-
-#[allow(dead_code)]
-pub fn list_tracking_branches<P: AsRef<Path>>(repo_path: P) -> Result<Vec<TrackingBranch>, Error> {
-    // Liste les branches de suivi via le dépôt mis en cache
-    with_cached_repo(repo_path, |repo| {
-        let mut entries = Vec::new();
-        for branch_result in repo.branches(Some(BranchType::Local))? {
-            let (branch, _) = branch_result?;
-            let Some(name) = branch.name()? else {
-                continue;
-            };
-            let upstream = branch
-                .upstream()
-                .ok()
-                .and_then(|upstream| upstream.name().ok().flatten().map(|s| s.to_string()));
-            if let Some(upstream) = upstream {
-                entries.push(TrackingBranch {
-                    local: name.to_string(),
-                    upstream,
-                });
-            }
-        }
-        entries.sort_by(|a, b| a.local.cmp(&b.local));
-        Ok(entries)
-    })
-}
-
 pub fn delete_branch<P: AsRef<Path>>(repo_path: P, name: &str) -> Result<(), Error> {
     // Supprime la branche via le dépôt mis en cache
     with_cached_repo(repo_path, |repo| {
@@ -178,7 +103,10 @@ pub fn checkout_branch<P: AsRef<Path>>(repo_path: P, name: &str) -> Result<(), E
             Err(_) => repo.revparse_ext(name)?,
         };
 
-        repo.checkout_tree(&object, Some(CheckoutBuilder::default().force()))?;
+        // The cached handle keeps its index: reload it, or libgit2 writes the old one back.
+        repo.index()?.read(false)?;
+        // Safe checkout: libgit2 fails instead of overwriting a modified file.
+        repo.checkout_tree(&object, Some(&mut CheckoutBuilder::new()))?;
         if let Some(reference) = reference {
             if let Ok(name) = reference.name() {
                 repo.set_head(name)?;

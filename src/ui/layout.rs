@@ -17,11 +17,10 @@ pub enum MainTab {
     History,
     Branches,
     Auth,
-    DevGallery,
 }
 
 impl MainTab {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 7] = [
         Self::Clone,
         Self::Open,
         Self::RepoOverview,
@@ -29,7 +28,6 @@ impl MainTab {
         Self::History,
         Self::Branches,
         Self::Auth,
-        Self::DevGallery,
     ];
 
     pub fn label(&self) -> &'static str {
@@ -41,7 +39,6 @@ impl MainTab {
             Self::History => "History",
             Self::Branches => "Branches",
             Self::Auth => "Auth",
-            Self::DevGallery => "Dev Gallery",
         }
     }
 }
@@ -51,7 +48,6 @@ impl MainTab {
 pub enum LayoutMessage {
     TabSelected(MainTab),
     HeaderClicked,
-    SidebarNav(MainTab),
     OpenFileManager,
     CopyPath,
 }
@@ -115,17 +111,12 @@ pub fn view_sidebar<'a>(
             .size(theme.typography.label)
             .color(theme.palette.text_secondary),
     );
-    for (label, tab) in [
-        ("Recent", MainTab::Open),
-        ("Favorites", MainTab::Open),
-        ("Local Repos", MainTab::Open),
-        ("Remote Repos", MainTab::Clone),
-    ] {
+    for (label, tab) in [("Recent", MainTab::Open), ("Remote Repos", MainTab::Clone)] {
         sidebar = sidebar.push(menu::menu_item(
             theme,
             label,
             active_tab == tab,
-            LayoutMessage::SidebarNav(tab),
+            LayoutMessage::TabSelected(tab),
         ));
     }
 
@@ -145,7 +136,7 @@ pub fn view_sidebar<'a>(
             theme,
             label,
             active_tab == tab,
-            LayoutMessage::SidebarNav(tab),
+            LayoutMessage::TabSelected(tab),
         ));
     }
 

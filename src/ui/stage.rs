@@ -1,32 +1,68 @@
 // Panneau de staging et commits — migration Iced 0.13
 // Gère les fichiers staged/unstaged, les diffs, le commit editor et les stashes.
+// Les appels git tournent en tâche de fond ; view() ne lit que l'état du panneau.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::path::Path;
+use std::sync::Arc;
 
-use git2::{Repository, Signature, Status, StatusOptions, StatusShow};
+use git2::{Repository, Status, StatusOptions, StatusShow};
 use iced::widget::{
-    button, checkbox, container, horizontal_rule, pick_list, scrollable, text, text_input, Column,
-    Row,
+    button, checkbox, container, horizontal_rule, pick_list, scrollable, text, text_input, Button,
+    Column, Row,
 };
 use iced::{Element, Length, Task};
 
 use crate::ui::theme::Theme;
 
 use crate::git::branch::restore_file_from_branch;
-use crate::git::diff::{diff_file, staged_diff, working_tree_diff};
+use crate::git::commit::commit_index;
+use crate::git::diff::diff_file;
 use crate::git::stash::{apply_stash, create_stash, drop_stash, list_stashes, StashEntry};
 use crate::git::status::read_repo_status;
 use crate::ui::context::RepoContext;
+
+/// Runs `job` for the repository at `repo` on the blocking thread pool and passes its result,
+/// with the repository path, to `done`. Panels compare that path with their current repository
+/// and drop results that arrive after a switch. Shared by the stage, branch and history panels.
+pub(crate) fn git_task<M, T>(
+    repo: Arc<str>,
+    job: impl FnOnce(&str) -> Result<T, String> + Send + 'static,
+    done: impl Fn(Arc<str>, Result<T, String>) -> M + Send + 'static,
+) -> Task<M>
+where
+    M: Send + 'static,
+    T: Send + 'static,
+{
+    Task::perform(
+        async move {
+            let path = Arc::clone(&repo);
+            let result = tokio::task::spawn_blocking(move || job(&path))
+                .await
+                .unwrap_or_else(|err| Err(err.to_string()));
+            (repo, result)
+        },
+        move |(repo, result)| done(repo, result),
+    )
+}
 
 // ── Structures de données ──────────────────────────────────────────────────
 
 /// Représente un fichier dans l'index ou l'arbre de travail.
 #[derive(Debug, Clone)]
-struct FileEntry {
+pub struct FileEntry {
     path: String,
     status_label: String,
-    diff: String,
+}
+
+/// État du dépôt lu en tâche de fond.
+#[derive(Debug, Clone)]
+pub struct Snapshot {
+    staged: Vec<FileEntry>,
+    unstaged: Vec<FileEntry>,
+    stashes: Vec<StashEntry>,
+    branch: Option<String>,
+    signoff_line: Option<String>,
 }
 
 /// Messages émis par le panneau de staging.
@@ -44,6 +80,8 @@ pub enum Message {
     TemplateSelected(usize),
     /// Activer/désactiver la ligne Signed-off-by.
     ToggleSignoff(bool),
+    /// Committer l'index.
+    Commit,
     /// Le message du stash a changé.
     StashMessageChanged(String),
     /// Inclure ou non les fichiers non suivis dans le stash.
@@ -52,8 +90,12 @@ pub enum Message {
     CreateStash,
     /// Appliquer un stash existant (index).
     ApplyStash(usize),
-    /// Supprimer un stash existant (index).
+    /// Demander la suppression d'un stash (index).
     DropStash(usize),
+    /// Confirmer la suppression demandée.
+    ConfirmDropStash,
+    /// Annuler la suppression demandée.
+    CancelDropStash,
     /// Ouvrir la boîte de dialogue de restauration.
     OpenRestoreDialog(String),
     /// Fermer la boîte de dialogue de restauration.
@@ -62,6 +104,14 @@ pub enum Message {
     ConfirmRestore,
     /// Sélectionner un fichier dans le dialogue de restauration.
     SelectRestoreFile(String),
+    /// Résultat de la lecture du dépôt.
+    Loaded(Arc<str>, Result<Snapshot, String>),
+    /// Patch du fichier sélectionné ((is_staged, chemin), patch).
+    DiffLoaded(Arc<str>, (bool, String), Result<String, String>),
+    /// Fin d'une action git (message de statut ou erreur).
+    ActionDone(Arc<str>, Result<String, String>),
+    /// Fin d'un commit.
+    Committed(Arc<str>, Result<String, String>),
 }
 
 // ── Templates de commit ────────────────────────────────────────────────────
@@ -89,20 +139,27 @@ fn template_names() -> Vec<String> {
 // ── Panneau principal ──────────────────────────────────────────────────────
 
 pub struct StagePanel {
+    repo: Option<Arc<str>>,
     staged: Vec<FileEntry>,
     unstaged: Vec<FileEntry>,
     selected_diff: Option<(bool, String)>,
-    last_repo: Option<String>,
+    /// Patch du fichier sélectionné, `None` pendant le chargement.
+    diff: Option<String>,
+    branch: Option<String>,
     status: Option<String>,
     error: Option<String>,
+    /// Une action git est en cours : les boutons d'action sont désactivés.
+    busy: bool,
     commit_message: String,
     include_signoff: bool,
     selected_template: usize,
-    signoff_line: String,
+    /// Ligne Signed-off-by tirée de la configuration Git, si l'identité est définie.
+    signoff_line: Option<String>,
     stash_message: String,
     stashes: Vec<StashEntry>,
     include_untracked_in_stash: bool,
-    needs_refresh: bool,
+    /// Index du stash dont la suppression attend une confirmation.
+    confirm_drop: Option<usize>,
     restore_dialog_open: bool,
     restore_selection: Option<String>,
 }
@@ -110,45 +167,70 @@ pub struct StagePanel {
 impl StagePanel {
     /// Crée un nouveau panneau de staging.
     pub fn new() -> Self {
-        let signoff_line = default_signoff_line();
         Self {
+            repo: None,
             staged: Vec::new(),
             unstaged: Vec::new(),
             selected_diff: None,
-            last_repo: None,
+            diff: None,
+            branch: None,
             status: None,
             error: None,
+            busy: false,
             commit_message: String::new(),
             include_signoff: false,
             selected_template: 0,
-            signoff_line,
+            signoff_line: None,
             stash_message: String::from("WIP changes"),
             stashes: Vec::new(),
             include_untracked_in_stash: true,
-            needs_refresh: true,
+            confirm_drop: None,
             restore_dialog_open: false,
             restore_selection: None,
         }
     }
 
+    /// Oublie le dépôt précédent et charge `repo` en tâche de fond.
+    /// Reloading the same repository keeps the commit and stash drafts.
+    pub fn load(&mut self, repo: &RepoContext) -> Task<Message> {
+        let fresh = Self {
+            repo: Some(repo.path_arc()),
+            ..Self::new()
+        };
+        let previous = std::mem::replace(self, fresh);
+        if previous.repo.as_deref() == Some(repo.path()) {
+            self.commit_message = previous.commit_message;
+            self.include_signoff = previous.include_signoff;
+            self.selected_template = previous.selected_template;
+            self.signoff_line = previous.signoff_line;
+            self.stash_message = previous.stash_message;
+            self.include_untracked_in_stash = previous.include_untracked_in_stash;
+        }
+        self.refresh()
+    }
+
     /// Traite un message et retourne une commande Iced.
-    pub fn update(&mut self, message: Message, repo: Option<&RepoContext>) -> Task<Message> {
+    pub fn update(&mut self, message: Message, _repo: Option<&RepoContext>) -> Task<Message> {
         match message {
             // ── Actions sur les fichiers ────────────────────────────────
             Message::ToggleStaged(path) => {
-                // Désindexer le fichier
-                if let Some(repo) = repo {
-                    self.handle_unstage(repo, &path);
-                }
+                return self.run(move |repo| {
+                    unstage_path(repo, &path)
+                        .map(|()| format!("Unstaged {path}"))
+                        .map_err(|err| format!("Failed to unstage {path}: {err}"))
+                });
             }
             Message::ToggleUnstaged(path) => {
-                // Indexer le fichier
-                if let Some(repo) = repo {
-                    self.handle_stage(repo, &path);
-                }
+                return self.run(move |repo| {
+                    stage_path(repo, &path)
+                        .map(|()| format!("Staged {path}"))
+                        .map_err(|err| format!("Failed to stage {path}: {err}"))
+                });
             }
             Message::ViewDiff(is_staged, path) => {
                 self.selected_diff = Some((is_staged, path));
+                self.diff = None;
+                return self.load_diff();
             }
 
             // ── Éditeur de commit ───────────────────────────────────────
@@ -166,6 +248,17 @@ impl StagePanel {
                 self.include_signoff = enabled;
                 self.apply_signoff();
             }
+            Message::Commit => {
+                let message = self.commit_message.clone();
+                return self.run_with(
+                    move |repo| {
+                        commit_index(repo, &message)
+                            .map(|oid| format!("Commit {:.8} créé", oid.to_string()))
+                            .map_err(|err| format!("Échec du commit : {err}"))
+                    },
+                    Message::Committed,
+                );
+            }
 
             // ── Gestion du stash ────────────────────────────────────────
             Message::StashMessageChanged(msg) => {
@@ -175,49 +268,38 @@ impl StagePanel {
                 self.include_untracked_in_stash = enabled;
             }
             Message::CreateStash => {
-                if let Some(repo) = repo {
-                    self.status = None;
-                    match create_stash(
-                        repo.path(),
-                        self.stash_message.trim(),
-                        self.include_untracked_in_stash,
-                    ) {
-                        Ok(_) => {
-                            self.status = Some("Stashed working tree".to_string());
-                            self.needs_refresh = true;
-                        }
-                        Err(err) => {
-                            self.error = Some(format!("Échec du stash : {err}"));
-                        }
-                    }
-                }
+                let message = self.stash_message.trim().to_string();
+                let include_untracked = self.include_untracked_in_stash;
+                return self.run(move |repo| {
+                    create_stash(repo, &message, include_untracked)
+                        .map(|()| "Stashed working tree".to_string())
+                        .map_err(|err| format!("Échec du stash : {err}"))
+                });
             }
             Message::ApplyStash(index) => {
-                if let Some(repo) = repo {
-                    match apply_stash(repo.path(), index) {
-                        Ok(_) => {
-                            self.status = Some(format!("Applied stash #{index}"));
-                            self.needs_refresh = true;
-                        }
-                        Err(err) => {
-                            self.error =
-                                Some(format!("Échec de l'application du stash #{index} : {err}"));
-                        }
-                    }
-                }
+                let id = self.stash_id(index);
+                return self.run(move |repo| {
+                    apply_stash(repo, index, &id)
+                        .map(|()| format!("Applied stash #{index}"))
+                        .map_err(|err| format!("Échec de l'application du stash #{index} : {err}"))
+                });
             }
             Message::DropStash(index) => {
-                if let Some(repo) = repo {
-                    match drop_stash(repo.path(), index) {
-                        Ok(_) => {
-                            self.status = Some(format!("Dropped stash #{index}"));
-                            self.needs_refresh = true;
-                        }
-                        Err(err) => {
-                            self.error =
-                                Some(format!("Échec de la suppression du stash #{index} : {err}"));
-                        }
-                    }
+                self.confirm_drop = Some(index);
+            }
+            Message::CancelDropStash => {
+                self.confirm_drop = None;
+            }
+            Message::ConfirmDropStash => {
+                if let Some(index) = self.confirm_drop.take() {
+                    let id = self.stash_id(index);
+                    return self.run(move |repo| {
+                        drop_stash(repo, index, &id)
+                            .map(|()| format!("Dropped stash #{index}"))
+                            .map_err(|err| {
+                                format!("Échec de la suppression du stash #{index} : {err}")
+                            })
+                    });
                 }
             }
 
@@ -231,34 +313,48 @@ impl StagePanel {
                 self.restore_selection = None;
             }
             Message::ConfirmRestore => {
-                if let (Some(repo), Some(path)) = (repo, self.restore_selection.clone()) {
-                    let current_branch = read_repo_status(repo.path())
-                        .ok()
-                        .and_then(|s| s.branch)
-                        .unwrap_or_else(|| "HEAD".to_string());
-                    match restore_file_from_branch(repo.path(), &current_branch, &path) {
-                        Ok(()) => {
-                            self.status = Some(format!("Restored {path} from {current_branch}"));
-                            self.needs_refresh = true;
-                            self.restore_dialog_open = false;
-                            self.restore_selection = None;
-                        }
-                        Err(err) => {
-                            self.error =
-                                Some(format!("Échec de la restauration de {path} : {err}"));
-                        }
-                    }
+                if let Some(path) = self.restore_selection.clone() {
+                    let branch = self.restore_source().to_string();
+                    return self.run(move |repo| {
+                        restore_file_from_branch(repo, &branch, &path)
+                            .map(|()| format!("Restored {path} from {branch}"))
+                            .map_err(|err| format!("Échec de la restauration de {path} : {err}"))
+                    });
                 }
             }
             Message::SelectRestoreFile(path) => {
                 self.restore_selection = Some(path);
             }
-        }
 
-        // Rafraîchir les données si nécessaire après une action
-        if self.needs_refresh {
-            if let Some(repo) = repo {
-                self.refresh_data(repo);
+            // ── Résultats des tâches de fond ────────────────────────────
+            Message::Loaded(repo, result) => {
+                if !self.is_current(&repo) {
+                    return Task::none();
+                }
+                match result {
+                    Ok(snapshot) => return self.apply_snapshot(snapshot),
+                    Err(err) => self.error = Some(err),
+                }
+            }
+            Message::DiffLoaded(repo, key, result) => {
+                if self.is_current(&repo) && self.selected_diff.as_ref() == Some(&key) {
+                    self.diff =
+                        Some(result.unwrap_or_else(|err| format!("Échec du chargement : {err}")));
+                }
+            }
+            Message::ActionDone(repo, result) => {
+                if self.is_current(&repo) {
+                    return self.finish_action(result);
+                }
+            }
+            Message::Committed(repo, result) => {
+                if self.is_current(&repo) {
+                    if result.is_ok() {
+                        self.commit_message.clear();
+                        self.apply_signoff();
+                    }
+                    return self.finish_action(result);
+                }
             }
         }
 
@@ -280,30 +376,24 @@ impl StagePanel {
         );
 
         // Vérifier si un dépôt est sélectionné
-        let repo = match repo {
-            Some(r) => r,
-            None => {
-                content = content
-                    .push(text("Open a repository to inspect and stage its changes.").size(13));
-                return container(content)
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .into();
-            }
-        };
-
-        // Afficher les erreurs éventuelles
-        if let Some(error) = &self.error {
-            content = content.push(text(error.clone()).size(13));
+        if repo.is_none() {
+            content =
+                content.push(text("Open a repository to inspect and stage its changes.").size(13));
             return container(content)
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into();
         }
 
-        // Afficher le statut si présent
-        if let Some(status) = &self.status {
-            content = content.push(text(status.clone()).size(13));
+        // Erreur éventuelle, au-dessus des contrôles ; effacée à la prochaine action
+        if let Some(error) = &self.error {
+            content = content.push(text(error.as_str()).size(13).style(text::danger));
+        }
+
+        if self.busy {
+            content = content.push(text("Opération en cours...").size(13));
+        } else if let Some(status) = &self.status {
+            content = content.push(text(status.as_str()).size(13));
         }
 
         // ── Deux colonnes : unstaged | staged ──────────────────────────
@@ -347,7 +437,7 @@ impl StagePanel {
         // ── Dialogue de restauration (intégré dans le panneau) ──────────
         if self.restore_dialog_open {
             content = content.push(horizontal_rule(1));
-            content = content.push(self.build_restore_dialog(repo));
+            content = content.push(self.build_restore_dialog());
         }
 
         container(content)
@@ -357,6 +447,13 @@ impl StagePanel {
     }
 
     // ── Construction des sous-vues ─────────────────────────────────────
+
+    /// Bouton d'action, désactivé pendant une action git.
+    fn action_button(&self, label: &str, message: Message) -> Button<'_, Message> {
+        button(text(label.to_string()).size(12))
+            .padding(4)
+            .on_press_maybe((!self.busy).then_some(message))
+    }
 
     /// Construit la liste de fichiers staged ou unstaged.
     fn build_file_list(&self, staged: bool) -> Element<'_, Message> {
@@ -380,32 +477,20 @@ impl StagePanel {
 
             // Bouton pour stage/unstage
             let toggle_btn = if staged {
-                let p = path.clone();
-                button(text("Unstage").size(12))
-                    .on_press(Message::ToggleStaged(p))
-                    .padding(4)
+                self.action_button("Unstage", Message::ToggleStaged(path.clone()))
             } else {
-                let p = path.clone();
-                button(text("Stage").size(12))
-                    .on_press(Message::ToggleUnstaged(p))
-                    .padding(4)
+                self.action_button("Stage", Message::ToggleUnstaged(path.clone()))
             };
 
             // Bouton pour voir le diff
-            let diff_btn = {
-                let p = path.clone();
-                button(text("Diff").size(12))
-                    .on_press(Message::ViewDiff(staged, p))
-                    .padding(4)
-            };
+            let diff_btn = button(text("Diff").size(12))
+                .on_press(Message::ViewDiff(staged, path.clone()))
+                .padding(4);
 
             // Bouton pour restaurer
-            let restore_btn = {
-                let p = path.clone();
-                button(text("Restore").size(12))
-                    .on_press(Message::OpenRestoreDialog(p))
-                    .padding(4)
-            };
+            let restore_btn = button(text("Restore").size(12))
+                .on_press(Message::OpenRestoreDialog(path))
+                .padding(4);
 
             let file_row = Row::new()
                 .spacing(6)
@@ -438,24 +523,12 @@ impl StagePanel {
         col = col.push(header_row);
         col = col.push(horizontal_rule(1));
 
-        // Contenu du diff
-        match &self.selected_diff {
-            Some((is_staged, path)) => {
-                let list = if *is_staged {
-                    &self.staged
-                } else {
-                    &self.unstaged
-                };
-                let diff_text = list
-                    .iter()
-                    .find(|f| &f.path == path)
-                    .map(|f| f.diff.as_str())
-                    .unwrap_or("(file not found in current list)");
-                col = col.push(scrollable(text(diff_text).size(12)).height(Length::Fixed(180.0)));
-            }
-            None => {
-                col = col.push(text("Select a file to view its patch.").size(12));
-            }
+        // Contenu du diff, chargé à la sélection
+        if self.selected_diff.is_some() {
+            let diff_text = self.diff.as_deref().unwrap_or("Chargement...");
+            col = col.push(scrollable(text(diff_text).size(12)).height(Length::Fixed(180.0)));
+        } else {
+            col = col.push(text("Select a file to view its patch.").size(12));
         }
 
         container(col).width(Length::Fill).padding(8).into()
@@ -493,10 +566,21 @@ impl StagePanel {
                 .padding(6),
         );
 
-        // Case à cocher pour le signoff
+        // Case à cocher pour le signoff, inactive sans identité Git configurée
         col = col.push(
-            checkbox("Add Signed-off-by", self.include_signoff).on_toggle(Message::ToggleSignoff),
+            checkbox("Add Signed-off-by", self.include_signoff).on_toggle_maybe(
+                self.signoff_line
+                    .is_some()
+                    .then_some(Message::ToggleSignoff),
+            ),
         );
+
+        let can_commit = !self.commit_message.trim().is_empty() && !self.staged.is_empty();
+        let mut commit_btn = self.action_button("Committer", Message::Commit);
+        if !can_commit {
+            commit_btn = commit_btn.on_press_maybe(None);
+        }
+        col = col.push(commit_btn);
 
         col.into()
     }
@@ -515,9 +599,7 @@ impl StagePanel {
         let untracked_checkbox = checkbox("Include untracked", self.include_untracked_in_stash)
             .on_toggle(Message::ToggleIncludeUntracked);
 
-        let create_btn = button(text("Create stash").size(12))
-            .on_press(Message::CreateStash)
-            .padding(4);
+        let create_btn = self.action_button("Create stash", Message::CreateStash);
 
         let stash_row = Row::new()
             .spacing(6)
@@ -536,19 +618,30 @@ impl StagePanel {
                 let idx = stash.index;
                 let label = format!("#{} — {}", stash.index, stash.message);
 
-                let apply_btn = button(text("Apply").size(12))
-                    .on_press(Message::ApplyStash(idx))
-                    .padding(4);
-                let drop_btn = button(text("Drop").size(12))
-                    .on_press(Message::DropStash(idx))
-                    .padding(4);
-
                 let stash_row = Row::new()
                     .spacing(6)
                     .push(text(label).size(13).width(Length::Fill))
-                    .push(apply_btn)
-                    .push(drop_btn);
+                    .push(self.action_button("Apply", Message::ApplyStash(idx)))
+                    .push(self.action_button("Drop", Message::DropStash(idx)));
                 col = col.push(stash_row);
+
+                if self.confirm_drop == Some(idx) {
+                    col = col.push(
+                        Row::new()
+                            .spacing(6)
+                            .push(
+                                text("Supprimer définitivement ce stash ?")
+                                    .size(12)
+                                    .width(Length::Fill),
+                            )
+                            .push(self.action_button("Confirmer", Message::ConfirmDropStash))
+                            .push(
+                                button(text("Annuler").size(12))
+                                    .on_press(Message::CancelDropStash)
+                                    .padding(4),
+                            ),
+                    );
+                }
             }
         }
 
@@ -556,12 +649,7 @@ impl StagePanel {
     }
 
     /// Construit le dialogue de restauration (en ligne, pas une fenêtre modale).
-    fn build_restore_dialog<'a>(&'a self, repo: &'a RepoContext) -> Element<'a, Message> {
-        let current_branch = read_repo_status(repo.path())
-            .ok()
-            .and_then(|s| s.branch)
-            .unwrap_or_else(|| "HEAD".to_string());
-
+    fn build_restore_dialog(&self) -> Element<'_, Message> {
         let candidates = self.restore_candidates();
 
         let mut col = Column::new().spacing(6).padding(8);
@@ -569,7 +657,8 @@ impl StagePanel {
         col = col.push(text("Restore file").size(16));
         col = col.push(
             text(format!(
-                "Restore file from {current_branch} (discard local changes)."
+                "Restore file from {} (discard local changes).",
+                self.restore_source()
             ))
             .size(13),
         );
@@ -603,13 +692,10 @@ impl StagePanel {
             .padding(4);
 
         // Le bouton Restore n'est actif que si un fichier est sélectionné
-        let restore_btn = if self.restore_selection.is_some() {
-            button(text("Restore").size(12))
-                .on_press(Message::ConfirmRestore)
-                .padding(4)
-        } else {
-            button(text("Restore").size(12)).padding(4)
-        };
+        let mut restore_btn = self.action_button("Restore", Message::ConfirmRestore);
+        if self.restore_selection.is_none() {
+            restore_btn = restore_btn.on_press_maybe(None);
+        }
 
         let actions_row = Row::new().spacing(8).push(cancel_btn).push(restore_btn);
         col = col.push(actions_row);
@@ -619,86 +705,140 @@ impl StagePanel {
 
     // ── Méthodes internes ──────────────────────────────────────────────
 
-    /// Rafraîchit les statuts et les stashes depuis le dépôt.
-    fn refresh_data(&mut self, repo: &RepoContext) {
-        // Détecter un changement de dépôt
-        if self.last_repo.as_deref() != Some(repo.path()) {
-            self.last_repo = Some(repo.path().to_string());
+    fn is_current(&self, repo: &str) -> bool {
+        self.repo.as_deref() == Some(repo)
+    }
+
+    /// Relit les statuts, les stashes et l'identité Git en tâche de fond.
+    fn refresh(&self) -> Task<Message> {
+        match self.repo.clone() {
+            Some(repo) => git_task(repo, read_snapshot, Message::Loaded),
+            None => Task::none(),
+        }
+    }
+
+    /// Charge le patch du fichier sélectionné.
+    fn load_diff(&self) -> Task<Message> {
+        let (Some(repo), Some(key)) = (self.repo.clone(), self.selected_diff.clone()) else {
+            return Task::none();
+        };
+        let (staged, path) = key.clone();
+        git_task(
+            repo,
+            move |repo| {
+                diff_file(repo, &path, staged)
+                    .map(|diff| {
+                        diff.map_or_else(
+                            || "(no textual diff available)\n".to_string(),
+                            |d| d.patch,
+                        )
+                    })
+                    .map_err(|err| err.to_string())
+            },
+            move |repo, result| Message::DiffLoaded(repo, key.clone(), result),
+        )
+    }
+
+    /// Remplace les listes par `snapshot` et recharge le diff affiché s'il existe encore.
+    fn apply_snapshot(&mut self, snapshot: Snapshot) -> Task<Message> {
+        self.staged = snapshot.staged;
+        self.unstaged = snapshot.unstaged;
+        self.stashes = snapshot.stashes;
+        self.branch = snapshot.branch;
+        if snapshot.signoff_line.is_none() {
+            self.include_signoff = false;
+        }
+        self.signoff_line = snapshot.signoff_line;
+
+        let still_listed = self.selected_diff.as_ref().is_some_and(|(staged, path)| {
+            let list = if *staged {
+                &self.staged
+            } else {
+                &self.unstaged
+            };
+            list.iter().any(|entry| &entry.path == path)
+        });
+        if still_listed {
+            self.load_diff()
+        } else {
             self.selected_diff = None;
-            self.commit_message.clear();
-            self.status = None;
-            self.error = None;
-            self.needs_refresh = true;
+            self.diff = None;
+            Task::none()
         }
-
-        if !self.needs_refresh {
-            return;
-        }
-
-        match read_statuses(repo.path()) {
-            Ok((staged, unstaged)) => {
-                self.staged = staged;
-                self.unstaged = unstaged;
-                self.error = None;
-            }
-            Err(err) => {
-                self.error = Some(format!("Failed to read changes: {err}"));
-            }
-        }
-
-        match list_stashes(repo.path()) {
-            Ok(entries) => self.stashes = entries,
-            Err(err) => {
-                self.error = Some(format!("Failed to read stashes: {err}"));
-            }
-        }
-
-        self.needs_refresh = false;
     }
 
-    /// Rafraîchir les données si un dépôt est fourni.
-    pub fn refresh_if_needed(&mut self, repo: &RepoContext) {
-        self.refresh_data(repo);
+    /// Lance une action git si aucune n'est en cours, après avoir effacé l'erreur et le
+    /// statut précédents ; la liste est relue à la fin.
+    fn run(
+        &mut self,
+        job: impl FnOnce(&str) -> Result<String, String> + Send + 'static,
+    ) -> Task<Message> {
+        self.run_with(job, Message::ActionDone)
     }
 
-    /// Indexe un fichier dans le dépôt.
-    fn handle_stage(&mut self, repo: &RepoContext, path: &str) {
+    fn run_with(
+        &mut self,
+        job: impl FnOnce(&str) -> Result<String, String> + Send + 'static,
+        done: fn(Arc<str>, Result<String, String>) -> Message,
+    ) -> Task<Message> {
+        let Some(repo) = self.repo.clone() else {
+            return Task::none();
+        };
+        if self.busy {
+            return Task::none();
+        }
+        self.busy = true;
+        self.error = None;
         self.status = None;
-        match stage_path(repo.path(), path) {
-            Ok(_) => {
-                self.status = Some(format!("Staged {path}"));
-                self.needs_refresh = true;
-            }
-            Err(err) => self.error = Some(format!("Failed to stage {path}: {err}")),
-        }
+        git_task(repo, job, done)
     }
 
-    /// Désindexe un fichier du dépôt.
-    fn handle_unstage(&mut self, repo: &RepoContext, path: &str) {
-        self.status = None;
-        match unstage_path(repo.path(), path) {
-            Ok(_) => {
-                self.status = Some(format!("Unstaged {path}"));
-                self.needs_refresh = true;
+    /// Affiche le résultat d'une action puis relit le dépôt, y compris après une erreur
+    /// (par exemple une liste de stashes qui a changé).
+    fn finish_action(&mut self, result: Result<String, String>) -> Task<Message> {
+        self.busy = false;
+        match result {
+            Ok(status) => {
+                self.status = Some(status);
+                self.restore_dialog_open = false;
+                self.restore_selection = None;
             }
-            Err(err) => self.error = Some(format!("Failed to unstage {path}: {err}")),
+            Err(err) => self.error = Some(err),
         }
+        self.refresh()
+    }
+
+    /// Identifiant du stash à `index` dans la liste affichée ; vide s'il a disparu, ce que
+    /// la couche git refuse.
+    fn stash_id(&self, index: usize) -> String {
+        self.stashes
+            .iter()
+            .find(|stash| stash.index == index)
+            .map(|stash| stash.id.clone())
+            .unwrap_or_default()
+    }
+
+    /// Branche d'où restaurer les fichiers.
+    fn restore_source(&self) -> &str {
+        self.branch.as_deref().unwrap_or("HEAD")
     }
 
     /// Applique ou retire la ligne Signed-off-by du message.
     fn apply_signoff(&mut self) {
-        if self.include_signoff && !self.commit_message.contains(&self.signoff_line) {
+        let Some(line) = self.signoff_line.clone() else {
+            return;
+        };
+        if self.include_signoff && !self.commit_message.contains(&line) {
             if !self.commit_message.ends_with('\n') && !self.commit_message.is_empty() {
                 self.commit_message.push('\n');
             }
             if !self.commit_message.ends_with('\n') {
                 self.commit_message.push('\n');
             }
-            self.commit_message.push_str(&self.signoff_line);
+            self.commit_message.push_str(&line);
         } else if !self.include_signoff {
-            if let Some(idx) = self.commit_message.find(&self.signoff_line) {
-                self.commit_message
-                    .replace_range(idx..idx + self.signoff_line.len(), "");
+            if let Some(idx) = self.commit_message.find(&line) {
+                self.commit_message.replace_range(idx..idx + line.len(), "");
                 self.commit_message = self.commit_message.trim_end().to_string();
             }
         }
@@ -706,15 +846,16 @@ impl StagePanel {
 
     /// Décore un message de commit avec la ligne signoff si activée.
     fn decorate_commit_message(&self, message: String) -> String {
-        if self.include_signoff {
-            let mut msg = message;
-            if !msg.ends_with('\n') {
-                msg.push('\n');
+        match &self.signoff_line {
+            Some(line) if self.include_signoff => {
+                let mut msg = message;
+                if !msg.ends_with('\n') {
+                    msg.push('\n');
+                }
+                msg.push_str(line);
+                msg
             }
-            msg.push_str(&self.signoff_line);
-            msg
-        } else {
-            message
+            _ => message,
         }
     }
 
@@ -728,7 +869,7 @@ impl StagePanel {
     }
 }
 
-// ── Fonctions backend (inchangées) ─────────────────────────────────────────
+// ── Fonctions backend ──────────────────────────────────────────────────────
 
 /// Formate un label lisible à partir du statut git2.
 fn format_status_label(status: Status) -> String {
@@ -745,9 +886,33 @@ fn format_status_label(status: Status) -> String {
     }
 }
 
+/// Lit les fichiers modifiés, les stashes, la branche et l'identité Git. Les patches ne sont
+/// pas calculés ici : seul celui du fichier sélectionné est chargé.
+fn read_snapshot(repo_path: &str) -> Result<Snapshot, String> {
+    let repo = Repository::open(repo_path).map_err(|err| err.to_string())?;
+    let (staged, unstaged) =
+        read_statuses(&repo).map_err(|err| format!("Failed to read changes: {err}"))?;
+    let stashes =
+        list_stashes(repo_path).map_err(|err| format!("Failed to read stashes: {err}"))?;
+    let branch = read_repo_status(repo_path).ok().and_then(|s| s.branch);
+    let signoff_line = repo.signature().ok().map(|sig| {
+        format!(
+            "Signed-off-by: {} <{}>",
+            sig.name().unwrap_or_default(),
+            sig.email().unwrap_or_default()
+        )
+    });
+    Ok(Snapshot {
+        staged,
+        unstaged,
+        stashes,
+        branch,
+        signoff_line,
+    })
+}
+
 /// Lit les statuts staged et unstaged depuis le dépôt.
-fn read_statuses(repo_path: &str) -> Result<(Vec<FileEntry>, Vec<FileEntry>), git2::Error> {
-    let repo = Repository::open(repo_path)?;
+fn read_statuses(repo: &Repository) -> Result<(Vec<FileEntry>, Vec<FileEntry>), git2::Error> {
     let mut status_opts = StatusOptions::new();
     status_opts
         .show(StatusShow::IndexAndWorkdir)
@@ -756,8 +921,6 @@ fn read_statuses(repo_path: &str) -> Result<(Vec<FileEntry>, Vec<FileEntry>), gi
         .include_unmodified(false);
 
     let statuses = repo.statuses(Some(&mut status_opts))?;
-    let staged_map = build_diff_map(staged_diff(repo_path)?);
-    let unstaged_map = build_diff_map(working_tree_diff(repo_path)?);
 
     let mut staged = Vec::new();
     let mut unstaged = Vec::new();
@@ -774,7 +937,6 @@ fn read_statuses(repo_path: &str) -> Result<(Vec<FileEntry>, Vec<FileEntry>), gi
         {
             staged.push(FileEntry {
                 status_label: format_status_label(status),
-                diff: lookup_or_refresh_diff(&staged_map, repo_path, &path, true)?,
                 path: path.clone(),
             });
         }
@@ -787,7 +949,6 @@ fn read_statuses(repo_path: &str) -> Result<(Vec<FileEntry>, Vec<FileEntry>), gi
         {
             unstaged.push(FileEntry {
                 status_label: format_status_label(status),
-                diff: lookup_or_refresh_diff(&unstaged_map, repo_path, &path, false)?,
                 path,
             });
         }
@@ -796,37 +957,17 @@ fn read_statuses(repo_path: &str) -> Result<(Vec<FileEntry>, Vec<FileEntry>), gi
     Ok((staged, unstaged))
 }
 
-/// Construit une table de correspondance chemin -> patch.
-fn build_diff_map(diffs: Vec<crate::git::diff::FileDiff>) -> HashMap<String, String> {
-    diffs
-        .into_iter()
-        .map(|diff| (diff.path, diff.patch))
-        .collect()
-}
-
-/// Cherche un diff dans la table, ou le recalcule à la volée.
-fn lookup_or_refresh_diff(
-    diffs: &HashMap<String, String>,
-    repo_path: &str,
-    path: &str,
-    staged: bool,
-) -> Result<String, git2::Error> {
-    if let Some(patch) = diffs.get(path) {
-        return Ok(patch.clone());
-    }
-
-    let patch = diff_file(repo_path, path, staged)?
-        .map(|entry| entry.patch)
-        .unwrap_or_else(|| "(no textual diff available)\n".to_string());
-    Ok(patch)
-}
-
-/// Indexe un fichier dans le dépôt git.
+/// Indexe un fichier du dépôt : son contenu s'il existe dans l'arbre de travail, sinon sa
+/// suppression. `path` est relatif à la racine du dépôt, pas au dossier courant du processus.
 fn stage_path(repo_path: &str, path: &str) -> Result<(), git2::Error> {
     let repo = Repository::open(repo_path)?;
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| git2::Error::from_str("bare repository has no working tree"))?;
     let mut index = repo.index()?;
     let path_ref = Path::new(path);
-    if path_ref.exists() {
+    // symlink_metadata: a dangling symlink is still a file to add.
+    if workdir.join(path_ref).symlink_metadata().is_ok() {
         index.add_path(path_ref)?;
     } else {
         index.remove_path(path_ref)?;
@@ -840,14 +981,55 @@ fn unstage_path(repo_path: &str, path: &str) -> Result<(), git2::Error> {
     repo.reset_default(None, [Path::new(path)])
 }
 
-/// Retourne la ligne Signed-off-by par défaut.
-fn default_signoff_line() -> String {
-    match Signature::now("GitSpace", "gitspace@example.com") {
-        Ok(sig) => format!(
-            "Signed-off-by: {} <{}>",
-            sig.name().unwrap_or("GitSpace"),
-            sig.email().unwrap_or("gitspace@example.com")
-        ),
-        Err(_) => "Signed-off-by: GitSpace <gitspace@example.com>".to_string(),
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stage_path_resolves_files_in_the_repository_not_the_process_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let mut config = repo.config().unwrap();
+        config.set_str("user.name", "Test User").unwrap();
+        config.set_str("user.email", "test@example.com").unwrap();
+        let repo_path = dir.path().to_str().unwrap();
+
+        // Cargo runs tests from the crate root, which has a Cargo.toml and no notes file.
+        // The old code checked these names there and got both of them wrong.
+        let modified = "only-in-the-test-repo.txt";
+        let deleted = "Cargo.toml";
+        let workdir = dir.path();
+        std::fs::write(workdir.join(modified), "one").unwrap();
+        std::fs::write(workdir.join(deleted), "[package]").unwrap();
+        stage_path(repo_path, modified).unwrap();
+        stage_path(repo_path, deleted).unwrap();
+        commit_index(repo_path, "initial").unwrap();
+
+        std::fs::write(workdir.join(modified), "two").unwrap();
+        std::fs::remove_file(workdir.join(deleted)).unwrap();
+        stage_path(repo_path, modified).unwrap();
+        stage_path(repo_path, deleted).unwrap();
+
+        let status = |name| repo.status_file(Path::new(name)).unwrap();
+        assert_eq!(status(modified), Status::INDEX_MODIFIED);
+        assert_eq!(status(deleted), Status::INDEX_DELETED);
+    }
+
+    #[test]
+    fn snapshot_lists_changes_without_patches_and_reads_the_signoff() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let mut config = repo.config().unwrap();
+        config.set_str("user.name", "Test User").unwrap();
+        config.set_str("user.email", "test@example.com").unwrap();
+        std::fs::write(dir.path().join("new.txt"), "x").unwrap();
+
+        let snapshot = read_snapshot(dir.path().to_str().unwrap()).unwrap();
+        assert!(snapshot.staged.is_empty());
+        assert_eq!(snapshot.unstaged[0].path, "new.txt");
+        assert_eq!(
+            snapshot.signoff_line.as_deref(),
+            Some("Signed-off-by: Test User <test@example.com>")
+        );
     }
 }

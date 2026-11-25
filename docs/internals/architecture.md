@@ -1,13 +1,13 @@
 # Architecture
 
 GitSpace is one binary crate, `gitspace`, with no workspace and no build script. `src/main.rs`
-answers `--version`, starts logging and hands the window to eframe; everything else lives in
+answers `--version`, starts logging and hands the window to iced; everything else lives in
 five modules.
 
 ```
 src/
-├── main.rs        entry point: --version, logging, eframe::run_native
-├── ui/            the egui application: shell, tabs, panels, theme, motion
+├── main.rs        entry point: --version, logging, iced::application
+├── ui/            the iced application: shell, tabs, panels, theme
 ├── git/           repository operations on top of git2, plus the git CLI for three of them
 ├── auth/          tokens: validation, OAuth, keyring and encrypted-file storage
 ├── config.rs      config.json: preferences, network and logging options, atomic writes
@@ -21,40 +21,45 @@ token as a plain argument from the UI.
 
 ## `ui`: the application
 
-`ui/app.rs` holds `GitSpaceApp`, the `eframe::App`. Each frame it handles keyboard shortcuts,
-draws the shell from `ui/layout.rs` (header, left rail, tab strip, see
-[gitkraken-layout.md](../project/gitkraken-layout.md)) and the active tab, applies changes the
-panels report through `take_*` methods, and runs auto-fetch when it is due.
+`ui/app.rs` holds `GitSpaceApp`, the iced application state. Its `update` routes each
+message to the panel it belongs to, applies changes the panels report through `take_*`
+methods, and reloads the other panels when one of them changes the repository (commit,
+checkout, merge, rebase). Its `view` draws the shell from `ui/layout.rs` (header, left rail,
+tab strip, see [gitkraken-layout.md](../project/gitkraken-layout.md)) and the active tab. Its
+subscriptions are the Ctrl+1 to Ctrl+7 tab shortcuts, the auto-fetch timer and the toast
+timer.
 
 One file per tab: `clone.rs` (search and clone), `recent.rs` (the Open tab), `repo_overview.rs`,
 `stage.rs`, `history.rs`, `branches.rs`, `auth.rs`, and `preferences.rs` for the full-window
-Preferences. `settings.rs` is an older settings panel that the tab strip no longer shows.
-Shared pieces: `theme.rs` (the Catppuccin palettes), `animation.rs` (motion tokens and reduced
-motion), `menu.rs` (menu items and their hover animation), `fonts.rs` (the bundled JetBrains
-Mono Nerd Font), `notifications.rs` (toasts) and `perf.rs` (frame timings, logged when
-`GITSPACE_PROFILE_UI` is set). `dev_gallery.rs` is a widget gallery shown in debug builds only.
+Preferences. Shared pieces: `theme.rs` (the Catppuccin palettes), `menu.rs` (menu items),
+`fonts.rs` (the bundled JetBrains Mono Nerd Font, Regular only), `context.rs` (the open
+repository) and `notifications.rs` (toasts).
 
-Network work that can take a while (clone, repository search, token checks, OAuth, auto-fetch)
-runs on a thread behind a `poll_promise::Promise` that the frame polls. Fetch, pull and push
-from Repo Overview still run on the UI thread.
+Every git, keyring and network call runs in an iced `Task`, on tokio's blocking pool, and
+returns its result as a message. Results carry the repository path they were computed for,
+and a panel drops a result for a repository that is no longer open. `view` functions only
+read state.
 
 ## `git`: repository operations
 
 Thin functions over [git2](https://docs.rs/git2) (libgit2, vendored OpenSSL), one file per
-area: `clone.rs`, `remote.rs` (fetch, pull as fast-forward only, push, prune), `branch.rs`,
-`log.rs`, `diff.rs`, `status.rs`, `stash.rs`, `compare.rs` and `discovery.rs` (repository root,
-worktrees, submodules).
+area: `clone.rs`, `remote.rs` (fetch, pull as a fast-forward of the checked-out branch only,
+push of the checked-out branch to its upstream), `branch.rs`, `commit.rs`, `log.rs`,
+`diff.rs`, `status.rs`, `stash.rs`, `compare.rs` and `merge.rs`. Checkout, pull and stash
+apply use libgit2's safe checkout, which fails instead of overwriting a modified file.
 
 `transport.rs` is shared by every network operation: it checks the URL against the network
 preferences (HTTPS preferred, SSH allowed), picks the proxy, applies the idle timeout, and
-answers libgit2's credential callback. HTTPS remotes get the saved token, plain HTTP never
-does, and SSH tries ssh-agent then the default key files, each method once.
+answers libgit2's credential callback. Only `https://` remotes get the saved token. Any URL
+with a colon before its first slash (`ssh://`, `git+ssh://`, `host:path`) counts as SSH, which
+tries ssh-agent then the default key files, each method once.
 
 Three operations shell out to the `git` command instead of libgit2, which is why `git` must
-be on `PATH` at runtime: merge and rebase (`merge.rs`, with a timeout) and restoring a file
-from another branch (`branch.rs`).
+be on `PATH` at runtime: merge and rebase (`merge.rs`, with a timeout, reading git's output
+while it runs) and restoring a file from another branch (`branch.rs`).
 
-`repo_cache.rs` is a cache of open repositories that nothing calls yet.
+`repo_cache.rs` keeps a few open `Repository` handles per thread for the read-only
+functions; `merge.rs` re-reads the index before it lists conflicts.
 
 ## `auth`: tokens
 
@@ -64,8 +69,12 @@ it, and `TokenStorage`, which keeps it. Tokens go to the operating system keyrin
 With the encrypted fallback on, they are also written to `tokens.enc` (ChaCha20-Poly1305,
 fresh nonce per write) under a key that lives in the keyring, or in `token-local-key.bin`
 when the keyring is unavailable, optionally mixed with `GITSPACE_TOKEN_MASTER_PASSWORD`
-through Argon2id. A file that exists but cannot be decrypted is never overwritten.
-Host names are normalised to `https://`; a plain `http://` host is refused before any request.
+through Argon2id. If the keyring key cannot decrypt the file, the local key is tried and the
+file is written again under the keyring key. A file that exists but cannot be decrypted is
+never overwritten, and secret files are created owner-only (0600) on Unix. Tokens are saved
+under the lowercase host name without scheme or port, the form lookups use; a plain `http://`
+host is refused before any request. Signing out removes the token from the keyring and from
+`tokens.enc`.
 
 `auth/oauth.rs` runs the two OAuth sign-ins, both through its own reqwest client with
 redirects turned off:
@@ -79,7 +88,8 @@ redirects turned off:
 - **GitLab** uses the authorization code flow with PKCE: `OAuthFlow` opens the browser and
   listens for the callback on `127.0.0.1` port 9876, the redirect URI registered with the
   GitLab application. If that port is in use, sign-in stops with an error before the browser
-  opens.
+  opens. A request without the expected `state` gets a 400 and the listener keeps waiting.
+  An expired GitLab token is refreshed with its refresh token when it is next needed.
 
 The client IDs come from `GITSPACE_GITHUB_CLIENT_ID` and `GITSPACE_GITLAB_CLIENT_ID` at build
 time (`ui/auth.rs`), and otherwise from the IDs entered under Configure OAuth Apps.
@@ -87,7 +97,7 @@ time (`ui/auth.rs`), and otherwise from the IDs entered under Configure OAuth Ap
 ## `config`, `logging`, `error`
 
 `config.rs` loads and saves `config.json`. An unknown value falls back to its default
-without discarding the rest, an unparseable file is backed up before defaults are used, and
+without discarding the rest, out-of-range numbers are clamped when read, an unparseable file is backed up before defaults are used, and
 every write goes through `write_atomic` (temporary file, sync, rename). Where the files live
 is in [configuration](../guide/configuration.md).
 
@@ -114,7 +124,7 @@ Today these only log a warning at startup; nothing else reads them.
 ## Tests
 
 Unit tests sit next to the code, in a `#[cfg(test)] mod tests` block, or in `git/tests.rs`
-and `ui/tests.rs` for the larger suites. The git tests build throwaway repositories with
+for the larger git suite. The git tests build throwaway repositories with
 `tempfile`. CI runs the built binary with `--version`, as the release smoke test does.
 
 ## Release chain

@@ -1,5 +1,7 @@
+use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 // Utilise le cache thread-local pour les opérations en lecture seule
@@ -53,10 +55,12 @@ pub fn merge_branch<P: AsRef<Path>>(
             }
         )
     } else {
-        String::from_utf8_lossy(&output.stderr)
-            .trim()
-            .to_string()
-            .if_empty_then(|| "Operation completed with conflicts".to_string())
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if stderr.is_empty() {
+            "Operation completed with conflicts".to_string()
+        } else {
+            stderr
+        }
     };
 
     Ok(MergeOutcome {
@@ -70,7 +74,9 @@ pub fn detect_conflicts<P: AsRef<Path>>(repo_path: P) -> Result<Vec<String>, git
     // Détection des conflits en lecture seule — utilise le cache thread-local
     with_cached_repo(repo_path, |repo| {
         let mut conflicts = Vec::new();
-        if let Ok(index) = repo.index() {
+        if let Ok(mut index) = repo.index() {
+            // The cached repository keeps its index: reload it after `git merge` wrote one.
+            index.read(false)?;
             if index.has_conflicts() {
                 for conflict in index.conflicts()?.flatten() {
                     if let Some(name) = conflict
@@ -87,20 +93,6 @@ pub fn detect_conflicts<P: AsRef<Path>>(repo_path: P) -> Result<Vec<String>, git
         }
         Ok(conflicts)
     })
-}
-
-trait EmptyStringExt {
-    fn if_empty_then(self, alt: impl FnOnce() -> String) -> String;
-}
-
-impl EmptyStringExt for String {
-    fn if_empty_then(self, alt: impl FnOnce() -> String) -> String {
-        if self.is_empty() {
-            alt()
-        } else {
-            self
-        }
-    }
 }
 
 /// Runs a git command with a timeout.
@@ -121,36 +113,23 @@ fn run_git_command_with_timeout(
         .spawn()
         .map_err(|err| format!("Failed to start git {command}: {err}"))?;
 
+    // Drain both pipes while git runs: a full pipe buffer would block it forever.
+    let stdout = child.stdout.take().map(drain);
+    let stderr = child.stderr.take().map(drain);
+    let collect = |pipe: Option<JoinHandle<Vec<u8>>>| {
+        pipe.and_then(|handle| handle.join().ok())
+            .unwrap_or_default()
+    };
+
     // Wait for the process with timeout
     let start = std::time::Instant::now();
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                // Process exited, collect output
-                let stdout = child
-                    .stdout
-                    .take()
-                    .map(|mut s| {
-                        let mut buf = Vec::new();
-                        std::io::Read::read_to_end(&mut s, &mut buf).ok();
-                        buf
-                    })
-                    .unwrap_or_default();
-
-                let stderr = child
-                    .stderr
-                    .take()
-                    .map(|mut s| {
-                        let mut buf = Vec::new();
-                        std::io::Read::read_to_end(&mut s, &mut buf).ok();
-                        buf
-                    })
-                    .unwrap_or_default();
-
                 return Ok(std::process::Output {
                     status,
-                    stdout,
-                    stderr,
+                    stdout: collect(stdout),
+                    stderr: collect(stderr),
                 });
             }
             Ok(None) => {
@@ -171,5 +150,37 @@ fn run_git_command_with_timeout(
                 return Err(format!("Failed to wait for git {command}: {err}"));
             }
         }
+    }
+}
+
+/// Reads `pipe` to the end on a separate thread.
+fn drain(mut pipe: impl Read + Send + 'static) -> JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = pipe.read_to_end(&mut buf);
+        buf
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output_larger_than_a_pipe_buffer_does_not_block_git() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let big = "x".repeat(200 * 1024);
+        let blob = repo.blob(big.as_bytes()).unwrap().to_string();
+
+        let output = run_git_command_with_timeout(
+            dir.path(),
+            "cat-file",
+            &["-p", &blob],
+            Duration::from_secs(30),
+        )
+        .expect("git cat-file");
+        assert!(output.status.success());
+        assert_eq!(output.stdout.len(), big.len());
     }
 }
