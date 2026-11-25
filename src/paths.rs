@@ -69,7 +69,7 @@ pub enum MigrationOutcome {
 ///
 /// Safe to run again after a crash: a file already at its destination with the same bytes
 /// only has its source removed. A destination holding different bytes stops the move before
-/// anything is touched.
+/// anything is touched; an error during the move puts the files already moved back.
 pub fn migrate_legacy(legacy: &LegacyDirs, config: &Path, data: &Path) -> MigrationOutcome {
     if config.join(CONFIG_FILE).exists() || !legacy.config.join(CONFIG_FILE).exists() {
         return MigrationOutcome::NothingToDo;
@@ -102,15 +102,17 @@ pub fn migrate_legacy(legacy: &LegacyDirs, config: &Path, data: &Path) -> Migrat
         if legacy_logs.is_dir() {
             fs::create_dir_all(&logs)?;
         }
-        let mut moved = Vec::new();
+        let mut moved: Vec<(&Path, &Path)> = Vec::new();
         for (from, to) in &pairs {
-            if move_file(from, to)? {
-                moved.push(to.clone());
+            match move_file(from, to) {
+                Ok(true) => moved.push((from, to)),
+                Ok(false) => {}
+                Err(err) => return Err(roll_back(&moved, err)),
             }
         }
         // Best effort: leaves the folder in place if something unexpected is still inside.
         let _ = fs::remove_dir(&legacy_logs);
-        Ok(moved)
+        Ok(moved.into_iter().map(|(_, to)| to.to_path_buf()).collect())
     })();
 
     match result {
@@ -136,14 +138,31 @@ fn move_file(from: &Path, to: &Path) -> io::Result<bool> {
         fs::remove_file(from)?;
         return Ok(true);
     }
+    rename_or_copy(from, to)?;
+    Ok(true)
+}
+
+fn rename_or_copy(from: &Path, to: &Path) -> io::Result<()> {
     match fs::rename(from, to) {
-        Ok(()) => Ok(true),
-        Err(err) if err.kind() == io::ErrorKind::CrossesDevices => {
-            copy_then_remove(from, to)?;
-            Ok(true)
-        }
-        Err(err) => Err(err),
+        Err(err) if err.kind() == io::ErrorKind::CrossesDevices => copy_then_remove(from, to),
+        other => other,
     }
+}
+
+/// Puts the files already moved back in the legacy folder, newest first, so this run can
+/// read everything from there and the next start begins the move again.
+fn roll_back(moved: &[(&Path, &Path)], err: io::Error) -> io::Error {
+    let mut message = err.to_string();
+    for (from, to) in moved.iter().rev() {
+        if let Err(back) = rename_or_copy(to, from) {
+            message.push_str(&format!(
+                "; could not move {} back to {}: {back}",
+                to.display(),
+                from.display()
+            ));
+        }
+    }
+    io::Error::new(err.kind(), message)
 }
 
 /// The cross-filesystem move: copy to a temporary name, sync, keep the mode, rename into
@@ -328,6 +347,47 @@ mod tests {
         assert!(f.legacy.config.join(CONFIG_FILE).exists());
         assert!(f.legacy.config.join("token-hosts.json").exists());
         assert!(!f.config.join("token-hosts.json").exists());
+    }
+
+    /// The failure comes after three files have moved: renaming a directory onto a dangling
+    /// symlink fails with ENOTDIR, while the pre-check sees no destination.
+    #[cfg(unix)]
+    #[test]
+    fn a_failure_midway_puts_every_moved_file_back() {
+        let f = fixture();
+        let earlier = ["token-hosts.json", "token-salt.bin", "token-local-key.bin"];
+        for name in earlier.into_iter().chain([CONFIG_FILE]) {
+            write(&f.legacy.config.join(name), name.as_bytes());
+        }
+        fs::create_dir_all(f.legacy.config.join("tokens.enc")).unwrap();
+        fs::create_dir_all(&f.config).unwrap();
+        std::os::unix::fs::symlink(f.config.join("missing"), f.config.join("tokens.enc")).unwrap();
+        let log = f.legacy.data.join(LOGS_DIR).join("gitspace.log.2026-11-24");
+        write(&log, b"log");
+
+        let outcome = migrate_legacy(&f.legacy, &f.config, &f.data);
+
+        assert!(
+            matches!(outcome, MigrationOutcome::Failed { .. }),
+            "{outcome:?}"
+        );
+        for name in earlier.into_iter().chain([CONFIG_FILE]) {
+            assert_eq!(
+                fs::read(f.legacy.config.join(name)).unwrap(),
+                name.as_bytes(),
+                "{name} not back in the legacy folder"
+            );
+            assert!(
+                !f.config.join(name).exists(),
+                "{name} left in the new folder"
+            );
+        }
+        assert_eq!(fs::read(&log).unwrap(), b"log");
+        assert!(!f
+            .data
+            .join(LOGS_DIR)
+            .join("gitspace.log.2026-11-24")
+            .exists());
     }
 
     /// `rename` cannot cross filesystems in a test, so the fallback is checked directly.

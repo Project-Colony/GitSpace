@@ -29,7 +29,8 @@ folder, GitSpace moves the files listed above and the logs there, `config.json` 
 the owner-only permissions of the token files. If GitSpace stops during the move, the next start
 finishes it. When a file exists in both folders with different content, GitSpace moves nothing,
 uses the old folder for that run and shows an error; move or delete one of the two copies, then
-restart.
+restart. If another error stops the move, for example a full disk, GitSpace puts the files it already
+moved back in the old folder, uses that folder for the run and tries again on the next start.
 
 ## When a file cannot be read
 
