@@ -1026,16 +1026,18 @@ fn shortcut(
     }
 }
 
-/// The digit of a top-row or keypad key, whatever it types: on AZERTY the 1 key types "&".
+/// The digit of a top-row key, whatever it types: on AZERTY the 1 key types "&". Keypad keys
+/// need no fallback: with NumLock on they type their digit, and with it off they are named
+/// keys such as End, which never reach this.
 fn digit_key(physical: Physical) -> Option<usize> {
     let Physical::Code(code) = physical else {
         return None;
     };
     match code {
-        Code::Digit1 | Code::Numpad1 => Some(1),
-        Code::Digit2 | Code::Numpad2 => Some(2),
-        Code::Digit3 | Code::Numpad3 => Some(3),
-        Code::Digit4 | Code::Numpad4 => Some(4),
+        Code::Digit1 => Some(1),
+        Code::Digit2 => Some(2),
+        Code::Digit3 => Some(3),
+        Code::Digit4 => Some(4),
         _ => None,
     }
 }
@@ -1257,7 +1259,16 @@ mod tests {
         assert_eq!(azerty("\"", Code::Digit3), "TabShortcut(2)");
         assert_eq!(azerty("'", Code::Digit4), "TabShortcut(3)");
         assert_eq!(azerty("(", Code::Digit5), "None");
+        // The keypad types its digit with NumLock on, and is a named key with it off.
         assert_eq!(azerty("1", Code::Numpad1), "TabShortcut(0)");
+        let end = super::shortcut(
+            Key::Named(Named::End),
+            Physical::Code(Code::Numpad1),
+            Modifiers::COMMAND,
+            false,
+            false,
+        );
+        assert_eq!(name(end), "None");
     }
 
     #[test]
