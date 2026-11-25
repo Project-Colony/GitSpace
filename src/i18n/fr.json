@@ -1,4 +1,6 @@
 {
+  "copy_log_path": "Copier le chemin des journaux",
+  "retry": "Réessayer",
   "startup_migration_failed": "Impossible de déplacer vos réglages vers le nouveau dossier",
   "startup_migration_failed_detail": "GitSpace utilise l'ancien dossier pour l'instant. {error}"
 }

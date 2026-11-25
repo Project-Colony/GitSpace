@@ -3,7 +3,7 @@
 //! Centralise le modèle, les messages, le dispatch update/view,
 //! les subscriptions (auto-fetch, notifications, clavier) et le thème.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use iced::widget::{column, container, row};
 use iced::{Element, Length, Subscription, Task};
@@ -19,12 +19,12 @@ use crate::ui::{
     context::RepoContext,
     history::HistoryPanel,
     layout::{self, LayoutMessage, MainTab},
-    notifications::{Notification, NotificationAction, NotificationCenter},
     preferences::PreferencesPanel,
     recent::RecentList,
     repo_overview::{self, RepoOverviewPanel},
     stage::{self, StagePanel},
     theme::Theme,
+    widgets::toast::{Toast, ToastAction, Toasts},
 };
 
 // ─── Message principal ─────────────────────────────────────────────────────
@@ -45,14 +45,15 @@ pub enum Message {
     Auth(crate::ui::auth::Message),
     Preferences(crate::ui::preferences::Message),
 
-    // Notifications
-    Notification(crate::ui::notifications::Message),
+    // Toasts
+    ToastDismissed(u64),
+    ToastAction(u64, ToastAction),
 
     // Chargement async du contexte d'un depot
     RepoContextLoaded(String, Option<RepoContext>),
 
-    // Tick de nettoyage notifications
-    NotificationTick,
+    /// Removes expired toasts and redraws fading ones.
+    ToastTick,
 
     // Auto-fetch timer tick
     AutoFetchTick,
@@ -85,7 +86,7 @@ pub struct GitSpaceApp {
     /// Dernier depot demande : seul son resultat de chargement est applique.
     pending_repo: Option<String>,
     auth_manager: AuthManager,
-    notifications: NotificationCenter,
+    toasts: Toasts,
 }
 
 impl GitSpaceApp {
@@ -120,11 +121,11 @@ impl GitSpaceApp {
             auth_manager,
             active_tab: MainTab::Clone,
             tab_order: MainTab::ALL.to_vec(),
-            notifications: NotificationCenter::new(),
+            toasts: Toasts::default(),
         };
 
         if let Some(error) = migration_error {
-            app.notifications.push(Notification::error(
+            app.toasts.push(Toast::error(
                 t("startup_migration_failed"),
                 tf("startup_migration_failed_detail", &[("error", &error)]),
             ));
@@ -155,7 +156,7 @@ impl GitSpaceApp {
                     LayoutMessage::OpenFileManager => {
                         if let Some(repo) = &self.current_repo {
                             if let Err(err) = repo_overview::open_folder(repo.path()) {
-                                self.notifications.push(Notification::error(
+                                self.toasts.push(Toast::error(
                                     "Impossible d'ouvrir le dossier",
                                     format!("{} : {err}", repo.path()),
                                 ));
@@ -208,14 +209,11 @@ impl GitSpaceApp {
                     let current = self.current_repo.as_ref().map(|repo| repo.path());
                     if current != Some(&**path) {
                         // The panel only shows results for the open repository.
-                        let detail = match result {
-                            Ok(msg) => msg.clone(),
-                            Err(err) => format!("Échec : {err}"),
-                        };
-                        self.notifications.push(Notification::error(
-                            format!("{} sur {path}", action.label()),
-                            detail,
-                        ));
+                        let title = format!("{} sur {path}", action.label());
+                        self.toasts.push(match result {
+                            Ok(msg) => Toast::success(format!("{title} : {msg}")),
+                            Err(err) => Toast::error(title, format!("Échec : {err}")),
+                        });
                     } else {
                         pulled =
                             matches!(action, repo_overview::RemoteAction::Pull) && result.is_ok();
@@ -307,15 +305,19 @@ impl GitSpaceApp {
                 Task::batch([panel_task.map(Message::Preferences), extra_task])
             }
 
-            // ── Notifications ──────────────────────────────────────────
-            Message::Notification(msg) => {
-                let actions = self.notifications.update(msg);
-                self.handle_notification_actions(actions)
+            // ── Toasts ─────────────────────────────────────────────────
+            Message::ToastDismissed(id) => {
+                self.toasts.dismiss(id);
+                Task::none()
             }
 
-            Message::NotificationTick => {
-                self.notifications
-                    .update(crate::ui::notifications::Message::Tick);
+            Message::ToastAction(id, action) => {
+                self.toasts.dismiss(id);
+                self.handle_toast_action(action)
+            }
+
+            Message::ToastTick => {
+                self.toasts.expire(Instant::now());
                 Task::none()
             }
 
@@ -327,7 +329,7 @@ impl GitSpaceApp {
                 }
                 self.pending_repo = None;
                 let Some(repo) = context else {
-                    self.notifications.push(Notification::error(
+                    self.toasts.push(Toast::error(
                         "Impossible d'ouvrir le dépôt",
                         format!("{path} n'est pas un dépôt Git lisible."),
                     ));
@@ -390,7 +392,7 @@ impl GitSpaceApp {
         // Si le panneau de preferences est ouvert, afficher uniquement celui-ci
         if self.preferences_panel.is_open() {
             if let Some(prefs_view) = self.preferences_panel.view(theme) {
-                let overlay = self.notification_overlay(theme);
+                let overlay = self.toast_overlay();
                 return column![prefs_view.map(Message::Preferences), overlay,].into();
             }
         }
@@ -409,8 +411,7 @@ impl GitSpaceApp {
         // Contenu de l'onglet actif
         let content = self.view_active_tab(theme);
 
-        // Overlay notifications
-        let notification_overlay = self.notification_overlay(theme);
+        let toast_overlay = self.toast_overlay();
 
         // Assemblage : header en haut, puis sidebar + (tabs + content) en dessous
         let main_area = column![tab_bar, content,]
@@ -437,13 +438,13 @@ impl GitSpaceApp {
                 ..Default::default()
             });
 
-        if self.notifications.is_empty() {
+        if self.toasts.is_empty() {
             base.into()
         } else {
             // Placer les notifications en overlay via une colonne empilee
             column![iced::widget::stack![
                 base,
-                container(notification_overlay)
+                container(toast_overlay)
                     .width(Length::Fill)
                     .align_x(iced::alignment::Horizontal::Right)
                     .padding(iced::Padding {
@@ -487,9 +488,9 @@ impl GitSpaceApp {
         }
     }
 
-    /// Overlay des notifications toast.
-    fn notification_overlay<'a>(&'a self, theme: &'a Theme) -> Element<'a, Message> {
-        self.notifications.view(theme).map(Message::Notification)
+    fn toast_overlay(&self) -> Element<'_, Message> {
+        self.toasts
+            .view(Message::ToastDismissed, Message::ToastAction)
     }
 
     // ─── Theme ─────────────────────────────────────────────────────────
@@ -501,13 +502,15 @@ impl GitSpaceApp {
 
     // ─── Subscriptions ─────────────────────────────────────────────────
 
-    /// Abonnements actifs : tick notifications + timer auto-fetch.
+    /// Abonnements actifs : tick des toasts + timer auto-fetch.
     pub fn subscription(&self) -> Subscription<Message> {
         let mut subs = Vec::new();
 
-        // Tick pour le dismiss automatique des notifications
-        if !self.notifications.is_empty() {
-            subs.push(iced::time::every(Duration::from_secs(1)).map(|_| Message::NotificationTick));
+        // Expire toasts once a second; every frame while one fades out.
+        if self.toasts.is_fading(Instant::now()) {
+            subs.push(iced::window::frames().map(|_| Message::ToastTick));
+        } else if !self.toasts.is_empty() {
+            subs.push(iced::time::every(Duration::from_secs(1)).map(|_| Message::ToastTick));
         }
 
         // Timer auto-fetch. Il est recree apres chaque operation du panneau, donc le prochain
@@ -536,7 +539,7 @@ impl GitSpaceApp {
     /// Sauvegarde la configuration et notifie l'utilisateur en cas d'echec.
     fn save_config(&mut self) {
         if let Err(err) = self.config.save() {
-            self.notifications.push(Notification::error(
+            self.toasts.push(Toast::error(
                 "Erreur de sauvegarde",
                 format!("Impossible de sauvegarder la configuration : {err}"),
             ));
@@ -607,23 +610,16 @@ impl GitSpaceApp {
         self.save_config();
     }
 
-    /// Traite les actions declenchees depuis les notifications.
-    fn handle_notification_actions(&mut self, actions: Vec<NotificationAction>) -> Task<Message> {
-        let mut tasks = Vec::new();
-        for action in actions {
-            match action {
-                NotificationAction::RetryClone => {
-                    let (task, _) = self
-                        .clone_panel
-                        .update(clone::Message::RetryClone, &self.auth_manager);
-                    tasks.push(task.map(Message::Clone));
-                }
-                NotificationAction::CopyLogPath(path) => {
-                    tasks.push(iced::clipboard::write(path.display().to_string()));
-                }
+    fn handle_toast_action(&mut self, action: ToastAction) -> Task<Message> {
+        match action {
+            ToastAction::Retry => {
+                let (task, _) = self
+                    .clone_panel
+                    .update(clone::Message::RetryClone, &self.auth_manager);
+                task.map(Message::Clone)
             }
+            ToastAction::CopyLogPath(path) => iced::clipboard::write(path.display().to_string()),
         }
-        Task::batch(tasks)
     }
 
     /// Signale un échec de clonage ou de recherche, avec le chemin des logs.
@@ -637,13 +633,13 @@ impl GitSpaceApp {
             }
             _ => return,
         };
-        let mut notification = Notification::error(title, err.user_message());
+        let body = format!("{}\n{}", err.user_message(), err.detail());
+        let mut toast = Toast::error(title, body);
         if can_retry {
-            notification = notification.with_action(NotificationAction::RetryClone);
+            toast = toast.with_action(ToastAction::Retry);
         }
-        notification = notification.with_action(NotificationAction::CopyLogPath(logs_directory()));
-        notification.detail = Some(err.detail().to_string());
-        self.notifications.push(notification);
+        self.toasts
+            .push(toast.with_action(ToastAction::CopyLogPath(logs_directory())));
     }
 
     /// Signale l'echec d'un auto-fetch sur le depot courant.
@@ -656,8 +652,8 @@ impl GitSpaceApp {
         } = message
         {
             if self.current_repo.as_ref().map(RepoContext::path) == Some(&**path) {
-                self.notifications
-                    .push(Notification::error("Auto-fetch echoue", err.clone()));
+                self.toasts
+                    .push(Toast::error("Auto-fetch echoue", err.clone()));
             }
         }
     }
