@@ -13,6 +13,7 @@ use crate::git::transport::{
     configure_fetch_options, configure_push_options, create_push_callbacks,
     create_remote_callbacks, validate_transport_url,
 };
+use crate::i18n::{t, tf};
 
 /// Information about a configured remote.
 #[derive(Debug, Clone)]
@@ -113,8 +114,9 @@ pub fn pull_branch<P: AsRef<Path>>(
     let repo = Repository::open(path)?;
     let local_ref_name = format!("refs/heads/{local_branch}");
     if repo.find_reference("HEAD")?.symbolic_target()? != Some(local_ref_name.as_str()) {
-        return Err(AppError::Git(format!(
-            "Pull only updates the checked-out branch, and {local_branch} is not checked out."
+        return Err(AppError::Git(tf(
+            "remote_pull_not_checked_out",
+            &[("branch", local_branch)],
         )));
     }
 
@@ -132,9 +134,7 @@ pub fn pull_branch<P: AsRef<Path>>(
         return Ok(PullOutcome::FastForward);
     }
 
-    Err(AppError::Git(
-        "Non-fast-forward pull required. Please merge or rebase manually.".to_string(),
-    ))
+    Err(AppError::Git(t("remote_pull_diverged").to_string()))
 }
 
 /// Pushes a local branch to a branch on a remote.
@@ -157,8 +157,9 @@ pub fn push_branch<P: AsRef<Path>>(
     let repo = Repository::open(path)?;
     let local_ref_name = format!("refs/heads/{local_branch}");
     if repo.find_reference("HEAD")?.symbolic_target()? != Some(local_ref_name.as_str()) {
-        return Err(AppError::Git(format!(
-            "Push only sends the checked-out branch, and {local_branch} is not checked out."
+        return Err(AppError::Git(tf(
+            "remote_push_not_checked_out",
+            &[("branch", local_branch)],
         )));
     }
     let mut remote = repo.find_remote(remote_name)?;

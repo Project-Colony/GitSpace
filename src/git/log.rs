@@ -1,4 +1,6 @@
-use git2::{BranchType, ErrorCode, Repository, Time};
+use std::collections::HashMap;
+
+use git2::{BranchType, ErrorCode, Oid, Repository, Time};
 
 use crate::git::diff::commit_against_parent;
 // Utilise le cache thread-local pour éviter de réouvrir le dépôt à chaque appel
@@ -16,7 +18,7 @@ pub struct CommitFilter {
 #[derive(Debug, Clone)]
 pub struct CommitInfo {
     pub id: String,
-    /// Pre-computed short ID (first 8 chars) to avoid repeated string slicing in UI
+    /// The first 7 characters of the ID, as `git log --oneline` shows them.
     pub short_id: String,
     pub summary: String,
     pub message: String,
@@ -26,6 +28,25 @@ pub struct CommitInfo {
     pub files_changed: Option<usize>,
     pub additions: Option<usize>,
     pub deletions: Option<usize>,
+    /// More than one parent marks a merge commit.
+    pub parent_count: usize,
+    /// Branches and tags pointing at this commit; filled by `read_commit_log` only.
+    pub refs: Vec<RefLabel>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefLabel {
+    pub name: String,
+    pub kind: RefKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RefKind {
+    Local,
+    Remote,
+    Tag,
+    /// The checked-out branch, or `HEAD` itself when detached.
+    Head,
 }
 
 pub fn list_local_branches(repo_path: &str) -> Result<Vec<String>, git2::Error> {
@@ -73,6 +94,8 @@ pub fn read_commit_log(
             revwalk.push_head()?;
         }
 
+        let mut ref_map = build_ref_map(repo)?;
+
         // `limit` counts matching commits, so filters may walk further back.
         let mut commits = Vec::with_capacity(limit.min(256));
         for oid_result in revwalk {
@@ -85,6 +108,8 @@ pub fn read_commit_log(
             }
 
             let mut info = commit_info_from_commit(&commit);
+            // Each commit comes out of the walk once, so its labels can be moved out.
+            info.refs = ref_map.remove(&commit.id()).unwrap_or_default();
             if include_stats {
                 let stats = commit_against_parent(repo, commit.id(), None)?.stats()?;
                 info.files_changed = Some(stats.files_changed());
@@ -96,6 +121,59 @@ pub fn read_commit_log(
 
         Ok(commits)
     })
+}
+
+/// Maps every commit some branch, remote branch or tag points at to its labels.
+fn build_ref_map(repo: &Repository) -> Result<HashMap<Oid, Vec<RefLabel>>, git2::Error> {
+    let head = repo.head().ok();
+    let current_branch = head
+        .as_ref()
+        .filter(|head| head.is_branch())
+        .and_then(|head| head.name().ok().map(str::to_string));
+
+    let mut map: HashMap<Oid, Vec<RefLabel>> = HashMap::new();
+    for reference in repo.references()? {
+        let reference = reference?;
+        // `refs/remotes/origin/HEAD` only repeats another remote branch.
+        if reference.kind() == Some(git2::ReferenceType::Symbolic) {
+            continue;
+        }
+        let kind = if reference.is_branch() {
+            if reference.name().ok() == current_branch.as_deref() {
+                RefKind::Head
+            } else {
+                RefKind::Local
+            }
+        } else if reference.is_remote() {
+            RefKind::Remote
+        } else if reference.is_tag() {
+            RefKind::Tag
+        } else {
+            continue;
+        };
+        let (Ok(name), Ok(commit)) = (reference.shorthand(), reference.peel_to_commit()) else {
+            continue;
+        };
+        map.entry(commit.id()).or_default().push(RefLabel {
+            name: name.to_string(),
+            kind,
+        });
+    }
+
+    if let Some(oid) = head
+        .filter(|head| !head.is_branch())
+        .and_then(|head| head.target())
+    {
+        map.entry(oid).or_default().push(RefLabel {
+            name: "HEAD".to_string(),
+            kind: RefKind::Head,
+        });
+    }
+
+    for labels in map.values_mut() {
+        labels.sort_by(|a, b| (a.kind, &a.name).cmp(&(b.kind, &b.name)));
+    }
+    Ok(map)
 }
 
 fn matches_filter(commit: &git2::Commit<'_>, filter: &CommitFilter) -> bool {
@@ -111,16 +189,19 @@ fn matches_filter(commit: &git2::Commit<'_>, filter: &CommitFilter) -> bool {
         }
     }
 
+    // The History filter field: message, author name or email, or the start of the hash.
     if let Some(search) = &filter.search {
         let search_lower = search.to_lowercase();
-        let message = commit.message().unwrap_or_default().to_lowercase();
-        let summary = commit
-            .summary()
-            .ok()
-            .flatten()
-            .unwrap_or_default()
-            .to_lowercase();
-        if !message.contains(&search_lower) && !summary.contains(&search_lower) {
+        let author = commit.author();
+        let haystack = format!(
+            "{}\n{}\n{}",
+            commit.message().unwrap_or_default(),
+            author.name().unwrap_or_default(),
+            author.email().unwrap_or_default()
+        )
+        .to_lowercase();
+        if !haystack.contains(&search_lower) && !commit.id().to_string().starts_with(&search_lower)
+        {
             return false;
         }
     }
@@ -128,21 +209,6 @@ fn matches_filter(commit: &git2::Commit<'_>, filter: &CommitFilter) -> bool {
     let timestamp = commit.time().seconds();
     filter.since.is_none_or(|since| timestamp >= since)
         && filter.until.is_none_or(|until| timestamp <= until)
-}
-
-pub fn latest_commit_for_branch(
-    repo_path: &str,
-    branch_name: &str,
-) -> Result<Option<CommitInfo>, git2::Error> {
-    // Récupération du dernier commit d'une branche via le cache
-    with_cached_repo(repo_path, |repo| {
-        let oid = resolve_branch_oid(repo, branch_name)?;
-        let Some(oid) = oid else {
-            return Ok(None);
-        };
-        let commit = repo.find_commit(oid)?;
-        Ok(Some(commit_info_from_commit(&commit)))
-    })
 }
 
 pub fn commits_between_refs(
@@ -208,7 +274,7 @@ fn resolve_ref_oid(repo: &Repository, reference: &str) -> Result<Option<git2::Oi
 
 fn commit_info_from_commit(commit: &git2::Commit<'_>) -> CommitInfo {
     let id = commit.id().to_string();
-    let short_id = id.chars().take(8).collect();
+    let short_id = id.chars().take(7).collect();
     CommitInfo {
         id,
         short_id,
@@ -225,5 +291,7 @@ fn commit_info_from_commit(commit: &git2::Commit<'_>) -> CommitInfo {
         files_changed: None,
         additions: None,
         deletions: None,
+        parent_count: commit.parent_count(),
+        refs: Vec::new(),
     }
 }

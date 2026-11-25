@@ -6,13 +6,20 @@ use git2::{BranchType, Commit, Oid, Repository, RepositoryInitOptions, ResetType
 
 use crate::config::NetworkOptions;
 use crate::git::branch;
-use crate::git::branch::{list_branches, rename_branch, BranchKind};
+use crate::git::branch::{
+    list_branch_overview, list_branches, rename_branch, set_upstream, BranchKind, BranchOverview,
+};
 use crate::git::diff::{commit_diff_file, commit_diff_summaries, diff_file};
-use crate::git::log::{read_commit_log, CommitFilter};
+use crate::git::discover::discover_repositories;
+use crate::git::log::{read_commit_log, CommitFilter, RefKind};
 use crate::git::merge::detect_conflicts;
 use crate::git::remote::{fetch_remote, list_remotes, pull_branch, push_branch, PullOutcome};
-use crate::git::stash::{apply_stash, create_stash, drop_stash, list_stashes};
-use crate::git::status::read_repo_status;
+use crate::git::stash::{
+    apply_stash, count_stashable, create_stash, drop_stash, list_stashes, stash_file_patch,
+    stash_files,
+};
+use crate::git::status::{discard_file, quick_status, read_changes, read_repo_status, ChangeKind};
+use crate::i18n::t;
 
 fn init_temp_repo() -> (tempfile::TempDir, Repository) {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -80,6 +87,18 @@ fn repo_status_reports_tracking_progress() {
     assert_eq!(status.upstream.as_deref(), Some("origin/main"));
     assert_eq!(status.ahead, Some(1));
     assert_eq!(status.behind, Some(0));
+}
+
+#[test]
+fn repo_status_names_the_commit_of_a_detached_head() {
+    let (_dir, repo) = init_temp_repo();
+    let first = write_commit(&repo, "f.txt", "1", "first");
+    write_commit(&repo, "f.txt", "2", "second");
+    repo.set_head_detached(first).unwrap();
+
+    let status = read_repo_status(repo.path().parent().unwrap()).expect("status");
+    assert_eq!(status.branch, None);
+    assert_eq!(status.detached_at, Some(first.to_string()[..7].to_string()));
 }
 
 #[test]
@@ -374,9 +393,23 @@ fn stash_drop_refuses_a_changed_stash_list() {
     create_stash(path, "second", false).expect("stash");
 
     let err = drop_stash(path, first.index, &first.id).expect_err("stale index");
-    assert!(err.message().contains("refresh"), "{}", err.message());
+    assert_eq!(err.message(), t("stash_list_changed"));
     assert_eq!(list_stashes(path).unwrap().len(), 2);
     assert!(apply_stash(path, first.index, &first.id).is_err());
+}
+
+#[test]
+fn stash_without_a_message_gets_git_s_own() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    let path = root.to_str().unwrap();
+    write_commit(&repo, "a.txt", "base", "initial");
+    fs::write(root.join("a.txt"), "edited").unwrap();
+    create_stash(path, "", false).expect("stash");
+
+    let stash = list_stashes(path).unwrap().remove(0);
+    assert!(stash.message.starts_with("WIP on "), "{}", stash.message);
+    assert!(stash.branch.is_some());
 }
 
 #[test]
@@ -391,10 +424,32 @@ fn stash_apply_keeps_edits_in_other_files() {
     fs::write(root.join("b.txt"), "unsaved").unwrap();
 
     let stash = list_stashes(path).unwrap().remove(0);
-    apply_stash(path, stash.index, &stash.id).expect("apply");
+    let conflicts = apply_stash(path, stash.index, &stash.id).expect("apply");
 
+    assert!(!conflicts);
     assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "stashed");
     assert_eq!(fs::read_to_string(root.join("b.txt")).unwrap(), "unsaved");
+}
+
+#[test]
+fn stash_apply_reports_conflicts() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    let path = root.to_str().unwrap();
+    write_commit(&repo, "a.txt", "base", "add a");
+    fs::write(root.join("a.txt"), "stashed").unwrap();
+    create_stash(path, "a", false).expect("stash");
+    write_commit(&repo, "a.txt", "committed", "edit a");
+
+    let stash = list_stashes(path).unwrap().remove(0);
+    let conflicts = apply_stash(path, stash.index, &stash.id).expect("apply");
+
+    assert!(conflicts);
+    assert!(Repository::open(root)
+        .unwrap()
+        .index()
+        .unwrap()
+        .has_conflicts());
 }
 
 #[test]
@@ -414,6 +469,110 @@ fn stash_uses_the_configured_signature() {
 }
 
 #[test]
+fn stash_entry_has_branch_time_and_file_count() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    let path = root.to_str().unwrap();
+    write_commit(&repo, "a.txt", "a", "add a");
+    write_commit(&repo, "b.txt", "b", "add b");
+    fs::write(root.join("a.txt"), "changed a").unwrap();
+    fs::write(root.join("b.txt"), "changed b").unwrap();
+    create_stash(path, "two files", false).expect("stash");
+
+    let stash = list_stashes(path).unwrap().remove(0);
+    assert_eq!(stash.branch.as_deref(), Some("main"));
+    assert_eq!(stash.file_count, 2);
+    let stash_commit = repo.find_commit(Oid::from_str(&stash.id).unwrap()).unwrap();
+    assert_eq!(stash.time, stash_commit.time().seconds());
+    assert!(stash.time > 0);
+}
+
+#[test]
+fn stash_files_lists_changed_paths() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    let path = root.to_str().unwrap();
+    write_commit(&repo, "a.txt", "a\n", "add a");
+    write_commit(&repo, "b.txt", "b\n", "add b");
+    fs::write(root.join("a.txt"), "a\nmore\n").unwrap();
+    create_stash(path, "one file", false).expect("stash");
+
+    let stash = list_stashes(path).unwrap().remove(0);
+    let files = stash_files(path, stash.index, &stash.id).expect("files");
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].path, "a.txt");
+    assert_eq!((files[0].additions, files[0].deletions), (1, 0));
+
+    let patch = stash_file_patch(path, stash.index, &stash.id, "a.txt")
+        .expect("patch")
+        .expect("a.txt changed");
+    assert!(patch.patch.contains("+more"), "{}", patch.patch);
+    assert!(stash_file_patch(path, stash.index, &stash.id, "b.txt")
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn stash_lists_the_untracked_files_it_saved() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    let path = root.to_str().unwrap();
+    write_commit(&repo, "a.txt", "a\n", "add a");
+    fs::write(root.join("a.txt"), "a\nmore\n").unwrap();
+    fs::write(root.join("brand-new.txt"), "new\n").unwrap();
+    create_stash(path, "mixed", true).expect("stash");
+    assert!(!root.join("brand-new.txt").exists());
+
+    // git keeps the untracked file in the stash's third parent, not in the stash tree.
+    let stash = list_stashes(path).unwrap().remove(0);
+    assert_eq!(stash.file_count, 2);
+    let files = stash_files(path, stash.index, &stash.id).expect("files");
+    let paths: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
+    assert_eq!(paths, ["a.txt", "brand-new.txt"]);
+    assert_eq!((files[1].additions, files[1].deletions), (1, 0));
+    let patch = stash_file_patch(path, stash.index, &stash.id, "brand-new.txt")
+        .expect("patch")
+        .expect("brand-new.txt is in the stash");
+    assert!(patch.patch.contains("+new"), "{}", patch.patch);
+}
+
+#[test]
+fn stash_files_refuses_a_changed_list() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    let path = root.to_str().unwrap();
+    write_commit(&repo, "a.txt", "base", "initial");
+    fs::write(root.join("a.txt"), "first").unwrap();
+    create_stash(path, "first", false).expect("stash");
+    let first = list_stashes(path).unwrap().remove(0);
+    fs::write(root.join("a.txt"), "second").unwrap();
+    create_stash(path, "second", false).expect("stash");
+
+    let err = stash_files(path, first.index, &first.id).expect_err("stale index");
+    assert_eq!(err.message(), t("stash_list_changed"));
+    assert!(stash_file_patch(path, first.index, &first.id, "a.txt").is_err());
+}
+
+#[test]
+fn count_stashable_respects_untracked() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    let path = root.to_str().unwrap();
+    write_commit(&repo, ".gitignore", "*.log\n", "ignore logs");
+    write_commit(&repo, "a.txt", "a", "add a");
+    assert_eq!(count_stashable(path, true).unwrap(), 0);
+
+    fs::write(root.join("a.txt"), "changed").unwrap();
+    fs::create_dir(root.join("new")).unwrap();
+    fs::write(root.join("new/one.txt"), "1").unwrap();
+    fs::write(root.join("new/two.txt"), "2").unwrap();
+    fs::write(root.join("debug.log"), "ignored").unwrap();
+
+    assert_eq!(count_stashable(path, false).unwrap(), 1);
+    assert_eq!(count_stashable(path, true).unwrap(), 3);
+}
+
+#[test]
 fn checkout_refuses_to_overwrite_a_modified_file() {
     let (_dir, repo) = init_temp_repo();
     let root = repo.path().parent().unwrap();
@@ -426,6 +585,23 @@ fn checkout_refuses_to_overwrite_a_modified_file() {
     assert!(branch::checkout_branch(root, "other").is_err());
     assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "dirty");
     assert_eq!(repo.head().unwrap().shorthand().unwrap(), "main");
+}
+
+#[test]
+fn restore_from_branch_takes_the_path_literally() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    write_commit(&repo, "a.txt", "one", "initial");
+    let first = write_commit(&repo, "[a].txt", "bracket", "glob name");
+    repo.branch("other", &repo.find_commit(first).unwrap(), false)
+        .unwrap();
+    fs::write(root.join("a.txt"), "dirty").unwrap();
+    fs::write(root.join("[a].txt"), "edited").unwrap();
+
+    // `[a].txt` is a glob that also matches `a.txt`, and a name Windows accepts.
+    branch::restore_file_from_branch(root, "other", "[a].txt").expect("restore");
+    assert_eq!(fs::read_to_string(root.join("[a].txt")).unwrap(), "bracket");
+    assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "dirty");
 }
 
 #[test]
@@ -507,6 +683,27 @@ fn log_limit_counts_matching_commits() {
 }
 
 #[test]
+fn log_search_matches_author_and_hash_prefix() {
+    let (_dir, repo) = init_temp_repo();
+    let path = repo.path().parent().unwrap().to_str().unwrap().to_string();
+    let first = write_commit(&repo, "f.txt", "1", "first");
+    write_commit(&repo, "f.txt", "2", "second");
+    let search = |text: &str| {
+        let filter = CommitFilter {
+            search: Some(text.to_string()),
+            ..Default::default()
+        };
+        read_commit_log(&path, &filter, 10, false).expect("log")
+    };
+
+    assert_eq!(search("TESTER@example").len(), 2, "author email");
+    let by_hash = search(&first.to_string()[..7].to_uppercase());
+    assert_eq!(by_hash.len(), 1);
+    assert_eq!(by_hash[0].id, first.to_string());
+    assert!(search("nobody").is_empty());
+}
+
+#[test]
 fn log_branch_filter_accepts_remote_branches() {
     let (_dir, repo) = init_temp_repo();
     let path = repo.path().parent().unwrap().to_str().unwrap().to_string();
@@ -571,4 +768,509 @@ fn conflicts_written_by_another_handle_are_detected() {
     repo.merge(&[&annotated], None, None).unwrap();
 
     assert_eq!(detect_conflicts(root).unwrap(), vec!["c.txt".to_string()]);
+}
+
+#[test]
+fn read_changes_counts_lines_per_file() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    write_commit(&repo, "f.txt", "one\ntwo\nthree\nfour\nfive\n", "initial");
+    // Three lines changed and two appended: 5 added, 3 removed.
+    fs::write(
+        root.join("f.txt"),
+        "ONE\nTWO\nTHREE\nfour\nfive\nsix\nseven\n",
+    )
+    .unwrap();
+    fs::write(root.join("new.txt"), "a\nb\nc\nd\n").unwrap();
+
+    let changes = read_changes(root.to_str().unwrap()).expect("changes");
+    assert!(changes.staged.is_empty());
+    let file = changes.unstaged.iter().find(|f| f.path == "f.txt").unwrap();
+    assert_eq!(file.kind, ChangeKind::Modified);
+    assert_eq!((file.additions, file.deletions), (5, 3));
+    assert!(!file.binary);
+    let new = changes
+        .unstaged
+        .iter()
+        .find(|f| f.path == "new.txt")
+        .unwrap();
+    assert_eq!(new.kind, ChangeKind::Untracked);
+    assert_eq!((new.additions, new.deletions), (4, 0));
+}
+
+#[test]
+fn read_changes_splits_staged_and_unstaged() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    write_commit(&repo, "b.txt", "b\n", "add b");
+    write_commit(&repo, "c.txt", "same content\nfor the rename\n", "add c");
+
+    fs::write(root.join("a.txt"), "a\n").unwrap();
+    fs::write(root.join("b.txt"), "b\nstaged\n").unwrap();
+    fs::rename(root.join("c.txt"), root.join("d.txt")).unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_path(Path::new("a.txt")).unwrap();
+    index.add_path(Path::new("b.txt")).unwrap();
+    index.remove_path(Path::new("c.txt")).unwrap();
+    index.add_path(Path::new("d.txt")).unwrap();
+    index.write().unwrap();
+    fs::write(root.join("b.txt"), "b\nstaged\nunstaged\n").unwrap();
+
+    let changes = read_changes(root.to_str().unwrap()).expect("changes");
+    let staged: Vec<_> = changes
+        .staged
+        .iter()
+        .map(|f| (f.path.as_str(), f.kind, f.additions, f.deletions))
+        .collect();
+    assert!(
+        staged.contains(&("a.txt", ChangeKind::Added, 1, 0)),
+        "{staged:?}"
+    );
+    assert!(
+        staged.contains(&("b.txt", ChangeKind::Modified, 1, 0)),
+        "{staged:?}"
+    );
+    let renamed = changes.staged.iter().find(|f| f.path == "d.txt").unwrap();
+    assert_eq!(renamed.kind, ChangeKind::Renamed);
+    assert_eq!(renamed.old_path.as_deref(), Some("c.txt"));
+    assert_eq!(changes.staged.len(), 3);
+
+    assert_eq!(changes.unstaged.len(), 1, "{:?}", changes.unstaged);
+    let unstaged = &changes.unstaged[0];
+    assert_eq!(
+        (unstaged.path.as_str(), unstaged.kind),
+        ("b.txt", ChangeKind::Modified)
+    );
+    assert_eq!((unstaged.additions, unstaged.deletions), (1, 0));
+}
+
+#[test]
+fn read_changes_handles_two_thousand_untracked_files() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    write_commit(&repo, "README.md", "hello\n", "initial");
+    fs::create_dir(root.join("many")).unwrap();
+    for i in 0..2000 {
+        fs::write(root.join("many").join(format!("{i}.txt")), "line\n").unwrap();
+    }
+
+    let started = std::time::Instant::now();
+    let changes = read_changes(root.to_str().unwrap()).expect("changes");
+    let elapsed = started.elapsed();
+    assert_eq!(changes.unstaged.len(), 2000);
+    assert!(changes
+        .unstaged
+        .iter()
+        .all(|f| f.kind == ChangeKind::Untracked && f.additions == 1));
+    assert!(elapsed < std::time::Duration::from_secs(5), "{elapsed:?}");
+}
+
+#[test]
+fn read_changes_skips_counting_large_untracked_files() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    write_commit(&repo, "README.md", "hello\n", "initial");
+    fs::write(root.join("big.txt"), "x\n".repeat(600 * 1024)).unwrap();
+
+    let changes = read_changes(root.to_str().unwrap()).expect("changes");
+    assert_eq!(changes.unstaged.len(), 1);
+    assert_eq!(changes.unstaged[0].additions, 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn read_changes_lists_files_it_cannot_read() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    write_commit(&repo, "locked.txt", "one\n", "initial");
+    fs::write(root.join("locked.txt"), "one\ntwo\n").unwrap();
+    fs::write(root.join("secret.txt"), "hidden\n").unwrap();
+    fs::write(root.join("open.txt"), "a\nb\n").unwrap();
+    for name in ["locked.txt", "secret.txt"] {
+        fs::set_permissions(root.join(name), fs::Permissions::from_mode(0o000)).unwrap();
+    }
+
+    let changes = read_changes(root.to_str().unwrap()).expect("changes");
+    for name in ["locked.txt", "secret.txt"] {
+        fs::set_permissions(root.join(name), fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    let paths: Vec<_> = changes.unstaged.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(paths.len(), 3, "{paths:?}");
+    let open = changes
+        .unstaged
+        .iter()
+        .find(|f| f.path == "open.txt")
+        .unwrap();
+    assert_eq!((open.additions, open.deletions), (2, 0));
+}
+
+#[test]
+fn discard_file_restores_a_tracked_file() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    write_commit(&repo, "a.txt", "original\n", "add a");
+    write_commit(&repo, "b.txt", "b\n", "add b");
+    fs::write(root.join("a.txt"), "edited\n").unwrap();
+    fs::write(root.join("b.txt"), "kept edit\n").unwrap();
+
+    discard_file(root.to_str().unwrap(), "a.txt").expect("discard");
+
+    // A Windows checkout may turn line endings into CRLF (core.autocrlf).
+    assert_eq!(
+        fs::read_to_string(root.join("a.txt"))
+            .unwrap()
+            .replace("\r\n", "\n"),
+        "original\n"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("b.txt")).unwrap(),
+        "kept edit\n"
+    );
+}
+
+#[test]
+fn discard_file_removes_an_untracked_file() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    write_commit(&repo, "a.txt", "a\n", "add a");
+    fs::write(root.join("scratch.txt"), "temp\n").unwrap();
+
+    discard_file(root.to_str().unwrap(), "scratch.txt").expect("discard");
+
+    assert!(!root.join("scratch.txt").exists());
+    assert!(root.join("a.txt").exists());
+}
+
+#[test]
+fn discard_file_refuses_a_path_outside_the_repo() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    write_commit(&repo, "a.txt", "a\n", "add a");
+
+    let path = root.to_str().unwrap();
+    let err = discard_file(path, "../x").expect_err("outside");
+    assert_eq!(err.message(), t("discard_path_outside_repository"));
+    assert!(discard_file(path, "/etc/hostname").is_err());
+    assert!(discard_file(path, ".git/config").is_err());
+    assert!(root.join(".git/config").exists());
+}
+
+/// Commits `contents` to `path` on top of `parent` and points `refs/heads/<branch>` at it,
+/// without touching HEAD or the working tree.
+fn commit_on_branch(repo: &Repository, branch: &str, parent: Option<Oid>, message: &str) -> Oid {
+    let blob = repo.blob(message.as_bytes()).expect("blob");
+    let mut builder = repo.treebuilder(None).expect("tree builder");
+    builder
+        .insert(format!("{branch}.txt"), blob, 0o100644)
+        .expect("insert");
+    let tree = repo
+        .find_tree(builder.write().expect("tree"))
+        .expect("find tree");
+    let sig = Signature::now("Tester", "tester@example.com").expect("signature");
+    let parents: Vec<Commit> = parent
+        .map(|id| repo.find_commit(id).unwrap())
+        .into_iter()
+        .collect();
+    let parent_refs: Vec<&Commit> = parents.iter().collect();
+    let refname = format!("refs/heads/{branch}");
+    repo.commit(Some(&refname), &sig, &sig, message, &tree, &parent_refs)
+        .expect("commit")
+}
+
+fn overview_of<'a>(list: &'a [BranchOverview], name: &str) -> &'a BranchOverview {
+    list.iter()
+        .find(|entry| entry.name == name)
+        .unwrap_or_else(|| panic!("{name} missing from overview"))
+}
+
+#[test]
+fn overview_counts_ahead_and_behind_head() {
+    let (_dir, repo) = init_temp_repo();
+    let base = write_commit(&repo, "file.txt", "base", "base");
+    let feature = commit_on_branch(&repo, "feature", Some(base), "feature one");
+    commit_on_branch(&repo, "feature", Some(feature), "feature two");
+    write_commit(&repo, "file.txt", "main", "main moves on");
+    let root = repo.path().parent().unwrap().to_str().unwrap();
+
+    let list = list_branch_overview(root).expect("overview");
+    let main = overview_of(&list, "main");
+    assert!(main.is_head);
+    assert_eq!((main.ahead_of_head, main.behind_head), (0, 0));
+    let feature = overview_of(&list, "feature");
+    assert!(!feature.is_head);
+    assert_eq!(feature.kind, BranchKind::Local);
+    assert_eq!((feature.ahead_of_head, feature.behind_head), (2, 1));
+    assert!(!feature.merged_into_head);
+    assert!(feature.last_commit_time.is_some());
+}
+
+#[test]
+fn overview_marks_merged_branches() {
+    let (_dir, repo) = init_temp_repo();
+    let base = write_commit(&repo, "file.txt", "base", "base");
+    repo.branch("done", &repo.find_commit(base).unwrap(), false)
+        .expect("branch");
+    write_commit(&repo, "file.txt", "later", "later");
+    commit_on_branch(&repo, "open", Some(base), "not merged");
+    let root = repo.path().parent().unwrap().to_str().unwrap();
+
+    let list = list_branch_overview(root).expect("overview");
+    let done = overview_of(&list, "done");
+    assert!(done.merged_into_head);
+    assert_eq!((done.ahead_of_head, done.behind_head), (0, 1));
+    assert!(!overview_of(&list, "open").merged_into_head);
+    assert!(!overview_of(&list, "main").merged_into_head);
+}
+
+#[test]
+fn overview_lists_a_branch_without_shared_history() {
+    let (_dir, repo) = init_temp_repo();
+    write_commit(&repo, "file.txt", "base", "base");
+    write_commit(&repo, "file.txt", "next", "next");
+    let orphan = commit_on_branch(&repo, "orphan", None, "orphan one");
+    commit_on_branch(&repo, "orphan", Some(orphan), "orphan two");
+    let root = repo.path().parent().unwrap().to_str().unwrap();
+
+    let list = list_branch_overview(root).expect("overview");
+    let orphan = overview_of(&list, "orphan");
+    assert!(!orphan.merged_into_head);
+    assert_eq!((orphan.ahead_of_head, orphan.behind_head), (2, 2));
+}
+
+#[test]
+fn overview_reports_upstream_divergence() {
+    let (_dir, repo) = init_temp_repo();
+    let first = write_commit(&repo, "file.txt", "one", "one");
+    let second = write_commit(&repo, "file.txt", "two", "two");
+    ensure_remote_tracking(&repo, "main", "origin/main", first);
+    let remote_only = repo.find_commit(first).unwrap();
+    let sig = Signature::now("Tester", "tester@example.com").unwrap();
+    let remote_tip = repo
+        .commit(
+            Some("refs/remotes/origin/main"),
+            &sig,
+            &sig,
+            "remote",
+            &remote_only.tree().unwrap(),
+            &[&remote_only],
+        )
+        .expect("remote commit");
+    assert_ne!(remote_tip, second);
+    let root = repo.path().parent().unwrap().to_str().unwrap();
+
+    let list = list_branch_overview(root).expect("overview");
+    let main = overview_of(&list, "main");
+    assert_eq!(main.upstream.as_deref(), Some("origin/main"));
+    assert_eq!((main.upstream_ahead, main.upstream_behind), (1, 1));
+    let remote = overview_of(&list, "origin/main");
+    assert_eq!(remote.kind, BranchKind::Remote);
+    assert!(remote.upstream.is_none());
+    assert_eq!((remote.ahead_of_head, remote.behind_head), (1, 1));
+}
+
+#[test]
+fn overview_on_unborn_head_is_empty_counts() {
+    let (_dir, repo) = init_temp_repo();
+    let other = commit_on_branch(&repo, "other", None, "first");
+    commit_on_branch(&repo, "other", Some(other), "second");
+    assert!(repo.head().is_err());
+    let root = repo.path().parent().unwrap().to_str().unwrap();
+
+    let list = list_branch_overview(root).expect("overview");
+    let other = overview_of(&list, "other");
+    assert!(!other.is_head);
+    assert_eq!((other.ahead_of_head, other.behind_head), (0, 0));
+    assert_eq!((other.upstream_ahead, other.upstream_behind), (0, 0));
+    assert!(!other.merged_into_head);
+    assert!(other.last_commit_time.is_some());
+}
+
+#[test]
+fn set_upstream_sets_and_clears() {
+    let (_dir, repo) = init_temp_repo();
+    let first = write_commit(&repo, "file.txt", "one", "one");
+    repo.remote("origin", "https://example.com/remote.git")
+        .expect("remote");
+    repo.reference("refs/remotes/origin/main", first, true, "remote ref")
+        .expect("remote ref");
+    let root = repo.path().parent().unwrap().to_str().unwrap();
+
+    set_upstream(root, "main", Some("origin/main")).expect("set");
+    let main = repo.find_branch("main", BranchType::Local).unwrap();
+    assert_eq!(
+        main.upstream().unwrap().name().unwrap(),
+        Some("origin/main")
+    );
+    assert_eq!(
+        overview_of(&list_branch_overview(root).unwrap(), "main")
+            .upstream
+            .as_deref(),
+        Some("origin/main")
+    );
+
+    set_upstream(root, "main", None).expect("clear");
+    assert!(repo
+        .find_branch("main", BranchType::Local)
+        .unwrap()
+        .upstream()
+        .is_err());
+    assert!(set_upstream(root, "missing", None).is_err());
+}
+
+#[test]
+fn log_reports_merge_commits_with_two_parents() {
+    let (_dir, repo) = init_temp_repo();
+    let path = repo.path().parent().unwrap().to_str().unwrap().to_string();
+    let base = write_commit(&repo, "file.txt", "base", "base");
+    let side = commit_on_branch(&repo, "side", Some(base), "side");
+    let main_tip = write_commit(&repo, "file.txt", "main", "main");
+
+    let sig = Signature::now("Tester", "tester@example.com").expect("signature");
+    let tree = repo.find_commit(main_tip).unwrap().tree().unwrap();
+    let parents = [
+        &repo.find_commit(main_tip).unwrap(),
+        &repo.find_commit(side).unwrap(),
+    ];
+    let merge = repo
+        .commit(Some("HEAD"), &sig, &sig, "merge side", &tree, &parents)
+        .expect("merge commit");
+
+    let commits = read_commit_log(&path, &CommitFilter::default(), 10, false).expect("log");
+    let count_of = |oid: Oid| {
+        commits
+            .iter()
+            .find(|commit| commit.id == oid.to_string())
+            .map(|commit| commit.parent_count)
+    };
+    assert_eq!(count_of(merge), Some(2));
+    assert_eq!(count_of(main_tip), Some(1));
+    assert_eq!(count_of(base), Some(0));
+}
+
+#[test]
+fn log_labels_branches_remotes_and_tags() {
+    let (_dir, repo) = init_temp_repo();
+    let path = repo.path().parent().unwrap().to_str().unwrap().to_string();
+    let first = write_commit(&repo, "f.txt", "1", "first");
+    let second = write_commit(&repo, "f.txt", "2", "second");
+    let sig = Signature::now("Tester", "tester@example.com").expect("signature");
+    let target = repo.find_object(first, None).unwrap();
+    repo.tag("v1", &target, &sig, "release", false)
+        .expect("annotated tag");
+    repo.reference("refs/remotes/origin/main", first, true, "test")
+        .unwrap();
+    repo.branch("feature", &repo.find_commit(second).unwrap(), false)
+        .unwrap();
+
+    let commits = read_commit_log(&path, &CommitFilter::default(), 10, false).expect("log");
+    let labels_of = |oid: Oid| {
+        let commit = commits
+            .iter()
+            .find(|commit| commit.id == oid.to_string())
+            .expect("commit in log");
+        commit
+            .refs
+            .iter()
+            .map(|label| (label.name.clone(), label.kind))
+            .collect::<Vec<_>>()
+    };
+
+    let first_labels = labels_of(first);
+    assert_eq!(first_labels.len(), 2, "{first_labels:?}");
+    assert!(first_labels.contains(&("v1".to_string(), RefKind::Tag)));
+    assert!(first_labels.contains(&("origin/main".to_string(), RefKind::Remote)));
+
+    let second_labels = labels_of(second);
+    assert!(second_labels.contains(&("main".to_string(), RefKind::Head)));
+    assert!(second_labels.contains(&("feature".to_string(), RefKind::Local)));
+}
+
+#[test]
+fn log_labels_a_detached_head() {
+    let (_dir, repo) = init_temp_repo();
+    let path = repo.path().parent().unwrap().to_str().unwrap().to_string();
+    let first = write_commit(&repo, "f.txt", "1", "first");
+    write_commit(&repo, "f.txt", "2", "second");
+    repo.set_head_detached(first).unwrap();
+
+    let commits = read_commit_log(&path, &CommitFilter::default(), 10, false).expect("log");
+    let labels = &commits
+        .iter()
+        .find(|commit| commit.id == first.to_string())
+        .expect("detached commit in log")
+        .refs;
+    assert_eq!(labels.len(), 1, "{labels:?}");
+    assert_eq!(labels[0].name, "HEAD");
+    assert_eq!(labels[0].kind, RefKind::Head);
+}
+
+#[test]
+fn discovers_direct_children_with_a_git_dir() {
+    let root = tempfile::tempdir().expect("root");
+    Repository::init(root.path().join("zeta")).expect("init zeta");
+    Repository::init(root.path().join("alpha")).expect("init alpha");
+    // A linked worktree or submodule has a `.git` file instead of a directory.
+    fs::create_dir(root.path().join("linked")).unwrap();
+    fs::write(root.path().join("linked/.git"), "gitdir: ../elsewhere").unwrap();
+
+    let found = discover_repositories(root.path());
+    let names: Vec<_> = found
+        .iter()
+        .map(|path| path.file_name().unwrap().to_str().unwrap())
+        .collect();
+    assert_eq!(names, ["alpha", "linked", "zeta"]);
+    assert!(found.iter().all(|path| path.parent() == Some(root.path())));
+}
+
+#[test]
+fn discovery_skips_nested_and_plain_folders() {
+    let root = tempfile::tempdir().expect("root");
+    fs::create_dir_all(root.path().join("group/inner")).unwrap();
+    Repository::init(root.path().join("group/inner")).expect("init nested");
+    fs::create_dir(root.path().join("plain")).unwrap();
+    fs::write(root.path().join("file.txt"), "not a folder").unwrap();
+
+    assert!(discover_repositories(root.path()).is_empty());
+    assert!(discover_repositories(&root.path().join("does-not-exist")).is_empty());
+}
+
+#[test]
+fn quick_status_counts_changes_and_divergence() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap().to_str().unwrap().to_string();
+    let first = write_commit(&repo, "a.txt", "one", "first");
+    ensure_remote_tracking(&repo, "main", "origin/main", first);
+    write_commit(&repo, "a.txt", "two", "second");
+    fs::write(repo.path().parent().unwrap().join("a.txt"), "edited").unwrap();
+    fs::write(repo.path().parent().unwrap().join("new.txt"), "new").unwrap();
+    // An untracked folder counts once, however many files it holds.
+    fs::create_dir(repo.path().parent().unwrap().join("build")).unwrap();
+    for name in ["x", "y", "z"] {
+        fs::write(repo.path().parent().unwrap().join("build").join(name), name).unwrap();
+    }
+
+    let status = quick_status(&root);
+    assert!(!status.missing);
+    assert_eq!(status.branch.as_deref(), Some("main"));
+    assert_eq!((status.ahead, status.behind), (1, 0));
+    assert_eq!(status.changed, 3);
+}
+
+#[test]
+fn quick_status_of_a_deleted_folder_is_missing() {
+    let (dir, repo) = init_temp_repo();
+    write_commit(&repo, "a.txt", "one", "first");
+    let root = dir.path().to_str().unwrap().to_string();
+    assert!(!quick_status(&root).missing);
+    drop(repo);
+    drop(dir);
+
+    let status = quick_status(&root);
+    assert!(status.missing);
+    assert_eq!(status.branch, None);
+    assert_eq!(status.changed, 0);
+    let plain = tempfile::tempdir().unwrap();
+    assert!(quick_status(plain.path().to_str().unwrap()).missing);
 }

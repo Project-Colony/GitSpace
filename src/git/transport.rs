@@ -15,27 +15,22 @@ use git2::{
 
 use crate::config::NetworkOptions;
 use crate::error::AppError;
+use crate::i18n::t;
 
 /// Validates that a URL conforms to the network policy (SSH/HTTPS/HTTP settings).
 pub fn validate_transport_url(url: &str, network: &NetworkOptions) -> Result<(), AppError> {
     let url_lower = url.to_lowercase();
 
     if is_ssh_url(&url_lower) && !network.allow_ssh {
-        return Err(AppError::Validation(
-            "SSH access is disabled in your network preferences.".to_string(),
-        ));
+        return Err(AppError::Validation(t("network_ssh_blocked").to_string()));
     }
 
     if url_lower.starts_with("https://") && !network.use_https {
-        return Err(AppError::Validation(
-            "HTTPS connections are disabled in your network preferences.".to_string(),
-        ));
+        return Err(AppError::Validation(t("network_https_blocked").to_string()));
     }
 
     if url_lower.starts_with("http://") && network.use_https {
-        return Err(AppError::Validation(
-            "Plain HTTP is blocked. Enable HTTP in settings or use HTTPS.".to_string(),
-        ));
+        return Err(AppError::Validation(t("network_http_blocked").to_string()));
     }
 
     Ok(())
@@ -134,14 +129,10 @@ fn token_credentials(
 ) -> Result<Cred, git2::Error> {
     let url = url.to_ascii_lowercase();
     if url.starts_with("http://") {
-        return Err(git2::Error::from_str(
-            "This remote uses plain HTTP: GitSpace never sends a token over it. Use an https:// remote URL.",
-        ));
+        return Err(git2::Error::from_str(t("token_remote_plain_http")));
     }
     if !url.starts_with("https://") {
-        return Err(git2::Error::from_str(
-            "GitSpace sends a saved token only to https:// remotes.",
-        ));
+        return Err(git2::Error::from_str(t("token_https_remotes_only")));
     }
     Cred::userpass_plaintext(username_from_url.unwrap_or("git"), token)
 }
@@ -230,21 +221,16 @@ impl CredentialPicker {
             return Cred::default();
         }
 
-        Err(git2::Error::from_str(&self.failure_message(url)))
+        Err(git2::Error::from_str(self.failure_message(url)))
     }
 
-    fn failure_message(&self, url: &str) -> String {
+    fn failure_message(&self, url: &str) -> &'static str {
         if is_ssh_url(url) {
-            "SSH authentication failed: neither ssh-agent nor a key in ~/.ssh (id_ed25519, \
-             id_ecdsa, id_rsa) was accepted. Add your key to ssh-agent, or use an https:// \
-             remote with a saved token."
-                .to_string()
+            t("auth_ssh_failed")
         } else if self.sent_token {
-            "The remote refused the saved token. Check that it is still valid and can access \
-             this repository."
-                .to_string()
+            t("auth_token_refused")
         } else {
-            "This remote needs authentication: save a token for its host in GitSpace.".to_string()
+            t("auth_token_needed")
         }
     }
 }
@@ -406,7 +392,8 @@ mod tests {
             "github.com:user/repo.git",
             "git://github.com/repo.git",
         ] {
-            assert!(token_credentials(url, None, "secret").is_err(), "{url}");
+            let err = token_credentials(url, None, "secret").err().expect(url);
+            assert_eq!(err.message(), t("token_https_remotes_only"));
             let mut picker = CredentialPicker::new(Some("secret".into()), Vec::new());
             assert!(picker
                 .next(url, None, CredentialType::USER_PASS_PLAINTEXT)
@@ -427,7 +414,8 @@ mod tests {
 
     #[test]
     fn token_is_never_offered_over_plain_http() {
-        assert!(token_credentials("http://git.example.com/repo.git", None, "secret").is_err());
+        let err = token_credentials("http://git.example.com/repo.git", None, "secret").err();
+        assert_eq!(err.unwrap().message(), t("token_remote_plain_http"));
         assert!(token_credentials("HTTP://git.example.com/repo.git", None, "secret").is_err());
         assert!(token_credentials("https://git.example.com/repo.git", None, "secret").is_ok());
 
@@ -468,7 +456,7 @@ mod tests {
         }
         // The token is never sent as an SSH password, so every method is used up.
         let err = picker.next(url, Some("git"), ssh).err().expect("a refusal");
-        assert!(err.message().contains("ssh-agent"), "{}", err.message());
+        assert_eq!(err.message(), t("auth_ssh_failed"));
         assert!(picker.next(url, Some("git"), ssh).is_err());
     }
 
@@ -483,11 +471,7 @@ mod tests {
             CredentialType::USER_PASS_PLAINTEXT
         );
         let err = picker.next(url, None, allowed).err().expect("a refusal");
-        assert!(
-            err.message().contains("refused the saved token"),
-            "{}",
-            err.message()
-        );
+        assert_eq!(err.message(), t("auth_token_refused"));
     }
 
     #[test]
@@ -504,7 +488,7 @@ mod tests {
             CredentialType::DEFAULT
         );
         let err = picker.next(url, None, allowed).err().expect("a refusal");
-        assert!(err.message().contains("save a token"), "{}", err.message());
+        assert_eq!(err.message(), t("auth_token_needed"));
     }
 
     #[test]

@@ -1,17 +1,17 @@
 use git2::{ErrorCode, Oid, Repository, RepositoryState};
 
+use crate::i18n::{t, tf};
+
 /// Commits the index on HEAD with the identity from the Git config. A first commit on an
 /// unborn branch has no parent. Refuses an empty message, an index that matches HEAD, and a
 /// merge or rebase in progress (this commit would drop the second parent).
 pub fn commit_index(repo_path: &str, message: &str) -> Result<Oid, git2::Error> {
     if message.trim().is_empty() {
-        return Err(git2::Error::from_str("The commit message is empty."));
+        return Err(git2::Error::from_str(t("commit_message_empty")));
     }
     let repo = Repository::open(repo_path)?;
     if repo.state() != RepositoryState::Clean {
-        return Err(git2::Error::from_str(
-            "A merge, rebase or other operation is in progress; finish it with git first.",
-        ));
+        return Err(git2::Error::from_str(t("commit_operation_in_progress")));
     }
 
     let tree = repo.find_tree(repo.index()?.write_tree()?)?;
@@ -25,14 +25,11 @@ pub fn commit_index(repo_path: &str, message: &str) -> Result<Oid, git2::Error> 
         None => tree.is_empty(),
     };
     if unchanged {
-        return Err(git2::Error::from_str("Nothing is staged for commit."));
+        return Err(git2::Error::from_str(t("commit_nothing_staged")));
     }
 
     let signature = repo.signature().map_err(|err| {
-        git2::Error::from_str(&format!(
-            "Set user.name and user.email in your Git config to commit ({})",
-            err.message()
-        ))
+        git2::Error::from_str(&tf("commit_identity_missing", &[("error", err.message())]))
     })?;
     let message = git2::message_prettify(message, None)?;
     let parents: Vec<_> = parent.iter().collect();
@@ -96,12 +93,13 @@ mod tests {
         assert!(commit_index(path, "nothing").is_err());
 
         stage(&repo, "a.txt", "one");
-        assert!(commit_index(path, "  \n").is_err());
+        let err = commit_index(path, "  \n").unwrap_err();
+        assert_eq!(err.message(), t("commit_message_empty"));
         commit_index(path, "first").unwrap();
 
         // The index matches HEAD.
         let err = commit_index(path, "again").unwrap_err();
-        assert!(err.message().contains("Nothing is staged"));
+        assert_eq!(err.message(), t("commit_nothing_staged"));
         let head = repo.head().unwrap().peel_to_commit().unwrap();
         assert_eq!(head.message().ok(), Some("first\n"));
     }
