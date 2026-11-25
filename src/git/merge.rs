@@ -6,6 +6,7 @@ use std::time::Duration;
 
 // Utilise le cache thread-local pour les opérations en lecture seule
 use crate::git::repo_cache::with_cached_repo;
+use crate::i18n::tf;
 
 /// Default timeout for git operations (5 minutes).
 const GIT_OPERATION_TIMEOUT: Duration = Duration::from_secs(300);
@@ -92,7 +93,12 @@ fn run_git_command_with_timeout(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|err| format!("Failed to start git {command}: {err}"))?;
+        .map_err(|err| {
+            tf(
+                "git_start_failed",
+                &[("command", command), ("error", &err.to_string())],
+            )
+        })?;
 
     // Drain both pipes while git runs: a full pipe buffer would block it forever.
     let stdout = child.stdout.take().map(drain);
@@ -119,16 +125,22 @@ fn run_git_command_with_timeout(
                     // Kill the process
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(format!(
-                        "Git {command} timed out after {} seconds",
-                        timeout.as_secs()
+                    return Err(tf(
+                        "git_timed_out",
+                        &[
+                            ("command", command),
+                            ("seconds", &timeout.as_secs().to_string()),
+                        ],
                     ));
                 }
                 // Sleep briefly before checking again
                 std::thread::sleep(Duration::from_millis(100));
             }
             Err(err) => {
-                return Err(format!("Failed to wait for git {command}: {err}"));
+                return Err(tf(
+                    "git_wait_failed",
+                    &[("command", command), ("error", &err.to_string())],
+                ));
             }
         }
     }

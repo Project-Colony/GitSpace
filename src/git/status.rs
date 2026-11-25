@@ -7,6 +7,7 @@ use git2::{
 };
 
 use crate::git::diff::head_tree;
+use crate::i18n::t;
 // Utilise le cache thread-local pour éviter de réouvrir le dépôt à chaque appel
 use crate::git::repo_cache::with_cached_repo;
 
@@ -246,13 +247,13 @@ pub fn discard_file(repo_path: &str, path: &str) -> Result<(), git2::Error> {
             .components()
             .all(|component| matches!(component, Component::Normal(_)))
     {
-        return Err(git2::Error::from_str("the path is outside the repository"));
+        return Err(git2::Error::from_str(t("discard_path_outside_repository")));
     }
 
     with_cached_repo(repo_path, |repo| {
         let workdir = repo
             .workdir()
-            .ok_or_else(|| git2::Error::from_str("the repository has no work tree"))?;
+            .ok_or_else(|| git2::Error::from_str(t("repo_no_work_tree")))?;
         let mut index = repo.index()?;
         index.read(true)?;
 
@@ -266,7 +267,7 @@ pub fn discard_file(repo_path: &str, path: &str) -> Result<(), git2::Error> {
             std::fs::remove_file(workdir.join(relative))
                 .map_err(|err| git2::Error::from_str(&err.to_string()))
         } else {
-            Err(git2::Error::from_str("the file has no changes to discard"))
+            Err(git2::Error::from_str(t("discard_no_changes")))
         }
     })
 }

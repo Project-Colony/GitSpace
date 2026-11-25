@@ -1002,7 +1002,7 @@ fn stage_paths(repo_path: &str, paths: &[String]) -> Result<(), git2::Error> {
     let repo = Repository::open(repo_path)?;
     let workdir = repo
         .workdir()
-        .ok_or_else(|| git2::Error::from_str("bare repository has no working tree"))?;
+        .ok_or_else(|| git2::Error::from_str(t("repo_no_work_tree")))?;
     let mut index = repo.index()?;
     for path in paths {
         let path = Path::new(path);

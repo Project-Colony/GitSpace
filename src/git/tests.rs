@@ -19,6 +19,7 @@ use crate::git::stash::{
     stash_files,
 };
 use crate::git::status::{discard_file, quick_status, read_changes, read_repo_status, ChangeKind};
+use crate::i18n::t;
 
 fn init_temp_repo() -> (tempfile::TempDir, Repository) {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -389,7 +390,7 @@ fn stash_drop_refuses_a_changed_stash_list() {
     create_stash(path, "second", false).expect("stash");
 
     let err = drop_stash(path, first.index, &first.id).expect_err("stale index");
-    assert!(err.message().contains("refresh"), "{}", err.message());
+    assert_eq!(err.message(), t("stash_list_changed"));
     assert_eq!(list_stashes(path).unwrap().len(), 2);
     assert!(apply_stash(path, first.index, &first.id).is_err());
 }
@@ -545,7 +546,7 @@ fn stash_files_refuses_a_changed_list() {
     create_stash(path, "second", false).expect("stash");
 
     let err = stash_files(path, first.index, &first.id).expect_err("stale index");
-    assert!(err.message().contains("refresh"), "{}", err.message());
+    assert_eq!(err.message(), t("stash_list_changed"));
     assert!(stash_file_patch(path, first.index, &first.id, "a.txt").is_err());
 }
 
@@ -943,7 +944,8 @@ fn discard_file_refuses_a_path_outside_the_repo() {
     write_commit(&repo, "a.txt", "a\n", "add a");
 
     let path = root.to_str().unwrap();
-    assert!(discard_file(path, "../x").is_err());
+    let err = discard_file(path, "../x").expect_err("outside");
+    assert_eq!(err.message(), t("discard_path_outside_repository"));
     assert!(discard_file(path, "/etc/hostname").is_err());
     assert!(discard_file(path, ".git/config").is_err());
     assert!(root.join(".git/config").exists());

@@ -4,6 +4,7 @@ use crate::git::diff::{
     collect_diff_files, collect_diff_summaries, commit_against_parent, single_path_options,
     FileDiff, FileDiffSummary,
 };
+use crate::i18n::t;
 
 #[derive(Debug, Clone)]
 pub struct StashEntry {
@@ -152,9 +153,7 @@ fn ensure_stash_id(repo: &mut Repository, index: usize, id: &str) -> Result<(), 
         true
     })?;
     if !matches {
-        return Err(git2::Error::from_str(
-            "The stash list changed; refresh and try again.",
-        ));
+        return Err(git2::Error::from_str(t("stash_list_changed")));
     }
     Ok(())
 }

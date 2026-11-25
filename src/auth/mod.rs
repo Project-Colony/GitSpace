@@ -205,8 +205,12 @@ impl AuthManager {
 
         // Store the full OAuth token (with refresh token) as JSON in a separate entry
         let oauth_key = format!("oauth:{host}");
-        let oauth_json = serde_json::to_string(token)
-            .map_err(|e| format!("Failed to serialize OAuth token: {}", e))?;
+        let oauth_json = serde_json::to_string(token).map_err(|err| {
+            tf(
+                "token_oauth_serialize_failed",
+                &[("error", &err.to_string())],
+            )
+        })?;
         self.storage.set_token(&oauth_key, &oauth_json)?;
 
         info!(
@@ -327,7 +331,7 @@ impl TokenStorage {
                 }
             })
         } else if keyring_result.is_err() {
-            Err("Native keyring unavailable and encrypted storage is disabled".to_string())
+            Err(t("keyring_unavailable_no_fallback").to_string())
         } else {
             Ok(())
         };
@@ -416,25 +420,25 @@ impl TokenStorage {
 
     fn store_in_keyring(&self, host: &str, token: &str) -> Result<(), String> {
         let entry = Entry::new(SERVICE_NAME, host)
-            .map_err(|err| format!("Failed to access keyring: {err}"))?;
+            .map_err(|err| tf("keyring_access_failed", &[("error", &err.to_string())]))?;
         entry
             .set_password(token)
-            .map_err(|err| format!("Failed to store token in keyring: {err}"))
+            .map_err(|err| tf("keyring_store_failed", &[("error", &err.to_string())]))
     }
 
     fn fetch_from_keyring(&self, host: &str) -> Result<Option<String>, String> {
         let entry = Entry::new(SERVICE_NAME, host)
-            .map_err(|err| format!("Failed to access keyring: {err}"))?;
+            .map_err(|err| tf("keyring_access_failed", &[("error", &err.to_string())]))?;
         match entry.get_password() {
             Ok(password) => Ok(Some(password)),
             Err(keyring::Error::NoEntry) => Ok(None),
-            Err(err) => Err(format!("Failed to read keyring: {err}")),
+            Err(err) => Err(tf("keyring_read_failed", &[("error", &err.to_string())])),
         }
     }
 
     fn remove_from_keyring(&self, host: &str) -> Result<(), String> {
         let entry = Entry::new(SERVICE_NAME, host)
-            .map_err(|err| format!("Failed to access keyring: {err}"))?;
+            .map_err(|err| tf("keyring_access_failed", &[("error", &err.to_string())]))?;
         match entry.delete_credential() {
             Ok(()) => Ok(()),
             Err(keyring::Error::NoEntry) => Ok(()),
@@ -444,7 +448,7 @@ impl TokenStorage {
                 warn!(target: "gitspace::auth", error = %err, host, "native keyring unavailable; nothing to remove there");
                 Ok(())
             }
-            Err(err) => Err(format!("Failed to remove keyring entry: {err}")),
+            Err(err) => Err(tf("keyring_remove_failed", &[("error", &err.to_string())])),
         }
     }
 
@@ -456,10 +460,14 @@ impl TokenStorage {
 
     fn write_fallback(&self, map: &TokenMap) -> Result<(), String> {
         let blob = encrypt_tokens(map, &self.key.0)?;
-        let serialized = serde_json::to_string_pretty(&blob)
-            .map_err(|err| format!("Failed to serialize credentials: {err}"))?;
+        let serialized = serde_json::to_string_pretty(&blob).map_err(|err| {
+            tf(
+                "credentials_serialize_failed",
+                &[("error", &err.to_string())],
+            )
+        })?;
         write_private(&self.path, serialized.as_bytes())
-            .map_err(|err| format!("Failed to write credentials: {err}"))
+            .map_err(|err| tf("credentials_write_failed", &[("error", &err.to_string())]))
     }
 
     /// Reads the saved tokens before a rewrite. A file that exists but cannot be read or
@@ -467,11 +475,13 @@ impl TokenStorage {
     /// empty map: rewriting it would drop every other saved token.
     fn read_fallback_for_update(&self) -> Result<TokenMap, String> {
         self.read_fallback().map_err(|err| {
-            format!(
-                "{err}. {} was left untouched so the other saved tokens are kept. Unlock the \
-                 system keyring or use the same {MASTER_PASSWORD_ENV} as when the tokens were \
-                 saved, then restart GitSpace, or move the file aside to start over",
-                self.path.display()
+            tf(
+                "credentials_left_untouched",
+                &[
+                    ("error", &err),
+                    ("path", &self.path.display().to_string()),
+                    ("variable", MASTER_PASSWORD_ENV),
+                ],
             )
         })
     }
@@ -480,10 +490,15 @@ impl TokenStorage {
         let data = match fs::read_to_string(&self.path) {
             Ok(data) => data,
             Err(err) if err.kind() == ErrorKind::NotFound => return Ok(TokenMap::default()),
-            Err(err) => return Err(format!("Failed to read credential file: {err}")),
+            Err(err) => {
+                return Err(tf(
+                    "credentials_read_failed",
+                    &[("error", &err.to_string())],
+                ))
+            }
         };
         let blob: EncryptedTokenFile = serde_json::from_str(&data)
-            .map_err(|err| format!("Failed to parse credential file: {err}"))?;
+            .map_err(|err| tf("credentials_parse_failed", &[("error", &err.to_string())]))?;
         let err = match decrypt_tokens(&blob, &self.key.0) {
             Ok(map) => return Ok(map),
             Err(err) => err,
@@ -532,16 +547,21 @@ impl TokenStorage {
         let data = match fs::read_to_string(&self.host_path) {
             Ok(data) => data,
             Err(err) if err.kind() == ErrorKind::NotFound => return Ok(HostIndex::default()),
-            Err(err) => return Err(format!("Failed to read host index: {err}")),
+            Err(err) => return Err(tf("host_index_read_failed", &[("error", &err.to_string())])),
         };
-        serde_json::from_str(&data).map_err(|err| format!("Failed to parse host index: {err}"))
+        serde_json::from_str(&data)
+            .map_err(|err| tf("host_index_parse_failed", &[("error", &err.to_string())]))
     }
 
     fn write_host_index(&self, index: &HostIndex) -> Result<(), String> {
-        let serialized = serde_json::to_string_pretty(index)
-            .map_err(|err| format!("Failed to serialize host index: {err}"))?;
+        let serialized = serde_json::to_string_pretty(index).map_err(|err| {
+            tf(
+                "host_index_serialize_failed",
+                &[("error", &err.to_string())],
+            )
+        })?;
         write_private(&self.host_path, serialized.as_bytes())
-            .map_err(|err| format!("Failed to write host index: {err}"))
+            .map_err(|err| tf("host_index_write_failed", &[("error", &err.to_string())]))
     }
 
     pub fn set_allow_encrypted_fallback(&mut self, allowed: bool) {
@@ -554,11 +574,11 @@ fn encrypt_tokens(map: &TokenMap, key: &[u8; 32]) -> Result<EncryptedTokenFile, 
     // Drawn from the operating system's RNG for every write, so a key never reuses a nonce.
     let nonce = Nonce::generate();
 
-    let serialized =
-        serde_json::to_string(map).map_err(|err| format!("Failed to serialize tokens: {err}"))?;
+    let serialized = serde_json::to_string(map)
+        .map_err(|err| tf("tokens_serialize_failed", &[("error", &err.to_string())]))?;
     let encrypted = cipher
         .encrypt(&nonce, serialized.as_bytes())
-        .map_err(|err| format!("Failed to encrypt tokens: {err}"))?;
+        .map_err(|err| tf("tokens_encrypt_failed", &[("error", &err.to_string())]))?;
 
     Ok(EncryptedTokenFile {
         nonce: general_purpose::STANDARD.encode(nonce),
@@ -570,20 +590,42 @@ fn decrypt_tokens(blob: &EncryptedTokenFile, key: &[u8; 32]) -> Result<TokenMap,
     let cipher = ChaCha20Poly1305::new(key.into());
     let nonce_bytes = general_purpose::STANDARD
         .decode(&blob.nonce)
-        .map_err(|err| format!("Failed to decode nonce: {err}"))?;
-    let nonce = Nonce::try_from(nonce_bytes.as_slice())
-        .map_err(|_| format!("Invalid nonce length: {} bytes", nonce_bytes.len()))?;
+        .map_err(|err| {
+            tf(
+                "credentials_nonce_decode_failed",
+                &[("error", &err.to_string())],
+            )
+        })?;
+    let nonce = Nonce::try_from(nonce_bytes.as_slice()).map_err(|_| {
+        tf(
+            "credentials_nonce_length",
+            &[("count", &nonce_bytes.len().to_string())],
+        )
+    })?;
     let cipher_bytes = general_purpose::STANDARD
         .decode(&blob.ciphertext)
-        .map_err(|err| format!("Failed to decode ciphertext: {err}"))?;
+        .map_err(|err| {
+            tf(
+                "credentials_ciphertext_decode_failed",
+                &[("error", &err.to_string())],
+            )
+        })?;
 
     let plaintext = cipher
         .decrypt(&nonce, cipher_bytes.as_ref())
-        .map_err(|err| format!("Failed to decrypt credentials: {err}"))?;
-    let content = String::from_utf8(plaintext)
-        .map_err(|err| format!("Invalid credential encoding: {err}"))?;
-    serde_json::from_str(&content)
-        .map_err(|err| format!("Failed to parse decrypted credentials: {err}"))
+        .map_err(|err| tf("credentials_decrypt_failed", &[("error", &err.to_string())]))?;
+    let content = String::from_utf8(plaintext).map_err(|err| {
+        tf(
+            "credentials_encoding_invalid",
+            &[("error", &err.to_string())],
+        )
+    })?;
+    serde_json::from_str(&content).map_err(|err| {
+        tf(
+            "credentials_decrypted_parse_failed",
+            &[("error", &err.to_string())],
+        )
+    })
 }
 
 /// The settings folder that holds the token files.
@@ -640,14 +682,14 @@ fn derive_master_key(password: &[u8], salt: &[u8], out: &mut [u8; 32]) -> bool {
 
 fn load_or_create_keyring_key() -> Result<[u8; 32], String> {
     let entry = Entry::new(SERVICE_NAME, TOKEN_KEYRING_ENTRY)
-        .map_err(|err| format!("Failed to access keyring: {err}"))?;
+        .map_err(|err| tf("keyring_access_failed", &[("error", &err.to_string())]))?;
     match entry.get_password() {
         Ok(password) => {
             let decoded = general_purpose::STANDARD
                 .decode(password.trim())
-                .map_err(|err| format!("Failed to decode keyring token key: {err}"))?;
+                .map_err(|err| tf("keyring_key_decode_failed", &[("error", &err.to_string())]))?;
             if decoded.len() != 32 {
-                return Err("Keyring token key is invalid".to_string());
+                return Err(t("keyring_key_invalid").to_string());
             }
             let mut key = [0u8; 32];
             key.copy_from_slice(&decoded);
@@ -658,10 +700,13 @@ fn load_or_create_keyring_key() -> Result<[u8; 32], String> {
             let encoded = general_purpose::STANDARD.encode(key);
             entry
                 .set_password(&encoded)
-                .map_err(|err| format!("Failed to store token key in keyring: {err}"))?;
+                .map_err(|err| tf("keyring_key_store_failed", &[("error", &err.to_string())]))?;
             Ok(key)
         }
-        Err(err) => Err(format!("Failed to read keyring token key: {err}")),
+        Err(err) => Err(tf(
+            "keyring_key_read_failed",
+            &[("error", &err.to_string())],
+        )),
     }
 }
 

@@ -23,6 +23,8 @@ use reqwest::header::ACCEPT;
 use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 
+use crate::i18n::{t, tf};
+
 /// OAuth callback server timeout.
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -45,8 +47,6 @@ const MAX_POLL_BACKOFF: Duration = Duration::from_secs(60);
 /// Answer to a request on the callback port that is not this sign-in's redirect.
 const BAD_REQUEST: &str =
     "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-
-const CODE_EXPIRED: &str = "The code expired before it was approved. Start the sign-in again.";
 
 /// OAuth provider configuration.
 #[derive(Debug, Clone)]
@@ -146,21 +146,18 @@ impl OAuthToken {
         let refresh_token = self
             .refresh_token
             .as_ref()
-            .ok_or("The OAuth token has no refresh token")?;
+            .ok_or(t("oauth_no_refresh_token"))?;
         let (Some(client_id), Some(token_url)) = (&self.client_id, &self.token_url) else {
-            return Err(format!(
-                "The {} token was saved without its client ID; sign in again",
-                self.provider
-            ));
+            return Err(tf("oauth_no_client_id", &[("provider", &self.provider)]));
         };
         let client = BasicClient::new(ClientId::new(client_id.clone())).set_token_uri(
-            TokenUrl::new(token_url.clone()).map_err(|e| format!("Invalid token URL: {e}"))?,
+            TokenUrl::new(token_url.clone()).map_err(|e| invalid_url(token_url, e))?,
         );
         let http_client = http_client()?;
         let response = client
             .exchange_refresh_token(&RefreshToken::new(refresh_token.clone()))
             .request(&|request| send(&http_client, request))
-            .map_err(|e| format!("Token refresh failed: {e}"))?;
+            .map_err(|e| tf("oauth_refresh_failed", &[("error", &e.to_string())]))?;
 
         Ok(Self {
             access_token: response.access_token().secret().to_string(),
@@ -213,9 +210,12 @@ impl OAuthFlow {
     pub fn new(provider: OAuthProvider) -> Result<Self, String> {
         // Checked before the browser opens, so a busy port is reported up front.
         TcpListener::bind(("127.0.0.1", CALLBACK_PORT)).map_err(|e| {
-            format!(
-                "Port {CALLBACK_PORT} is needed for the GitLab sign-in callback but is in use ({e}). \
-                 Close the program using it and try again."
+            tf(
+                "oauth_port_in_use",
+                &[
+                    ("port", &CALLBACK_PORT.to_string()),
+                    ("error", &e.to_string()),
+                ],
             )
         })?;
         let redirect_url = format!("http://127.0.0.1:{CALLBACK_PORT}/callback");
@@ -224,15 +224,15 @@ impl OAuthFlow {
         let client = BasicClient::new(ClientId::new(provider.client_id.clone()))
             .set_auth_uri(
                 AuthUrl::new(provider.auth_url.clone())
-                    .map_err(|e| format!("Invalid auth URL: {}", e))?,
+                    .map_err(|e| invalid_url(&provider.auth_url, e))?,
             )
             .set_token_uri(
                 TokenUrl::new(provider.token_url.clone())
-                    .map_err(|e| format!("Invalid token URL: {}", e))?,
+                    .map_err(|e| invalid_url(&provider.token_url, e))?,
             )
             .set_redirect_uri(
-                RedirectUrl::new(redirect_url)
-                    .map_err(|e| format!("Invalid redirect URL: {}", e))?,
+                RedirectUrl::new(redirect_url.clone())
+                    .map_err(|e| invalid_url(&redirect_url, e))?,
             );
 
         Ok(Self {
@@ -281,7 +281,7 @@ impl OAuthFlow {
 
         // Open browser
         if let Err(err) = webbrowser::open(&auth_url) {
-            return OAuthResult::Error(format!("Failed to open browser: {}", err));
+            return OAuthResult::Error(tf("prefs_browser_failed", &[("error", &err.to_string())]));
         }
 
         // Wait for callback
@@ -294,11 +294,11 @@ impl OAuthFlow {
     /// Waits for the OAuth callback on a local HTTP server.
     fn wait_for_callback(&self) -> Result<String, String> {
         let listener = TcpListener::bind(("127.0.0.1", CALLBACK_PORT))
-            .map_err(|e| format!("Failed to bind callback server: {}", e))?;
+            .map_err(|e| tf("oauth_callback_listen_failed", &[("error", &e.to_string())]))?;
 
         listener
             .set_nonblocking(true)
-            .map_err(|e| format!("Failed to set non-blocking: {}", e))?;
+            .map_err(|e| tf("oauth_callback_listen_failed", &[("error", &e.to_string())]))?;
 
         let start = Instant::now();
         let expected_state = self
@@ -316,7 +316,7 @@ impl OAuthFlow {
         loop {
             // Check timeout
             if start.elapsed() > CALLBACK_TIMEOUT {
-                return Err("OAuth callback timed out".to_string());
+                return Err(t("oauth_callback_timed_out").to_string());
             }
 
             // Try to accept connection
@@ -351,7 +351,10 @@ impl OAuthFlow {
                     thread::sleep(Duration::from_millis(100));
                 }
                 Err(e) => {
-                    return Err(format!("Failed to accept connection: {}", e));
+                    return Err(tf(
+                        "oauth_callback_accept_failed",
+                        &[("error", &e.to_string())],
+                    ));
                 }
             }
         }
@@ -360,7 +363,7 @@ impl OAuthFlow {
     /// Exchanges the authorization code for tokens.
     fn exchange_code(self, code: String) -> OAuthResult {
         let Some(pkce_verifier) = self.pkce_verifier else {
-            return OAuthResult::Error("PKCE verifier not initialized".to_string());
+            return OAuthResult::Error(t("oauth_pkce_missing").to_string());
         };
 
         info!(
@@ -398,7 +401,10 @@ impl OAuthFlow {
                     error = %err,
                     "Token exchange failed"
                 );
-                OAuthResult::Error(format!("Token exchange failed: {}", err))
+                OAuthResult::Error(tf(
+                    "oauth_token_exchange_failed",
+                    &[("error", &err.to_string())],
+                ))
             }
         }
     }
@@ -422,11 +428,11 @@ impl DeviceFlow {
         let device_auth_url = provider
             .device_auth_url
             .clone()
-            .ok_or_else(|| format!("{} does not support the device flow", provider.name))?;
+            .ok_or_else(|| tf("oauth_no_device_flow", &[("provider", &provider.name)]))?;
         let client = BasicClient::new(ClientId::new(provider.client_id.clone()))
             .set_device_authorization_url(
-                DeviceAuthorizationUrl::new(device_auth_url)
-                    .map_err(|e| format!("Invalid device authorization URL: {e}"))?,
+                DeviceAuthorizationUrl::new(device_auth_url.clone())
+                    .map_err(|e| invalid_url(&device_auth_url, e))?,
             );
         let http_client = http_client()?;
 
@@ -439,13 +445,18 @@ impl DeviceFlow {
             .exchange_device_code()
             .add_scopes(provider.scopes.iter().cloned().map(Scope::new))
             .request(&|request| send(&http_client, request))
-            .map_err(|e| format!("Could not get a sign-in code from {}: {e}", provider.name))?;
+            .map_err(|e| {
+                tf(
+                    "oauth_code_request_failed",
+                    &[("provider", &provider.name), ("error", &e.to_string())],
+                )
+            })?;
 
         // The user is sent to this page, so never to anything but HTTPS.
         if details.verification_uri().url().scheme() != "https" {
-            return Err(format!(
-                "{} sent a verification page that is not HTTPS",
-                provider.name
+            return Err(tf(
+                "oauth_verification_not_https",
+                &[("provider", &provider.name)],
             ));
         }
 
@@ -483,7 +494,7 @@ impl DeviceFlow {
                 return OAuthResult::Cancelled;
             }
             if Instant::now() >= deadline {
-                return OAuthResult::Error(CODE_EXPIRED.to_string());
+                return OAuthResult::Error(t("oauth_code_expired").to_string());
             }
 
             let poll = match self.request_token() {
@@ -562,11 +573,17 @@ fn next_device_poll(
             DeviceCodeErrorResponseType::SlowDown => {
                 return DevicePoll::Retry(interval + SLOW_DOWN_STEP)
             }
-            DeviceCodeErrorResponseType::ExpiredToken => CODE_EXPIRED.to_string(),
+            DeviceCodeErrorResponseType::ExpiredToken => t("oauth_code_expired").to_string(),
             DeviceCodeErrorResponseType::AccessDenied => {
-                format!("The sign-in was denied on {}.", provider.name)
+                tf("oauth_denied", &[("provider", &provider.name)])
             }
-            _ => format!("{} refused the sign-in: {response}", provider.name),
+            _ => tf(
+                "oauth_refused",
+                &[
+                    ("provider", &provider.name),
+                    ("error", &response.to_string()),
+                ],
+            ),
         };
         return DevicePoll::Done(OAuthResult::Error(result));
     }
@@ -577,9 +594,12 @@ fn next_device_poll(
         ))),
         // A rate limit or a server or proxy error page is passing: ask again later.
         Err(_) if status == 429 || status >= 500 => DevicePoll::Unavailable,
-        Err(_) => DevicePoll::Done(OAuthResult::Error(format!(
-            "Unexpected answer from {} (HTTP {status})",
-            provider.name
+        Err(_) => DevicePoll::Done(OAuthResult::Error(tf(
+            "oauth_unexpected_answer",
+            &[
+                ("provider", &provider.name),
+                ("status", &status.to_string()),
+            ],
         ))),
     }
 }
@@ -600,7 +620,15 @@ fn http_client() -> Result<Client, String> {
         .timeout(HTTP_TIMEOUT)
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .map_err(|e| format!("Failed to build HTTP client: {e}"))
+        .map_err(|e| tf("oauth_http_client_failed", &[("error", &e.to_string())]))
+}
+
+/// A sign-in URL that does not parse; the built-in ones always do, a saved one may not.
+fn invalid_url(url: &str, err: impl std::fmt::Display) -> String {
+    tf(
+        "oauth_invalid_url",
+        &[("url", url), ("error", &err.to_string())],
+    )
 }
 
 /// Sends an oauth2 request through `client`, the app's reqwest client with TLS.
@@ -657,14 +685,12 @@ fn parse_callback(request: &str, expected_state: &str) -> Callback {
     if let Some(error) = params.get("error") {
         let description = params
             .get("error_description")
-            .map_or("Unknown error", String::as_str);
+            .map_or(t("oauth_unknown_error"), String::as_str);
         return Callback::Answer(Err(format!("{error}: {description}")));
     }
     match params.get("code") {
         Some(code) => Callback::Answer(Ok(code.clone())),
-        None => Callback::Answer(Err(
-            "The sign-in callback has no authorization code".to_string()
-        )),
+        None => Callback::Answer(Err(t("oauth_no_authorization_code").to_string())),
     }
 }
 
@@ -815,10 +841,13 @@ mod tests {
     #[test]
     fn device_poll_stops_when_the_code_expired_or_was_denied() {
         let expired = poll(200, r#"{"error":"expired_token"}"#);
-        assert!(matches!(expired, DevicePoll::Done(OAuthResult::Error(e)) if e == CODE_EXPIRED));
+        assert!(
+            matches!(expired, DevicePoll::Done(OAuthResult::Error(e)) if e == t("oauth_code_expired"))
+        );
 
         let denied = poll(200, r#"{"error":"access_denied"}"#);
-        assert!(matches!(denied, DevicePoll::Done(OAuthResult::Error(e)) if e.contains("denied")));
+        let denied_on = tf("oauth_denied", &[("provider", "GitHub")]);
+        assert!(matches!(denied, DevicePoll::Done(OAuthResult::Error(e)) if e == denied_on));
 
         let other = poll(200, r#"{"error":"device_flow_disabled"}"#);
         assert!(matches!(
@@ -1023,6 +1052,6 @@ mod tests {
         .unwrap();
         assert_eq!(token.client_id, None);
         let err = token.refresh().expect_err("no client ID");
-        assert!(err.contains("sign in again"), "{err}");
+        assert_eq!(err, tf("oauth_no_client_id", &[("provider", "GitLab")]));
     }
 }

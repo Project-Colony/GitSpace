@@ -9,6 +9,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use tracing::{error, warn};
 
+use crate::i18n::{t, tf};
+
 const CONFIG_FILE_NAME: &str = "config.json";
 pub const MIN_LOG_RETENTION_FILES: usize = 1;
 pub const MAX_LOG_RETENTION_FILES: usize = 30;
@@ -634,8 +636,12 @@ impl Preferences {
     pub fn from_path<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
         let invalid = |message: String| io::Error::new(ErrorKind::InvalidData, message);
         let contents = fs::read_to_string(path)?;
-        let mut value: serde_json::Value = serde_json::from_str(&contents)
-            .map_err(|err| invalid(format!("Failed to parse preferences: {err}")))?;
+        let mut value: serde_json::Value = serde_json::from_str(&contents).map_err(|err| {
+            invalid(tf(
+                "preferences_parse_failed",
+                &[("error", &err.to_string())],
+            ))
+        })?;
         if let Some(preferences) = value.get_mut("preferences").map(Value::take) {
             value = preferences;
         }
@@ -648,12 +654,14 @@ impl Preferences {
             _ => false,
         };
         if !has_preferences {
-            return Err(invalid(
-                "The file does not contain GitSpace preferences".to_string(),
-            ));
+            return Err(invalid(t("preferences_not_found").to_string()));
         }
-        serde_json::from_value(value)
-            .map_err(|err| invalid(format!("Failed to parse preferences: {err}")))
+        serde_json::from_value(value).map_err(|err| {
+            invalid(tf(
+                "preferences_parse_failed",
+                &[("error", &err.to_string())],
+            ))
+        })
     }
 }
 
@@ -901,6 +909,9 @@ mod tests {
             let err = Preferences::from_path(&path).expect_err(contents);
             assert_eq!(err.kind(), ErrorKind::InvalidData, "{contents}");
         }
+        fs::write(&path, r#"{"unrelated": true}"#).expect("write");
+        let err = Preferences::from_path(&path).expect_err("no preferences");
+        assert_eq!(err.to_string(), t("preferences_not_found"));
     }
 
     #[test]
