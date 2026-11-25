@@ -1,14 +1,15 @@
 pub mod app;
 pub mod auth;
 pub mod branches;
+pub mod changes;
 pub mod clone;
 pub mod context;
+pub mod diff_view;
 pub mod history;
 pub mod preferences;
 pub mod recent;
 pub mod repo_header;
 pub mod repo_list;
 pub mod sidebar;
-pub mod stage;
 pub mod theme;
 pub mod widgets;

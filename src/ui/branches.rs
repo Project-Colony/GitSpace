@@ -23,8 +23,8 @@ use crate::git::compare::{compare_branch_with_head, BranchComparison, DiffSummar
 use crate::git::log::{commits_between_refs, latest_commit_for_branch, CommitInfo};
 use crate::git::merge::{detect_conflicts, merge_branch, MergeOutcome, MergeStrategy};
 use crate::git::repo_cache::with_cached_repo;
+use crate::ui::context::git_task;
 use crate::ui::context::RepoContext;
-use crate::ui::stage::git_task;
 
 /// Nombre de jours sans commit avant qu'une branche soit consideree obsolete.
 const STALE_DAYS: i64 = 30;

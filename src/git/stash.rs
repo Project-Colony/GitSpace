@@ -4,6 +4,10 @@ use crate::git::diff::{
     commit_against_parent, commit_diff_file, commit_diff_summaries, FileDiff, FileDiffSummary,
 };
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "ruling R3: the Stashes tab returns in Task 16")
+)]
 #[derive(Debug, Clone)]
 pub struct StashEntry {
     pub index: usize,
@@ -11,16 +15,17 @@ pub struct StashEntry {
     /// The stash commit id, used to check that `index` still points to this stash.
     pub id: String,
     /// The branch the stash was made on; `None` for a detached HEAD.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the Stashes tab will read it"))]
     pub branch: Option<String>,
     /// Commit time of the stash, in seconds since the Unix epoch.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the Stashes tab will read it"))]
     pub time: i64,
     /// Files the stash changes against the commit it was made on.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the Stashes tab will read it"))]
     pub file_count: usize,
 }
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "ruling R3: the Stashes tab returns in Task 16")
+)]
 pub fn list_stashes(repo_path: &str) -> Result<Vec<StashEntry>, git2::Error> {
     let mut repo = Repository::open(repo_path)?;
     let mut found = Vec::new();
@@ -47,6 +52,10 @@ pub fn list_stashes(repo_path: &str) -> Result<Vec<StashEntry>, git2::Error> {
 
 /// The branch in git's `WIP on <branch>: ...` or `On <branch>: ...` stash message. Branch
 /// names cannot contain `:`, so the first one ends the name.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "ruling R3: the Stashes tab returns in Task 16")
+)]
 fn stash_branch(message: &str) -> Option<String> {
     let rest = message
         .strip_prefix("WIP on ")
@@ -92,6 +101,10 @@ pub fn count_stashable(repo_path: &str, include_untracked: bool) -> Result<usize
     Ok(count)
 }
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "ruling R3: the Stashes tab returns in Task 16")
+)]
 pub fn create_stash(
     repo_path: &str,
     message: &str,
@@ -112,6 +125,10 @@ pub fn create_stash(
 
 /// Applies the stash at `index`, if it is still the stash `id`. libgit2's default safe
 /// checkout fails instead of overwriting a modified file.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "ruling R3: the Stashes tab returns in Task 16")
+)]
 pub fn apply_stash(repo_path: &str, index: usize, id: &str) -> Result<(), git2::Error> {
     let mut repo = Repository::open(repo_path)?;
     ensure_stash_id(&mut repo, index, id)?;
@@ -119,6 +136,10 @@ pub fn apply_stash(repo_path: &str, index: usize, id: &str) -> Result<(), git2::
 }
 
 /// Drops the stash at `index`, if it is still the stash `id`.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "ruling R3: the Stashes tab returns in Task 16")
+)]
 pub fn drop_stash(repo_path: &str, index: usize, id: &str) -> Result<(), git2::Error> {
     let mut repo = Repository::open(repo_path)?;
     ensure_stash_id(&mut repo, index, id)?;

@@ -122,7 +122,6 @@ pub fn quick_status(path: &str) -> QuickStatus {
 /// Untracked files above this size are listed without counting their lines.
 const MAX_UNTRACKED_COUNT_SIZE: u64 = 1024 * 1024;
 
-#[cfg_attr(not(test), expect(dead_code, reason = "the Changes tab will call it"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChangeKind {
     Added,
@@ -134,7 +133,6 @@ pub enum ChangeKind {
     TypeChange,
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "the Changes tab will call it"))]
 #[derive(Debug, Clone)]
 pub struct ChangedFile {
     pub path: String,
@@ -143,10 +141,10 @@ pub struct ChangedFile {
     pub kind: ChangeKind,
     pub additions: usize,
     pub deletions: usize,
+    #[cfg_attr(not(test), expect(dead_code, reason = "no screen shows it yet"))]
     pub binary: bool,
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "the Changes tab will call it"))]
 #[derive(Debug, Clone, Default)]
 pub struct Changes {
     pub staged: Vec<ChangedFile>,
@@ -155,7 +153,6 @@ pub struct Changes {
 
 /// Staged (HEAD to index) and unstaged (index to work tree, with untracked files) changes,
 /// with line counts per file. No patch text is kept.
-#[cfg_attr(not(test), expect(dead_code, reason = "the Changes tab will call it"))]
 pub fn read_changes(repo_path: &str) -> Result<Changes, git2::Error> {
     with_cached_repo(repo_path, |repo| {
         let mut index = repo.index()?;
@@ -242,7 +239,6 @@ fn changed_files(diff: &Diff<'_>, workdir: Option<&Path>) -> Result<Vec<ChangedF
 
 /// Throws away the work tree changes of one file: a tracked file goes back to its index
 /// version, an untracked file is removed. `path` is relative to the work tree.
-#[cfg_attr(not(test), expect(dead_code, reason = "the Changes tab will call it"))]
 pub fn discard_file(repo_path: &str, path: &str) -> Result<(), git2::Error> {
     let relative = Path::new(path);
     if path.is_empty()

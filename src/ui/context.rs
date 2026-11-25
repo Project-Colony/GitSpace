@@ -1,7 +1,33 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use iced::Task;
+
 use crate::git::repo_cache::with_cached_repo;
+
+/// Runs `job` for the repository at `repo` on the blocking thread pool and passes its result,
+/// with the repository path, to `done`. Panels compare that path with their current repository
+/// and drop results that arrive after a switch. Shared by the changes, branch and history panels.
+pub(crate) fn git_task<M, T>(
+    repo: Arc<str>,
+    job: impl FnOnce(&str) -> Result<T, String> + Send + 'static,
+    done: impl Fn(Arc<str>, Result<T, String>) -> M + Send + 'static,
+) -> Task<M>
+where
+    M: Send + 'static,
+    T: Send + 'static,
+{
+    Task::perform(
+        async move {
+            let path = Arc::clone(&repo);
+            let result = tokio::task::spawn_blocking(move || job(&path))
+                .await
+                .unwrap_or_else(|err| Err(err.to_string()));
+            (repo, result)
+        },
+        move |(repo, result)| done(repo, result),
+    )
+}
 
 /// Contexte d'un depot git actuellement ouvert : son chemin et son nom.
 /// Le path utilise Arc<str> pour eviter les clones couteux.

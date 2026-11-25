@@ -18,8 +18,8 @@ use crate::git::{
     diff::{commit_diff_file, commit_diff_summaries, FileDiff, FileDiffSummary},
     log::{list_local_branches, read_commit_log, CommitFilter, CommitInfo},
 };
+use crate::ui::context::git_task;
 use crate::ui::context::RepoContext;
-use crate::ui::stage::git_task;
 
 /// Nombre maximal de commits charges au total.
 const MAX_COMMITS: usize = 200;
