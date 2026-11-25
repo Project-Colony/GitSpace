@@ -63,12 +63,29 @@ pub enum Done {
     Branch(String),
 }
 
+/// An entry of the branch picker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BranchChoice {
+    /// Follows HEAD, including a detached one.
+    Head,
+    Branch(String),
+}
+
+impl std::fmt::Display for BranchChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Head => f.write_str(t("history_current_branch")),
+            Self::Branch(name) => f.write_str(name),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Message {
     Filter(String),
     /// Applies the filter typed 250 ms ago, unless a later key press replaced it.
     ApplyFilter(u32),
-    BranchPicked(String),
+    BranchPicked(BranchChoice),
     Select(String),
     SelectFile(String),
     LoadMore,
@@ -195,8 +212,11 @@ impl HistoryPanel {
                     return (self.refresh(), None);
                 }
             }
-            Message::BranchPicked(branch) => {
-                self.branch = Some(branch);
+            Message::BranchPicked(choice) => {
+                self.branch = match choice {
+                    BranchChoice::Head => None,
+                    BranchChoice::Branch(name) => Some(name),
+                };
                 return (self.refresh(), None);
             }
             Message::Select(id) => return (self.select(id), None),
@@ -429,14 +449,16 @@ impl HistoryPanel {
             text_input(t("history_filter_placeholder"), &self.filter).on_input(Message::Filter),
             None,
         );
-        let branch = pick_list(
-            self.branches.as_slice(),
-            self.branch.clone(),
-            Message::BranchPicked,
-        )
-        .placeholder(t("history_current_branch"))
-        .text_size(typo.sz(12))
-        .font(typo.regular);
+        let choices: Vec<BranchChoice> = std::iter::once(BranchChoice::Head)
+            .chain(self.branches.iter().cloned().map(BranchChoice::Branch))
+            .collect();
+        let selected = self
+            .branch
+            .clone()
+            .map_or(BranchChoice::Head, BranchChoice::Branch);
+        let branch = pick_list(choices, Some(selected), Message::BranchPicked)
+            .text_size(typo.sz(12))
+            .font(typo.regular);
         container(row![filter, branch].spacing(6).align_y(Alignment::Center))
             .padding([10, 10])
             .into()
@@ -1047,6 +1069,19 @@ mod tests {
         assert_eq!(bar_cells(100, 0), (5, 0));
         assert_eq!(bar_cells(100, 1), (4, 1));
         assert_eq!(bar_cells(1, 1), (1, 1));
+    }
+
+    #[test]
+    fn current_branch_choice_follows_head_again() {
+        let mut panel = HistoryPanel {
+            branch: Some("feature-x".into()),
+            ..HistoryPanel::default()
+        };
+        let _ = panel.update(Message::BranchPicked(BranchChoice::Branch("main".into())));
+        assert_eq!(panel.branch.as_deref(), Some("main"));
+        let _ = panel.update(Message::BranchPicked(BranchChoice::Head));
+        assert_eq!(panel.branch, None);
+        assert_eq!(panel.applied.branch, None);
     }
 
     #[test]
