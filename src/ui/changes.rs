@@ -19,7 +19,7 @@ use crate::git::diff::diff_file;
 use crate::git::status::{discard_file, read_changes, read_repo_status, ChangeKind, ChangedFile};
 use crate::i18n::{t, tf};
 use crate::ui::context::{git_task, RepoContext};
-use crate::ui::diff_view::{self, Hunk};
+use crate::ui::diff_view::{self, Diff};
 use crate::ui::widgets::button as gs_button;
 use crate::ui::widgets::menu::{self, Entry, MenuItem};
 use crate::ui::widgets::toast::Toast;
@@ -95,18 +95,6 @@ pub enum Message {
     CopyPath(String),
 }
 
-/// The diff pane's content.
-enum Diff {
-    Loading,
-    Hunks {
-        hunks: Vec<Hunk>,
-        truncated: bool,
-    },
-    /// No text to show: a binary file, or a file with no line changes.
-    Empty,
-    Failed(String),
-}
-
 #[derive(Default)]
 pub struct ChangesPanel {
     repo: Option<Arc<str>>,
@@ -167,18 +155,7 @@ impl ChangesPanel {
             }
             Message::DiffLoaded(repo, key, result) => {
                 if self.is_current(&repo) && self.selected.as_ref() == Some(&key) {
-                    self.diff = Some(match result {
-                        Ok(Some((patch, truncated))) => {
-                            let hunks = diff_view::parse_hunks(&patch);
-                            if hunks.is_empty() {
-                                Diff::Empty
-                            } else {
-                                Diff::Hunks { hunks, truncated }
-                            }
-                        }
-                        Ok(None) => Diff::Empty,
-                        Err(err) => Diff::Failed(err),
-                    });
+                    self.diff = Some(Diff::loaded(result));
                 }
                 (Task::none(), None)
             }
@@ -493,7 +470,7 @@ impl ChangesPanel {
 
         let right = column![
             self.diff_header(),
-            self.view_diff(),
+            diff_view::pane(self.diff.as_ref(), t("changes_select_file")),
             self.commit_box(snapshot)
         ]
         .width(Length::Fill)
@@ -770,47 +747,6 @@ impl ChangesPanel {
         column![header, horizontal_divider()].into()
     }
 
-    fn view_diff(&self) -> Element<'_, Message> {
-        let typo = Typography::current();
-        let note = |label: String| -> Element<'_, Message> {
-            container(
-                text(label)
-                    .size(typo.sz(12))
-                    .font(typo.regular)
-                    .color(Palette::TEXT_DIMMER()),
-            )
-            .padding([12, 16])
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
-        };
-        match &self.diff {
-            None => note(t("changes_select_file").to_string()),
-            Some(Diff::Loading) => note(t("changes_loading").to_string()),
-            Some(Diff::Empty) => note(t("changes_no_diff").to_string()),
-            Some(Diff::Failed(err)) => note(err.clone()),
-            Some(Diff::Hunks { hunks, truncated }) => {
-                let hunks = diff_view::view(hunks);
-                if *truncated {
-                    column![
-                        hunks,
-                        container(
-                            text(t("changes_truncated"))
-                                .size(typo.sz(11))
-                                .font(typo.regular)
-                                .color(Palette::WARNING()),
-                        )
-                        .padding([4, 16]),
-                    ]
-                    .height(Length::Fill)
-                    .into()
-                } else {
-                    hunks
-                }
-            }
-        }
-    }
-
     fn commit_box<'a>(&'a self, snapshot: &'a Snapshot) -> Element<'a, Message> {
         let typo = Typography::current();
         let length = self.summary.chars().count();
@@ -945,7 +881,7 @@ fn kind_letter(kind: ChangeKind) -> (&'static str, Color) {
     }
 }
 
-fn item(label: &str, on_select: Message, danger: bool) -> Entry<Message> {
+pub(crate) fn item<M>(label: &str, on_select: M, danger: bool) -> Entry<M> {
     Entry::Item(MenuItem {
         label: label.to_string(),
         shortcut: None,
@@ -954,12 +890,12 @@ fn item(label: &str, on_select: Message, danger: bool) -> Entry<Message> {
     })
 }
 
-/// A confirmation band under the diff header: the question, Cancel, then the action.
-fn question<'a>(
-    prompt: Vec<Element<'a, Message>>,
-    action: Element<'a, Message>,
-    cancel: Message,
-) -> Element<'a, Message> {
+/// A confirmation band under a header: the question, Cancel, then the action.
+pub(crate) fn question<'a, M: Clone + 'a>(
+    prompt: Vec<Element<'a, M>>,
+    action: Element<'a, M>,
+    cancel: M,
+) -> Element<'a, M> {
     let mut band = iced::widget::Row::with_children(prompt)
         .spacing(8)
         .align_y(Alignment::Center);
@@ -978,10 +914,10 @@ fn question<'a>(
 }
 
 /// A text input on `bg_input`, with an optional trailing element inside the field.
-fn field<'a>(
-    input: text_input::TextInput<'a, Message>,
-    trailing: Option<Element<'a, Message>>,
-) -> Element<'a, Message> {
+pub(crate) fn field<'a, M: Clone + 'a>(
+    input: text_input::TextInput<'a, M>,
+    trailing: Option<Element<'a, M>>,
+) -> Element<'a, M> {
     let typo = Typography::current();
     let input = input
         .size(typo.sz(13))
@@ -1010,7 +946,7 @@ fn field<'a>(
         .into()
 }
 
-fn horizontal_divider<'a>() -> Element<'a, Message> {
+pub(crate) fn horizontal_divider<'a, M: 'a>() -> Element<'a, M> {
     container(Space::new().width(Length::Fill).height(1))
         .style(|_| container::Style {
             background: Some(Palette::DIVIDER().into()),
@@ -1019,7 +955,7 @@ fn horizontal_divider<'a>() -> Element<'a, Message> {
         .into()
 }
 
-fn vertical_divider<'a>() -> Element<'a, Message> {
+pub(crate) fn vertical_divider<'a, M: 'a>() -> Element<'a, M> {
     container(Space::new().width(1).height(Length::Fill))
         .style(|_| container::Style {
             background: Some(Palette::DIVIDER().into()),

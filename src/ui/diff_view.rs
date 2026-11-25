@@ -3,8 +3,10 @@
 
 use colony_ui::theme::Palette;
 use colony_ui::Typography;
-use iced::widget::{container, row, scrollable, text, Column};
+use iced::widget::{column, container, row, scrollable, text, Column};
 use iced::{Color, Element, Length};
+
+use crate::i18n::t;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineKind {
@@ -31,6 +33,78 @@ pub struct Hunk {
     /// The `@@ -a,b +c,d @@ …` line.
     pub header: String,
     pub lines: Vec<DiffLine>,
+}
+
+/// What a diff pane shows.
+pub enum Diff {
+    Loading,
+    Hunks {
+        hunks: Vec<Hunk>,
+        truncated: bool,
+    },
+    /// No text to show: a binary file, or a file with no line changes.
+    Empty,
+    Failed(String),
+}
+
+impl Diff {
+    /// The pane for a loaded `(patch, truncated)`; `None` means the file has no patch.
+    pub fn loaded(result: Result<Option<(String, bool)>, String>) -> Self {
+        match result {
+            Ok(Some((patch, truncated))) => {
+                let hunks = parse_hunks(&patch);
+                if hunks.is_empty() {
+                    Diff::Empty
+                } else {
+                    Diff::Hunks { hunks, truncated }
+                }
+            }
+            Ok(None) => Diff::Empty,
+            Err(err) => Diff::Failed(err),
+        }
+    }
+}
+
+/// The diff pane filling its parent; `idle` is shown when no file is selected.
+pub fn pane<'a, M: 'a>(diff: Option<&'a Diff>, idle: &str) -> Element<'a, M> {
+    let typo = Typography::current();
+    let note = |label: String| -> Element<'a, M> {
+        container(
+            text(label)
+                .size(typo.sz(12))
+                .font(typo.regular)
+                .color(Palette::TEXT_DIMMER()),
+        )
+        .padding([12, 16])
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+    };
+    match diff {
+        None => note(idle.to_string()),
+        Some(Diff::Loading) => note(t("changes_loading").to_string()),
+        Some(Diff::Empty) => note(t("changes_no_diff").to_string()),
+        Some(Diff::Failed(err)) => note(err.clone()),
+        Some(Diff::Hunks { hunks, truncated }) => {
+            let hunks = view(hunks);
+            if *truncated {
+                column![
+                    hunks,
+                    container(
+                        text(t("changes_truncated"))
+                            .size(typo.sz(11))
+                            .font(typo.regular)
+                            .color(Palette::WARNING()),
+                    )
+                    .padding([4, 16]),
+                ]
+                .height(Length::Fill)
+                .into()
+            } else {
+                hunks
+            }
+        }
+    }
 }
 
 /// Splits a unified patch into hunks and numbers their lines. File headers before the

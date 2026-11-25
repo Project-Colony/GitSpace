@@ -619,6 +619,27 @@ fn log_limit_counts_matching_commits() {
 }
 
 #[test]
+fn log_search_matches_author_and_hash_prefix() {
+    let (_dir, repo) = init_temp_repo();
+    let path = repo.path().parent().unwrap().to_str().unwrap().to_string();
+    let first = write_commit(&repo, "f.txt", "1", "first");
+    write_commit(&repo, "f.txt", "2", "second");
+    let search = |text: &str| {
+        let filter = CommitFilter {
+            search: Some(text.to_string()),
+            ..Default::default()
+        };
+        read_commit_log(&path, &filter, 10, false).expect("log")
+    };
+
+    assert_eq!(search("TESTER@example").len(), 2, "author email");
+    let by_hash = search(&first.to_string()[..7].to_uppercase());
+    assert_eq!(by_hash.len(), 1);
+    assert_eq!(by_hash[0].id, first.to_string());
+    assert!(search("nobody").is_empty());
+}
+
+#[test]
 fn log_branch_filter_accepts_remote_branches() {
     let (_dir, repo) = init_temp_repo();
     let path = repo.path().parent().unwrap().to_str().unwrap().to_string();

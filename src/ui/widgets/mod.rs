@@ -4,10 +4,6 @@
 //! of theme, accent, text size or font shows on the next frame. They can move to
 //! colony-ui later without changes.
 
-#[expect(
-    dead_code,
-    reason = "the repository screens will use the other buttons"
-)]
 pub mod button;
 // Only the tests use every tone so far.
 #[cfg_attr(

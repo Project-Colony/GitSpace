@@ -18,7 +18,7 @@ pub struct CommitFilter {
 #[derive(Debug, Clone)]
 pub struct CommitInfo {
     pub id: String,
-    /// Pre-computed short ID (first 8 chars) to avoid repeated string slicing in UI
+    /// The first 7 characters of the ID, as `git log --oneline` shows them.
     pub short_id: String,
     pub summary: String,
     pub message: String,
@@ -29,7 +29,6 @@ pub struct CommitInfo {
     pub additions: Option<usize>,
     pub deletions: Option<usize>,
     /// More than one parent marks a merge commit.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the History tab will read it"))]
     pub parent_count: usize,
     /// Branches and tags pointing at this commit; filled by `read_commit_log` only.
     pub refs: Vec<RefLabel>,
@@ -190,16 +189,19 @@ fn matches_filter(commit: &git2::Commit<'_>, filter: &CommitFilter) -> bool {
         }
     }
 
+    // The History filter field: message, author name or email, or the start of the hash.
     if let Some(search) = &filter.search {
         let search_lower = search.to_lowercase();
-        let message = commit.message().unwrap_or_default().to_lowercase();
-        let summary = commit
-            .summary()
-            .ok()
-            .flatten()
-            .unwrap_or_default()
-            .to_lowercase();
-        if !message.contains(&search_lower) && !summary.contains(&search_lower) {
+        let author = commit.author();
+        let haystack = format!(
+            "{}\n{}\n{}",
+            commit.message().unwrap_or_default(),
+            author.name().unwrap_or_default(),
+            author.email().unwrap_or_default()
+        )
+        .to_lowercase();
+        if !haystack.contains(&search_lower) && !commit.id().to_string().starts_with(&search_lower)
+        {
             return false;
         }
     }
@@ -287,7 +289,7 @@ fn resolve_ref_oid(repo: &Repository, reference: &str) -> Result<Option<git2::Oi
 
 fn commit_info_from_commit(commit: &git2::Commit<'_>) -> CommitInfo {
     let id = commit.id().to_string();
-    let short_id = id.chars().take(8).collect();
+    let short_id = id.chars().take(7).collect();
     CommitInfo {
         id,
         short_id,

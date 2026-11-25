@@ -1,611 +1,328 @@
-// Panneau d'historique des commits pour l'interface Iced.
-// Affiche la liste des commits avec filtres, et un volet de details
-// avec les fichiers modifies et les diffs expansibles.
-// Les lectures git tournent en tache de fond ; view() ne lit que l'etat du panneau.
+//! The History tab: the commit list with a filter, a branch picker, ref badges and merge
+//! markers, then the selected commit's detail, its changed files and the diff of one file.
+//! Git reads run in background tasks; `view` only reads the panel's state.
 
-use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use chrono::{Datelike, NaiveDate, TimeZone, Utc};
-use iced::widget::{
-    button, column, container, pick_list, row, rule, scrollable, text, text_input, Space,
+use chrono::{Local, TimeZone};
+use colony_ui::theme::{accent_key_to_color, contrast_on, Palette, ACCENT_OVERRIDES};
+use colony_ui::{fonts, Typography};
+use git2::{Oid, Repository};
+use iced::widget::text::Wrapping;
+use iced::widget::{button, column, container, pick_list, row, scrollable, stack, text};
+use iced::widget::{text_input, Column, Space};
+use iced::{Alignment, Border, Element, Length, Task};
+
+use crate::git::branch::{checkout_branch, create_branch};
+use crate::git::diff::{commit_diff_file, commit_diff_summaries, FileDiffSummary};
+use crate::git::log::{
+    list_local_branches, read_commit_log, CommitFilter, CommitInfo, RefKind, RefLabel,
 };
-use iced::{Element, Length, Task};
+use crate::i18n::{t, tf};
+use crate::ui::changes::{field, horizontal_divider, item, question, vertical_divider};
+use crate::ui::context::{git_task, RepoContext};
+use crate::ui::diff_view::{self, Diff};
+use crate::ui::widgets::button as gs_button;
+use crate::ui::widgets::chip::{chip, Tone};
+use crate::ui::widgets::menu::{self, Entry};
+use crate::ui::widgets::toast::Toast;
 
-use crate::ui::theme::Theme;
-
-use crate::git::{
-    diff::{commit_diff_file, commit_diff_summaries, FileDiff, FileDiffSummary},
-    log::{list_local_branches, read_commit_log, CommitFilter, CommitInfo},
-};
-use crate::ui::context::git_task;
-use crate::ui::context::RepoContext;
-
-/// Nombre maximal de commits charges au total.
+/// Most commits listed, after every "Load more".
 const MAX_COMMITS: usize = 200;
-
-/// Nombre de commits charges par page (chargement incremental).
+/// Commits added by each "Load more".
 const PAGE_SIZE: usize = 50;
+/// Width of the commit list.
+const LIST_WIDTH: f32 = 360.0;
+/// Characters of a short hash, as in `CommitInfo::short_id`.
+const SHORT_HASH: usize = 7;
+const MORE_GLYPH: &str = "\u{f141}";
+const COPY_GLYPH: &str = "\u{f0c5}";
 
-// ---------------------------------------------------------------------------
-// Filtres
-// ---------------------------------------------------------------------------
-
-/// Criteres de filtrage de l'historique de commits.
-#[derive(Default, Clone)]
-pub struct HistoryFilters {
-    pub branch: String,
-    pub author: String,
-    pub search: String,
-    pub since: String,
-    pub until: String,
-}
-
-impl HistoryFilters {
-    /// Filtre git correspondant aux champs saisis ; un champ vide ne filtre pas.
-    fn to_commit_filter(&self) -> CommitFilter {
-        let non_empty = |value: &str| (!value.is_empty()).then(|| value.to_string());
-        CommitFilter {
-            branch: non_empty(&self.branch),
-            author: non_empty(&self.author),
-            search: non_empty(&self.search),
-            since: parse_date(&self.since),
-            until: parse_date(&self.until),
-        }
-    }
-}
-
-/// Une page de commits et les branches locales proposees dans le filtre.
+/// One page of commits and the local branches offered by the branch picker.
 #[derive(Debug, Clone)]
 pub struct LogPage {
     commits: Vec<CommitInfo>,
     branches: Vec<String>,
-    /// Nombre de commits demandes : une page pleine signale qu'il en reste.
+    /// The number asked for: a full page means more commits may match.
     limit: usize,
 }
 
-// ---------------------------------------------------------------------------
-// Messages
-// ---------------------------------------------------------------------------
-
-/// Actions possibles depuis le panneau d'historique.
+/// What the detail pane needs besides the commit itself.
 #[derive(Debug, Clone)]
-pub enum Message {
-    /// Filtre de branche modifie.
-    BranchFilterChanged(String),
-    /// Branche locale choisie dans la liste (appliquee tout de suite).
-    BranchPicked(String),
-    /// Filtre d'auteur modifie.
-    AuthorChanged(String),
-    /// Recherche textuelle modifiee.
-    SearchChanged(String),
-    /// Application differee de la recherche apres debounce (version).
-    ApplyDebouncedSearch(u32),
-    /// Date de debut modifiee (format YYYY-MM-DD).
-    SinceChanged(String),
-    /// Date de fin modifiee (format YYYY-MM-DD).
-    UntilChanged(String),
-    /// Appliquer les filtres et recharger les commits.
-    ApplyFilters,
-    /// Selectionner un commit par son identifiant.
-    SelectCommit(String),
-    /// Etendre ou charger le diff d'un fichier.
-    ExpandFile(String),
-    /// Charger la page suivante de commits.
-    LoadMore,
-    /// Resultat d'une lecture du journal (numero de requete, page).
-    Loaded(Arc<str>, u64, Result<LogPage, String>),
-    /// Fichiers modifies d'un commit (identifiant, resumes).
-    SummariesLoaded(Arc<str>, String, Result<Vec<FileDiffSummary>, String>),
-    /// Patch d'un fichier (identifiant du commit, chemin, patch).
-    PatchLoaded(Arc<str>, String, String, FileDiff),
+pub struct Detail {
+    files: Vec<FileDiffSummary>,
+    parents: Vec<String>,
 }
 
-// ---------------------------------------------------------------------------
-// Panneau principal
-// ---------------------------------------------------------------------------
+/// A git action from the commit's "⋯" menu that ended.
+#[derive(Debug, Clone)]
+pub enum Done {
+    /// The short hash now checked out.
+    Checkout(String),
+    /// The name of the new branch.
+    Branch(String),
+}
 
-/// Panneau d'historique affichant les commits et leurs details.
+#[derive(Debug, Clone)]
+pub enum Message {
+    Filter(String),
+    /// Applies the filter typed 250 ms ago, unless a later key press replaced it.
+    ApplyFilter(u32),
+    BranchPicked(String),
+    Select(String),
+    SelectFile(String),
+    LoadMore,
+    /// Opens or closes the detail's "⋯" menu.
+    CommitMenu(bool),
+    CopyHash(String),
+    /// Asks to confirm checking out the selected commit, or closes the question.
+    ConfirmCheckout(bool),
+    Checkout,
+    /// Opens the branch name field (`Some`), types in it, or closes it (`None`).
+    BranchName(Option<String>),
+    CreateBranch,
+    /// A read of the log, numbered so that only the latest one is shown.
+    Loaded(Arc<str>, u64, Result<LogPage, String>),
+    DetailLoaded(Arc<str>, String, Result<Detail, String>),
+    /// The patch of `(commit, file)`.
+    DiffLoaded(
+        Arc<str>,
+        (String, String),
+        Result<Option<(String, bool)>, String>,
+    ),
+    /// The key names the failure title.
+    ActionDone(Arc<str>, &'static str, Result<Done, String>),
+}
+
+/// A commit as the list draws it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CommitRow {
+    pub short_id: String,
+    pub summary: String,
+    pub author: String,
+    pub initials: String,
+    /// A key of `colony_ui::theme::ACCENT_OVERRIDES`.
+    pub avatar_accent: &'static str,
+    pub when: String,
+    pub refs: Vec<RefLabel>,
+    pub is_merge: bool,
+}
+
+impl CommitRow {
+    /// Built when drawn, so the relative date and its language are never stale.
+    fn new(commit: &CommitInfo, now: i64) -> Self {
+        Self {
+            short_id: commit.short_id.clone(),
+            summary: commit.summary.clone(),
+            author: commit.author.clone(),
+            initials: initials(&commit.author),
+            avatar_accent: avatar_accent(commit.email.as_deref().unwrap_or(&commit.author)),
+            when: relative_time(commit.time.seconds(), now),
+            refs: commit.refs.clone(),
+            is_merge: commit.parent_count > 1,
+        }
+    }
+}
+
+#[derive(Default)]
 pub struct HistoryPanel {
     repo: Option<Arc<str>>,
-    filters: HistoryFilters,
-    /// Filtre de la derniere recherche lancee, reutilise par la pagination.
+    filter: String,
+    /// The branch shown; `None` follows HEAD.
+    branch: Option<String>,
+    /// The filter of the last read, reused by "Load more".
     applied: CommitFilter,
-    /// Branches locales proposees dans le filtre de branche.
     branches: Vec<String>,
     commits: Vec<CommitInfo>,
-    selected_commit: Option<String>,
-    /// Resumes legers des fichiers modifies (charges a la selection du commit).
-    diff_summaries: Vec<FileDiffSummary>,
-    /// Diffs complets charges a la demande (cle = chemin du fichier).
-    loaded_patches: HashMap<String, FileDiff>,
-    /// Ensemble des fichiers dont le diff est actuellement affiche.
-    expanded_files: HashSet<String>,
     error: Option<String>,
-    diff_error: Option<String>,
-    /// Compteur de version pour le debounce de la recherche.
-    search_debounce_version: u32,
-    /// Numero de la derniere lecture du journal ; les reponses plus anciennes sont ignorees.
-    request: u64,
     loading: bool,
-    /// Indique s'il reste des commits a charger.
     has_more: bool,
+    /// Number of the last log read; older replies are dropped.
+    request: u64,
+    filter_version: u32,
+    selected: Option<String>,
+    detail: Option<Detail>,
+    detail_error: Option<String>,
+    selected_file: Option<String>,
+    diff: Option<Diff>,
+    commit_menu: bool,
+    confirm_checkout: bool,
+    branch_name: Option<String>,
+    busy: bool,
 }
 
 impl HistoryPanel {
-    /// Cree un nouveau panneau d'historique.
-    pub fn new() -> Self {
-        Self {
-            repo: None,
-            filters: HistoryFilters::default(),
-            applied: CommitFilter::default(),
-            branches: Vec::new(),
-            commits: Vec::new(),
-            selected_commit: None,
-            diff_summaries: Vec::new(),
-            loaded_patches: HashMap::new(),
-            expanded_files: HashSet::new(),
-            error: None,
-            diff_error: None,
-            search_debounce_version: 0,
-            request: 0,
-            loading: false,
-            has_more: false,
-        }
-    }
-
-    /// Oublie le depot precedent et charge l'historique de `repo` en tache de fond.
-    /// Les filtres saisis sont conserves, sauf la branche quand on change de depot.
+    /// Forgets the previous repository and reads the history of `repo` in the background.
+    /// The filter text stays; the branch is cleared when the repository changes.
     pub fn load(&mut self, repo: &RepoContext) -> Task<Message> {
-        let mut filters = std::mem::take(&mut self.filters);
-        if self.repo.is_some() && !self.is_current(repo.path()) {
-            filters.branch.clear();
-        }
+        let same = self.is_current(repo.path());
         *self = Self {
             repo: Some(repo.path_arc()),
-            filters,
-            // Keep request numbers growing so a reply from before the reset is ignored.
+            filter: std::mem::take(&mut self.filter),
+            branch: if same { self.branch.take() } else { None },
+            // Keep request numbers growing so a reply from before the reset is dropped.
             request: self.request,
-            ..Self::new()
+            ..Self::default()
         };
         self.refresh()
     }
 
-    /// Affiche l'historique de `branch` dans `repo`.
+    /// Shows the history of `branch` in `repo`.
     pub fn show_branch(&mut self, branch: String, repo: &RepoContext) -> Task<Message> {
         if !self.is_current(repo.path()) {
             // Only the reset is wanted: a task that is never run never starts its job.
             let _ = self.load(repo);
         }
-        self.filters.branch = branch;
+        self.branch = Some(branch);
         self.refresh()
     }
 
-    // -----------------------------------------------------------------------
-    // Mise a jour (logique)
-    // -----------------------------------------------------------------------
-
-    /// Traite un message et effectue les operations correspondantes.
-    pub fn update(&mut self, message: Message, _repo: Option<&RepoContext>) -> Task<Message> {
+    /// Handles a message; the toast, if any, is for the application to show.
+    pub fn update(&mut self, message: Message) -> (Task<Message>, Option<Toast>) {
         match message {
-            Message::BranchFilterChanged(value) => {
-                self.filters.branch = value;
-            }
-
-            Message::BranchPicked(value) => {
-                self.filters.branch = value;
-                return self.refresh();
-            }
-
-            Message::AuthorChanged(value) => {
-                self.filters.author = value;
-            }
-
-            Message::SearchChanged(value) => {
-                // Stocker le texte immediatement pour l'affichage du champ
-                self.filters.search = value;
-                // Incrementer la version pour invalider les debounces precedents
-                self.search_debounce_version += 1;
-                let version = self.search_debounce_version;
-                // Retourner une tache qui attend 250ms puis envoie ApplyDebouncedSearch
-                return Task::perform(
-                    async move {
-                        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-                    },
-                    move |_| Message::ApplyDebouncedSearch(version),
+            Message::Filter(value) => {
+                self.filter = value;
+                self.filter_version += 1;
+                let version = self.filter_version;
+                let wait = Task::perform(
+                    tokio::time::sleep(std::time::Duration::from_millis(250)),
+                    move |_| Message::ApplyFilter(version),
                 );
+                return (wait, None);
             }
-
-            Message::SinceChanged(value) => {
-                self.filters.since = value;
-            }
-
-            Message::UntilChanged(value) => {
-                self.filters.until = value;
-            }
-
-            Message::ApplyDebouncedSearch(version) => {
-                // Appliquer uniquement si aucune frappe plus recente n'a eu lieu
-                if version == self.search_debounce_version {
-                    return self.refresh();
+            Message::ApplyFilter(version) => {
+                if version == self.filter_version {
+                    return (self.refresh(), None);
                 }
             }
-
-            Message::ApplyFilters => {
-                return self.refresh();
+            Message::BranchPicked(branch) => {
+                self.branch = Some(branch);
+                return (self.refresh(), None);
             }
-
-            Message::SelectCommit(id) => {
-                self.selected_commit = Some(id);
-                return self.load_diff();
-            }
-
+            Message::Select(id) => return (self.select(id), None),
+            Message::SelectFile(path) => return (self.select_file(path), None),
             Message::LoadMore => {
-                // La page suivante relit les premiers commits correspondants, plus une page
+                // The next page reads the first matching commits again, plus one page.
                 if self.has_more && !self.loading {
                     let limit = (self.commits.len() + PAGE_SIZE).min(MAX_COMMITS);
-                    return self.fetch(limit);
+                    return (self.fetch(limit), None);
                 }
             }
-
-            Message::ExpandFile(path) => {
-                // Basculer l'etat d'expansion du fichier
-                if self.expanded_files.remove(&path) {
-                    return Task::none();
-                }
-                self.expanded_files.insert(path.clone());
-                if !self.loaded_patches.contains_key(&path) {
-                    return self.load_file_patch(path);
+            Message::CommitMenu(open) => self.commit_menu = open,
+            Message::CopyHash(id) => {
+                self.commit_menu = false;
+                return (iced::clipboard::write(id), None);
+            }
+            Message::ConfirmCheckout(open) => {
+                self.commit_menu = false;
+                self.branch_name = None;
+                self.confirm_checkout = open;
+            }
+            Message::Checkout => {
+                self.confirm_checkout = false;
+                if let Some(id) = self.selected.clone() {
+                    let task = self.run("history_checkout_failed", move |repo| {
+                        checkout_branch(repo, &id)
+                            .map(|()| Done::Checkout(short_hash(&id).to_string()))
+                            .map_err(|err| err.to_string())
+                    });
+                    return (task, None);
                 }
             }
-
-            // -- Resultats des taches de fond --
+            Message::BranchName(name) => {
+                self.commit_menu = false;
+                self.confirm_checkout = false;
+                self.branch_name = name;
+            }
+            Message::CreateBranch => {
+                let name = self.branch_name.as_deref().unwrap_or_default().trim();
+                if let (false, Some(id)) = (name.is_empty(), self.selected.clone()) {
+                    let name = name.to_string();
+                    self.branch_name = None;
+                    let task = self.run("history_create_failed", move |repo| {
+                        create_branch(repo, &name, Some(&id))
+                            .map(|()| Done::Branch(name))
+                            .map_err(|err| err.to_string())
+                    });
+                    return (task, None);
+                }
+            }
             Message::Loaded(repo, request, result) => {
-                if !self.is_current(&repo) || request != self.request {
-                    return Task::none();
-                }
-                self.loading = false;
-                match result {
-                    Ok(page) => {
-                        self.has_more =
-                            page.commits.len() == page.limit && page.limit < MAX_COMMITS;
-                        self.commits = page.commits;
-                        self.branches = page.branches;
-                    }
-                    Err(err) => {
-                        self.commits.clear();
-                        self.has_more = false;
-                        self.error = Some(format!("Echec de lecture des commits : {err}"));
-                    }
+                if self.is_current(&repo) && request == self.request {
+                    return (self.apply_page(result), None);
                 }
             }
-
-            Message::SummariesLoaded(repo, id, result) => {
-                if self.is_current(&repo) && self.selected_commit.as_ref() == Some(&id) {
+            Message::DetailLoaded(repo, id, result) => {
+                if self.is_current(&repo) && self.selected.as_ref() == Some(&id) {
                     match result {
-                        Ok(summaries) => self.diff_summaries = summaries,
-                        Err(err) => {
-                            self.diff_error = Some(format!("Echec du chargement du diff : {err}"));
+                        Ok(detail) => {
+                            let first = detail.files.first().map(|file| file.path.clone());
+                            self.detail = Some(detail);
+                            if let Some(path) = first {
+                                return (self.select_file(path), None);
+                            }
                         }
+                        Err(err) => self.detail_error = Some(err),
                     }
                 }
             }
-
-            Message::PatchLoaded(repo, id, path, diff) => {
-                if self.is_current(&repo) && self.selected_commit.as_ref() == Some(&id) {
-                    self.loaded_patches.insert(path, diff);
+            Message::DiffLoaded(repo, key, result) => {
+                if self.is_current(&repo)
+                    && self.selected.as_ref() == Some(&key.0)
+                    && self.selected_file.as_ref() == Some(&key.1)
+                {
+                    self.diff = Some(Diff::loaded(result));
+                }
+            }
+            Message::ActionDone(repo, failed, result) => {
+                if self.is_current(&repo) {
+                    self.busy = false;
+                    // On success the application reloads every panel, this one included.
+                    let toast = match result {
+                        Ok(Done::Checkout(hash)) => {
+                            Toast::success(tf("history_checked_out", &[("hash", &hash)]))
+                        }
+                        Ok(Done::Branch(name)) => {
+                            Toast::success(tf("history_branch_created", &[("name", &name)]))
+                        }
+                        Err(err) => Toast::error(t(failed), err),
+                    };
+                    return (Task::none(), Some(toast));
                 }
             }
         }
-
-        Task::none()
+        (Task::none(), None)
     }
-
-    // -----------------------------------------------------------------------
-    // Vue (rendu)
-    // -----------------------------------------------------------------------
-
-    /// Construit l'arbre de widgets Iced pour le panneau d'historique.
-    pub fn view<'a>(
-        &'a self,
-        _theme: &'a Theme,
-        repo: Option<&'a RepoContext>,
-    ) -> Element<'a, Message> {
-        let mut main_col = column![].spacing(8).padding(8);
-
-        // Titre et description
-        main_col = main_col
-            .push(text("Commit history").size(24))
-            .push(text("Explore commits, filter by branch or author, and inspect diffs.").size(14));
-
-        // Sans depot, message d'aide
-        if repo.is_none() {
-            main_col = main_col
-                .push(text("Select or clone a repository to view its commit history.").size(14));
-            return main_col.into();
-        }
-
-        // Section des filtres
-        main_col = main_col.push(self.view_filters());
-
-        // Erreur globale, sous les filtres pour pouvoir les corriger
-        if let Some(error) = &self.error {
-            main_col = main_col.push(text(error.as_str()).size(14).style(text::danger));
-        }
-
-        main_col = main_col.push(rule::horizontal(1));
-
-        // Deux colonnes : liste des commits | volet de details
-        let commit_list = self.view_commit_list();
-        let details = self.view_details_pane();
-
-        let two_columns = row![
-            container(commit_list).width(Length::FillPortion(55)),
-            container(details).width(Length::FillPortion(45)),
-        ]
-        .spacing(16);
-
-        main_col = main_col.push(two_columns);
-
-        main_col.into()
-    }
-
-    /// Section de filtres dans un conteneur stylise.
-    fn view_filters(&self) -> Element<'_, Message> {
-        // Premiere ligne : branche et auteur
-        let branch_input =
-            text_input("All branches", &self.filters.branch).on_input(Message::BranchFilterChanged);
-        let branch_pick = pick_list(
-            self.branches.as_slice(),
-            None::<String>,
-            Message::BranchPicked,
-        )
-        .placeholder("Branches locales");
-        let author_input =
-            text_input("name or email", &self.filters.author).on_input(Message::AuthorChanged);
-
-        let first_row = row![
-            text("Branch").size(14),
-            branch_input,
-            branch_pick,
-            Space::new().width(Length::Fixed(8.0)),
-            text("Author").size(14),
-            author_input,
-        ]
-        .spacing(8);
-
-        // Deuxieme ligne : recherche, dates, bouton appliquer
-        let search_input =
-            text_input("message contains", &self.filters.search).on_input(Message::SearchChanged);
-        let since_input =
-            text_input("YYYY-MM-DD", &self.filters.since).on_input(Message::SinceChanged);
-        let until_input =
-            text_input("YYYY-MM-DD", &self.filters.until).on_input(Message::UntilChanged);
-        let apply_btn = button(text("Apply filters")).on_press(Message::ApplyFilters);
-
-        let second_row = row![
-            text("Search").size(14),
-            search_input,
-            Space::new().width(Length::Fixed(8.0)),
-            text("Since").size(14),
-            since_input,
-            text("Until").size(14),
-            until_input,
-            apply_btn,
-        ]
-        .spacing(8);
-
-        container(column![text("Filters").size(20), first_row, second_row,].spacing(6))
-            .padding(10)
-            .into()
-    }
-
-    /// Liste defilable des commits.
-    fn view_commit_list(&self) -> Element<'_, Message> {
-        let mut col = column![].spacing(4);
-
-        if self.commits.is_empty() {
-            let empty = if self.loading {
-                "Chargement..."
-            } else {
-                "No commits match the current filters."
-            };
-            col = col.push(text(empty).size(14));
-            return scrollable(col).into();
-        }
-
-        for commit in &self.commits {
-            let is_selected = self
-                .selected_commit
-                .as_deref()
-                .map(|id| id == commit.id)
-                .unwrap_or(false);
-
-            // Formater la date
-            let date_str = chrono::DateTime::<Utc>::from_timestamp(commit.time.seconds(), 0)
-                .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
-                .unwrap_or_else(|| "Unknown time".to_string());
-
-            let commit_id = commit.id.clone();
-
-            // Contenu de la ligne
-            let row_content = column![
-                row![
-                    text(&commit.summary).size(14),
-                    Space::new().width(Length::Fixed(8.0)),
-                    text(&commit.short_id).size(12),
-                ]
-                .spacing(4),
-                text(commit.author.to_string()).size(12),
-                text(date_str).size(12),
-            ]
-            .spacing(2);
-
-            // Envelopper dans un bouton pour la selection
-            let commit_btn = button(row_content)
-                .on_press(Message::SelectCommit(commit_id))
-                .padding(8)
-                .width(Length::Fill);
-
-            // Marquer visuellement la selection
-            if is_selected {
-                col = col.push(container(commit_btn).padding(2));
-            } else {
-                col = col.push(commit_btn);
-            }
-        }
-
-        // Bouton pour charger la page suivante si des commits restent disponibles
-        if self.has_more {
-            col = col.push(
-                button(text("Charger plus...").size(14))
-                    .on_press_maybe((!self.loading).then_some(Message::LoadMore))
-                    .padding(8)
-                    .width(Length::Fill),
-            );
-        }
-
-        scrollable(col).into()
-    }
-
-    /// Volet de details du commit selectionne.
-    fn view_details_pane(&self) -> Element<'_, Message> {
-        let mut col = column![].spacing(6);
-        col = col.push(text("Details").size(20));
-
-        let Some(commit_id) = &self.selected_commit else {
-            col = col
-                .push(text("Select a commit from the list to see its details and diff.").size(14));
-            return col.into();
-        };
-
-        // Trouver le commit dans la liste
-        let Some(commit) = self.commits.iter().find(|c| &c.id == commit_id) else {
-            col = col.push(text("Commit not found.").size(14));
-            return col.into();
-        };
-
-        // Resume du commit
-        col = col.push(text(&commit.summary).size(16));
-
-        // Corps du message (si different du resume)
-        let full_message = commit.message.trim();
-        let summary_trimmed = commit.summary.trim();
-        let message_body = if full_message.starts_with(summary_trimmed) {
-            full_message
-                .get(summary_trimmed.len()..)
-                .unwrap_or("")
-                .trim_start()
-        } else {
-            full_message
-        };
-        if !message_body.is_empty() {
-            col = col.push(text(message_body).size(13));
-        }
-
-        // Email de l'auteur
-        if let Some(email) = &commit.email {
-            col = col.push(text(email.as_str()).size(12));
-        }
-
-        // Statistiques du commit
-        if let (Some(files), Some(additions), Some(deletions)) =
-            (commit.files_changed, commit.additions, commit.deletions)
-        {
-            col = col.push(
-                text(format!(
-                    "Files changed: {files} (+{additions}, -{deletions})"
-                ))
-                .size(12),
-            );
-        }
-
-        col = col.push(rule::horizontal(1));
-        col = col.push(text("Files changed").size(18));
-
-        // Erreur de diff
-        if let Some(error) = &self.diff_error {
-            col = col.push(text(error.as_str()).size(14));
-        }
-
-        // Liste des fichiers modifies avec diffs expansibles
-        if self.diff_summaries.is_empty() {
-            col = col.push(text("No file changes found.").size(14));
-            return scrollable(col).into();
-        }
-
-        let mut files_col = column![].spacing(4);
-        for summary in &self.diff_summaries {
-            let file_path = summary.path.clone();
-            let is_expanded = self.expanded_files.contains(&file_path);
-
-            // En-tete du fichier
-            let header_text = if summary.is_binary {
-                format!("{} (binary)", summary.path)
-            } else {
-                format!(
-                    "{} (+{}, -{})",
-                    summary.path, summary.additions, summary.deletions
-                )
-            };
-
-            let expand_label = if is_expanded { "[-]" } else { "[+]" };
-
-            let header_row = row![
-                button(text(expand_label).size(12))
-                    .on_press(Message::ExpandFile(file_path.clone()))
-                    .padding(2),
-                text(header_text).size(13),
-            ]
-            .spacing(4);
-
-            files_col = files_col.push(header_row);
-
-            // Afficher le diff si le fichier est etendu
-            if is_expanded {
-                if let Some(diff) = self.loaded_patches.get(&file_path) {
-                    if diff.truncated {
-                        files_col =
-                            files_col.push(text("Fichier tronque (trop volumineux)").size(11));
-                    }
-                    // Afficher le patch dans un conteneur a largeur fixe
-                    files_col = files_col.push(
-                        container(scrollable(text(&diff.patch).size(12)))
-                            .padding(4)
-                            .width(Length::Fill),
-                    );
-                } else {
-                    files_col = files_col.push(text("Loading...").size(12));
-                }
-            }
-        }
-
-        col = col.push(scrollable(files_col));
-
-        scrollable(col).into()
-    }
-
-    // -----------------------------------------------------------------------
-    // Logique interne
-    // -----------------------------------------------------------------------
 
     fn is_current(&self, repo: &str) -> bool {
         self.repo.as_deref() == Some(repo)
     }
 
-    /// Relance la recherche avec les filtres saisis, depuis la premiere page.
+    /// Reads the log again from the first page, with the filter and branch shown.
     fn refresh(&mut self) -> Task<Message> {
         self.error = None;
-        self.diff_error = None;
-        self.selected_commit = None;
-        self.diff_summaries.clear();
-        self.loaded_patches.clear();
-        self.expanded_files.clear();
-        self.applied = self.filters.to_commit_filter();
+        self.clear_selection();
+        let search = self.filter.trim();
+        self.applied = CommitFilter {
+            branch: self.branch.clone(),
+            search: (!search.is_empty()).then(|| search.to_string()),
+            ..CommitFilter::default()
+        };
         self.fetch(PAGE_SIZE)
     }
 
-    /// Lit les `limit` premiers commits du filtre applique.
+    fn clear_selection(&mut self) {
+        self.selected = None;
+        self.detail = None;
+        self.detail_error = None;
+        self.selected_file = None;
+        self.diff = None;
+        self.commit_menu = false;
+        self.confirm_checkout = false;
+        self.branch_name = None;
+    }
+
+    /// Reads the first `limit` commits of the applied filter.
     fn fetch(&mut self, limit: usize) -> Task<Message> {
         let Some(repo) = self.repo.clone() else {
             return Task::none();
@@ -621,62 +338,632 @@ impl HistoryPanel {
         )
     }
 
-    /// Charge les resumes de diff pour le commit selectionne.
-    fn load_diff(&mut self) -> Task<Message> {
-        self.diff_summaries.clear();
-        self.loaded_patches.clear();
-        self.expanded_files.clear();
-        self.diff_error = None;
-
-        let (Some(repo), Some(id)) = (self.repo.clone(), self.selected_commit.clone()) else {
-            return Task::none();
-        };
-        git_task(
-            repo,
-            {
-                let id = id.clone();
-                move |repo| commit_diff_summaries(repo, &id).map_err(|err| err.to_string())
-            },
-            move |repo, result| Message::SummariesLoaded(repo, id.clone(), result),
-        )
+    fn apply_page(&mut self, result: Result<LogPage, String>) -> Task<Message> {
+        self.loading = false;
+        match result {
+            Ok(page) => {
+                self.has_more = page.commits.len() == page.limit && page.limit < MAX_COMMITS;
+                self.commits = page.commits;
+                self.branches = page.branches;
+                // "Load more" keeps the selection; a new read selects the newest commit.
+                match (&self.selected, self.commits.first()) {
+                    (None, Some(first)) => {
+                        let id = first.id.clone();
+                        self.select(id)
+                    }
+                    _ => Task::none(),
+                }
+            }
+            Err(err) => {
+                self.commits.clear();
+                self.has_more = false;
+                self.error = Some(err);
+                Task::none()
+            }
+        }
     }
 
-    /// Charge le patch d'un fichier a la demande (chargement paresseux).
-    fn load_file_patch(&self, file_path: String) -> Task<Message> {
-        let (Some(repo), Some(id)) = (self.repo.clone(), self.selected_commit.clone()) else {
+    fn select(&mut self, id: String) -> Task<Message> {
+        self.clear_selection();
+        let Some(repo) = self.repo.clone() else {
             return Task::none();
         };
+        self.selected = Some(id.clone());
         let job_id = id.clone();
-        let job_path = file_path.clone();
         git_task(
             repo,
-            move |repo| match commit_diff_file(repo, &job_id, &job_path) {
-                Ok(Some(diff)) => Ok(diff),
-                // Fichier absent du diff, inserer un espace reserve
-                Ok(None) => Ok(placeholder_diff("(pas de modifications)")),
-                Err(err) => Err(err.to_string()),
-            },
-            move |repo, result| {
-                let diff = result.unwrap_or_else(|err| {
-                    placeholder_diff(&format!("Erreur de chargement du diff : {err}"))
-                });
-                Message::PatchLoaded(repo, id.clone(), file_path.clone(), diff)
-            },
+            move |repo| read_detail(repo, &job_id),
+            move |repo, result| Message::DetailLoaded(repo, id.clone(), result),
         )
     }
-}
 
-/// Diff sans contenu reel, affiche a la place d'un patch absent ou en erreur.
-fn placeholder_diff(patch: &str) -> FileDiff {
-    FileDiff {
-        additions: 0,
-        deletions: 0,
-        patch: patch.to_string(),
-        truncated: false,
+    fn select_file(&mut self, path: String) -> Task<Message> {
+        let (Some(repo), Some(id)) = (self.repo.clone(), self.selected.clone()) else {
+            return Task::none();
+        };
+        self.selected_file = Some(path.clone());
+        self.diff = Some(Diff::Loading);
+        let key = (id.clone(), path.clone());
+        git_task(
+            repo,
+            move |repo| {
+                commit_diff_file(repo, &id, &path)
+                    .map(|diff| diff.map(|diff| (diff.patch, diff.truncated)))
+                    .map_err(|err| err.to_string())
+            },
+            move |repo, result| Message::DiffLoaded(repo, key.clone(), result),
+        )
+    }
+
+    /// Runs a git action unless one is running.
+    fn run(
+        &mut self,
+        failed: &'static str,
+        job: impl FnOnce(&str) -> Result<Done, String> + Send + 'static,
+    ) -> Task<Message> {
+        let Some(repo) = self.repo.clone() else {
+            return Task::none();
+        };
+        if self.busy {
+            return Task::none();
+        }
+        self.busy = true;
+        git_task(repo, job, move |repo, result| {
+            Message::ActionDone(repo, failed, result)
+        })
+    }
+
+    pub fn view(&self) -> Element<'_, Message> {
+        let list = column![self.toolbar(), self.commit_list()]
+            .width(Length::Fixed(LIST_WIDTH))
+            .height(Length::Fill);
+        row![list, vertical_divider(), self.detail_pane()]
+            .height(Length::Fill)
+            .into()
+    }
+
+    /// The filter field and the branch picker.
+    fn toolbar(&self) -> Element<'_, Message> {
+        let typo = Typography::current();
+        let filter = field(
+            text_input(t("history_filter_placeholder"), &self.filter).on_input(Message::Filter),
+            None,
+        );
+        let branch = pick_list(
+            self.branches.as_slice(),
+            self.branch.clone(),
+            Message::BranchPicked,
+        )
+        .placeholder(t("history_current_branch"))
+        .text_size(typo.sz(12))
+        .font(typo.regular);
+        container(row![filter, branch].spacing(6).align_y(Alignment::Center))
+            .padding([10, 10])
+            .into()
+    }
+
+    fn commit_list(&self) -> Element<'_, Message> {
+        if self.commits.is_empty() {
+            let label = match &self.error {
+                Some(err) => tf("history_load_failed", &[("error", err)]),
+                None if self.loading => t("changes_loading").to_string(),
+                None if self.applied.search.is_some() => t("history_no_match").to_string(),
+                None => t("history_empty").to_string(),
+            };
+            return note(label);
+        }
+        let now = chrono::Utc::now().timestamp();
+        let mut rows = Column::new().padding([0, 6]);
+        for commit in &self.commits {
+            let selected = self.selected.as_deref() == Some(commit.id.as_str());
+            rows = rows.push(commit_row(
+                CommitRow::new(commit, now),
+                commit.id.clone(),
+                selected,
+            ));
+        }
+        if self.has_more {
+            rows = rows.push(
+                container(gs_button::ghost(
+                    t("history_load_more"),
+                    (!self.loading).then_some(Message::LoadMore),
+                ))
+                .center_x(Length::Fill)
+                .padding([8, 0]),
+            );
+        }
+        scrollable(rows).height(Length::Fill).into()
+    }
+
+    fn detail_pane(&self) -> Element<'_, Message> {
+        let selected = self
+            .selected
+            .as_ref()
+            .and_then(|id| self.commits.iter().find(|commit| &commit.id == id));
+        let Some(commit) = selected else {
+            return note(t("history_select_commit").to_string());
+        };
+        let mut files = Column::new().spacing(1);
+        if let Some(err) = &self.detail_error {
+            files = files.push(note_line(err.clone()));
+        }
+        for file in self.detail.iter().flat_map(|detail| &detail.files) {
+            files = files.push(self.file_row(file));
+        }
+        let files = container(scrollable(files.padding([6, 10]))).max_height(180.0);
+        column![
+            self.detail_header(commit),
+            horizontal_divider(),
+            files,
+            horizontal_divider(),
+            diff_view::pane(self.diff.as_ref(), t("history_select_file")),
+        ]
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+    }
+
+    /// The summary with the "⋯" menu, the body, the author, date, hash and parents, then a
+    /// pending checkout question or branch name field.
+    fn detail_header<'a>(&'a self, commit: &'a CommitInfo) -> Element<'a, Message> {
+        let typo = Typography::current();
+        let entries = vec![
+            item(
+                t("history_copy_hash"),
+                Message::CopyHash(commit.id.clone()),
+                false,
+            ),
+            Entry::Separator,
+            item(t("history_checkout"), Message::ConfirmCheckout(true), false),
+            item(
+                t("history_create_branch"),
+                Message::BranchName(Some(String::new())),
+                false,
+            ),
+        ];
+        let more = menu::popup(
+            gs_button::icon(
+                MORE_GLYPH,
+                Some(Message::CommitMenu(!self.commit_menu)),
+                t("history_commit_actions"),
+            ),
+            self.commit_menu,
+            entries,
+            Message::CommitMenu(false),
+        );
+        let title = row![
+            text(commit.summary.as_str())
+                .size(typo.sz(15))
+                .font(typo.bold)
+                .color(Palette::TEXT_PRIMARY())
+                .width(Length::Fill),
+            more,
+        ]
+        .spacing(10)
+        .align_y(Alignment::Start);
+
+        let small = |label: String| {
+            text(label)
+                .size(typo.sz(11))
+                .font(typo.regular)
+                .color(Palette::TEXT_DIM())
+        };
+        let date = Local
+            .timestamp_opt(commit.time.seconds(), 0)
+            .single()
+            .map(|date| date.format("%Y-%m-%d %H:%M").to_string())
+            .unwrap_or_default();
+        let hash = button(
+            row![
+                text(commit.short_id.as_str())
+                    .size(typo.sz(11))
+                    .font(typo.regular)
+                    .color(Palette::TEXT_SECONDARY()),
+                text(COPY_GLYPH)
+                    .size(typo.sz(10))
+                    .font(fonts::glyph_font())
+                    .color(Palette::TEXT_DIMMER()),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
+        )
+        .padding([2, 7])
+        .on_press(Message::CopyHash(commit.id.clone()))
+        .style(|_, status| button::Style {
+            background: Some(
+                if matches!(status, button::Status::Hovered | button::Status::Pressed) {
+                    Palette::BG_SELECTED()
+                } else {
+                    Palette::BG_CARD_HOVER()
+                }
+                .into(),
+            ),
+            border: Border::default().rounded(4),
+            ..Default::default()
+        });
+        let mut meta = row![
+            avatar(
+                &initials(&commit.author),
+                avatar_accent(commit.email.as_deref().unwrap_or(&commit.author)),
+                18.0,
+            ),
+            small(commit.author.clone()),
+            small(date),
+            gs_button::with_tip(hash, t("history_copy_hash")),
+        ]
+        .spacing(12)
+        .align_y(Alignment::Center);
+        if let Some(detail) = &self.detail {
+            let parents: Vec<&str> = detail.parents.iter().map(|id| short_hash(id)).collect();
+            match parents.as_slice() {
+                [] => {}
+                [one] => meta = meta.push(small(tf("history_parent", &[("hash", one)]))),
+                many => {
+                    meta = meta.push(small(tf(
+                        "history_parents",
+                        &[("hashes", &many.join(", "))],
+                    )))
+                }
+            }
+        }
+
+        let mut header = column![title].spacing(8).padding([16, 18]);
+        let body = commit_body(commit);
+        if !body.is_empty() {
+            header = header.push(
+                text(body)
+                    .size(typo.sz(12))
+                    .font(typo.regular)
+                    .color(Palette::TEXT_DIM()),
+            );
+        }
+        header = header.push(meta);
+
+        let mut bands = column![header];
+        let prompt = |label: String| -> Element<'a, Message> {
+            text(label)
+                .size(typo.sz(12))
+                .font(typo.regular)
+                .color(Palette::TEXT_SECONDARY())
+                .into()
+        };
+        let hash = commit.short_id.as_str();
+        if self.confirm_checkout {
+            bands = bands.push(question(
+                vec![prompt(tf("history_checkout_confirm", &[("hash", hash)]))],
+                gs_button::primary(
+                    t("history_checkout_button"),
+                    (!self.busy).then_some(Message::Checkout),
+                ),
+                Message::ConfirmCheckout(false),
+            ));
+        }
+        if let Some(name) = &self.branch_name {
+            let ready = !self.busy && !name.trim().is_empty();
+            bands = bands.push(question(
+                vec![
+                    prompt(tf("history_branch_prompt", &[("hash", hash)])),
+                    container(field(
+                        text_input(t("history_branch_name"), name)
+                            .on_input(|name| Message::BranchName(Some(name)))
+                            .on_submit_maybe(ready.then_some(Message::CreateBranch)),
+                        None,
+                    ))
+                    .width(Length::Fixed(220.0))
+                    .into(),
+                ],
+                gs_button::primary(
+                    t("history_create_button"),
+                    ready.then_some(Message::CreateBranch),
+                ),
+                Message::BranchName(None),
+            ));
+        }
+        bands.into()
+    }
+
+    /// A changed file: its name and folder, +N −N and the five-cell bar.
+    fn file_row<'a>(&'a self, file: &'a FileDiffSummary) -> Element<'a, Message> {
+        let typo = Typography::current();
+        let selected = self.selected_file.as_deref() == Some(file.path.as_str());
+        let (folder, name) = file
+            .path
+            .rsplit_once('/')
+            .unwrap_or(("", file.path.as_str()));
+        let mut content = row![
+            text(name)
+                .size(typo.sz(12))
+                .font(typo.regular)
+                .color(Palette::TEXT_PRIMARY()),
+            text(folder)
+                .size(typo.sz(10))
+                .font(typo.regular)
+                .color(Palette::TEXT_DIMMEST())
+                .width(Length::Fill),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center);
+        if file.additions > 0 {
+            content = content.push(
+                text(format!("+{}", file.additions))
+                    .size(typo.sz(10))
+                    .font(typo.regular)
+                    .color(Palette::SUCCESS()),
+            );
+        }
+        if file.deletions > 0 {
+            content = content.push(
+                text(format!("−{}", file.deletions))
+                    .size(typo.sz(10))
+                    .font(typo.regular)
+                    .color(Palette::ERROR()),
+            );
+        }
+        if !file.is_binary {
+            content = content.push(change_bar(file.additions, file.deletions));
+        }
+        button(content)
+            .on_press(Message::SelectFile(file.path.clone()))
+            .padding([5, 8])
+            .width(Length::Fill)
+            .style(move |_, status| button::Style {
+                background: (selected
+                    || matches!(status, button::Status::Hovered | button::Status::Pressed))
+                .then(|| Palette::BG_CARD_HOVER().into()),
+                border: Border::default().rounded(6),
+                ..Default::default()
+            })
+            .into()
     }
 }
 
-/// Lit les `limit` premiers commits correspondant a `filter` et les branches locales.
+/// A list row: the lane dot, the avatar, the summary with its ref badges over
+/// "author · date", and the short hash.
+fn commit_row<'a>(commit: CommitRow, id: String, selected: bool) -> Element<'a, Message> {
+    let typo = Typography::current();
+    let mut line = row![container(
+        text(commit.summary)
+            .size(typo.sz(12))
+            .font(typo.regular)
+            .color(Palette::TEXT_PRIMARY())
+            .wrapping(Wrapping::None),
+    )
+    .width(Length::Fill)
+    .clip(true)]
+    .spacing(6)
+    .align_y(Alignment::Center);
+    for label in &commit.refs {
+        let tone = match label.kind {
+            RefKind::Local | RefKind::Head => Tone::Accent,
+            RefKind::Remote => Tone::Remote,
+            RefKind::Tag => Tone::Tag,
+        };
+        line = line.push(chip(&label.name, tone));
+    }
+    let meta = text(format!("{} · {}", commit.author, commit.when))
+        .size(typo.sz(11))
+        .font(typo.regular)
+        .color(Palette::TEXT_DIMMEST())
+        .wrapping(Wrapping::None);
+    let content = row![
+        lane(commit.is_merge),
+        avatar(&commit.initials, commit.avatar_accent, 22.0),
+        column![line, meta]
+            .spacing(2)
+            .width(Length::Fill)
+            .padding([7, 0]),
+        text(commit.short_id)
+            .size(typo.sz(11))
+            .font(typo.regular)
+            .color(Palette::TEXT_DIMMER()),
+    ]
+    .spacing(10)
+    .height(Length::Fill)
+    .align_y(Alignment::Center);
+    // No vertical padding: the lane runs the full height of the row.
+    button(content)
+        .on_press(Message::Select(id))
+        .padding(iced::Padding {
+            top: 0.0,
+            right: 10.0,
+            bottom: 0.0,
+            left: 6.0,
+        })
+        .width(Length::Fill)
+        .height(Length::Fixed(row_height()))
+        .style(move |_, status| button::Style {
+            background: (selected
+                || matches!(status, button::Status::Hovered | button::Status::Pressed))
+            .then(|| Palette::BG_CARD_HOVER().into()),
+            border: Border::default().rounded(6),
+            ..Default::default()
+        })
+        .into()
+}
+
+/// A row's height at the current text size: its padding, the summary line (as tall as a
+/// badge) and the meta line. Fixed so the lane line can run from row to row.
+fn row_height() -> f32 {
+    let typo = Typography::current();
+    let line = |size: f32| size * 1.3;
+    let badge = line(typo.sz(11)) + 6.0;
+    14.0 + line(typo.sz(12)).max(badge) + 2.0 + line(typo.sz(11)) + 2.0
+}
+
+/// The vertical line through the rows with this commit's dot: filled for a commit,
+/// a hollow ring for a merge.
+fn lane<'a>(is_merge: bool) -> Element<'a, Message> {
+    let line = container(Space::new().width(2).height(Length::Fill)).style(|_| container::Style {
+        background: Some(Palette::BG_SELECTED().into()),
+        ..Default::default()
+    });
+    let dot = container(Space::new().width(9).height(9)).style(move |_| container::Style {
+        background: Some(
+            if is_merge {
+                Palette::BG_PRIMARY()
+            } else {
+                Palette::ACCENT()
+            }
+            .into(),
+        ),
+        border: Border::default()
+            .rounded(5)
+            .width(if is_merge { 2 } else { 0 })
+            .color(Tone::Remote.color()),
+        ..Default::default()
+    });
+    stack![
+        container(line)
+            .center_x(Length::Fixed(16.0))
+            .height(Length::Fill),
+        container(dot)
+            .center_x(Length::Fixed(16.0))
+            .center_y(Length::Fill),
+    ]
+    .width(Length::Fixed(16.0))
+    .height(Length::Fill)
+    .into()
+}
+
+/// The author's initials in a circle of their accent colour.
+fn avatar<'a>(initials: &str, accent: &str, size: f32) -> Element<'a, Message> {
+    let typo = Typography::current();
+    let color = accent_key_to_color(accent).unwrap_or_else(Palette::ACCENT);
+    container(
+        text(initials.to_string())
+            .size(typo.sz(if size < 20.0 { 9 } else { 10 }))
+            .font(typo.bold)
+            .color(contrast_on(color)),
+    )
+    .center_x(Length::Fixed(size))
+    .center_y(Length::Fixed(size))
+    .style(move |_| container::Style {
+        background: Some(color.into()),
+        border: Border::default().rounded(size / 2.0),
+        ..Default::default()
+    })
+    .into()
+}
+
+/// Five cells: green for added lines, red for removed ones, one cell per changed line up
+/// to five, then shared out in proportion.
+fn change_bar<'a>(additions: usize, deletions: usize) -> Element<'a, Message> {
+    let (added, removed) = bar_cells(additions, deletions);
+    let mut cells = row![].spacing(1);
+    for index in 0..5 {
+        let color = if index < added {
+            Palette::SUCCESS()
+        } else if index < added + removed {
+            Palette::ERROR()
+        } else {
+            Palette::BG_SELECTED()
+        };
+        cells = cells.push(container(Space::new().width(6).height(8)).style(move |_| {
+            container::Style {
+                background: Some(color.into()),
+                border: Border::default().rounded(1),
+                ..Default::default()
+            }
+        }));
+    }
+    cells.into()
+}
+
+/// The green and red cells of the five-cell bar.
+fn bar_cells(additions: usize, deletions: usize) -> (usize, usize) {
+    let total = additions + deletions;
+    if total == 0 {
+        return (0, 0);
+    }
+    let filled = total.min(5);
+    let added = (filled * additions + total / 2) / total;
+    // A file with removals shows at least one red cell.
+    let added = if deletions > 0 {
+        added.min(filled - 1)
+    } else {
+        added
+    };
+    (added, filled - added)
+}
+
+fn note<'a>(label: String) -> Element<'a, Message> {
+    container(note_line(label))
+        .padding([12, 16])
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+}
+
+fn note_line<'a>(label: String) -> Element<'a, Message> {
+    let typo = Typography::current();
+    text(label)
+        .size(typo.sz(12))
+        .font(typo.regular)
+        .color(Palette::TEXT_DIMMER())
+        .into()
+}
+
+/// The message without its summary line.
+fn commit_body(commit: &CommitInfo) -> &str {
+    let message = commit.message.trim();
+    message
+        .strip_prefix(commit.summary.trim())
+        .unwrap_or(message)
+        .trim_start()
+}
+
+fn short_hash(id: &str) -> &str {
+    id.get(..SHORT_HASH).unwrap_or(id)
+}
+
+/// The first letters of the first two words of `author`, upper case. Words are split on
+/// anything that is not a letter or digit, so "release-please" gives "RP".
+fn initials(author: &str) -> String {
+    author
+        .split(|c: char| !c.is_alphanumeric())
+        .filter_map(|word| word.chars().next())
+        .take(2)
+        .flat_map(char::to_uppercase)
+        .collect()
+}
+
+/// The accent key of an author's avatar, the same on every start and machine.
+fn avatar_accent(email_or_name: &str) -> &'static str {
+    // A fixed string hash: std's hashers may change between Rust releases.
+    let hash = email_or_name
+        .to_lowercase()
+        .bytes()
+        .fold(0u32, |hash, byte| {
+            hash.wrapping_mul(31).wrapping_add(u32::from(byte))
+        });
+    ACCENT_OVERRIDES[hash as usize % ACCENT_OVERRIDES.len()].key
+}
+
+/// "just now", "5 min ago", "3 h ago", "yesterday", "4 days ago", then the date.
+fn relative_time(then: i64, now: i64) -> String {
+    const MINUTE: i64 = 60;
+    const HOUR: i64 = 60 * MINUTE;
+    const DAY: i64 = 24 * HOUR;
+    const TWO_DAYS: i64 = 2 * DAY;
+    const WEEK: i64 = 7 * DAY;
+    let elapsed = now - then;
+    let count = |unit: i64| (elapsed / unit).to_string();
+    match elapsed {
+        // A commit from a clock ahead of this one counts as new.
+        i64::MIN..MINUTE => t("time_just_now").to_string(),
+        MINUTE..HOUR => tf("time_minutes_ago", &[("count", &count(MINUTE))]),
+        HOUR..DAY => tf("time_hours_ago", &[("count", &count(HOUR))]),
+        DAY..TWO_DAYS => t("time_yesterday").to_string(),
+        TWO_DAYS..WEEK => tf("time_days_ago", &[("count", &count(DAY))]),
+        _ => Local
+            .timestamp_opt(then, 0)
+            .single()
+            .map(|date| date.format("%Y-%m-%d").to_string())
+            .unwrap_or_default(),
+    }
+}
+
+/// Reads the first `limit` commits matching `filter` and the local branch names.
 fn read_page(repo: &str, filter: &CommitFilter, limit: usize) -> Result<LogPage, String> {
     let commits = read_commit_log(repo, filter, limit, false).map_err(|err| err.to_string())?;
     let branches = list_local_branches(repo).unwrap_or_default();
@@ -687,24 +974,80 @@ fn read_page(repo: &str, filter: &CommitFilter, limit: usize) -> Result<LogPage,
     })
 }
 
-/// Convertit une chaine au format YYYY-MM-DD en timestamp Unix.
-fn parse_date(input: &str) -> Option<i64> {
-    if input.trim().is_empty() {
-        return None;
-    }
-
-    NaiveDate::parse_from_str(input.trim(), "%Y-%m-%d")
-        .ok()
-        .and_then(|date| {
-            Utc.with_ymd_and_hms(date.year(), date.month(), date.day(), 0, 0, 0)
-                .earliest()
+/// The changed files and the parent hashes of commit `id`.
+fn read_detail(repo_path: &str, id: &str) -> Result<Detail, String> {
+    let files = commit_diff_summaries(repo_path, id).map_err(|err| err.to_string())?;
+    let parents = Oid::from_str(id)
+        .and_then(|oid| {
+            let repo = Repository::open(repo_path)?;
+            let commit = repo.find_commit(oid)?;
+            Ok(commit.parent_ids().map(|id| id.to_string()).collect())
         })
-        .map(|dt| dt.timestamp())
+        .map_err(|err| err.to_string())?;
+    Ok(Detail { files, parents })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn initials_take_two_words() {
+        assert_eq!(initials("Ada Lovelace Byron"), "AL");
+        assert_eq!(initials("release-please[bot]"), "RP");
+        assert_eq!(initials("élise durand"), "ÉD");
+        assert_eq!(initials("Torvalds"), "T");
+        assert_eq!(initials("  "), "");
+    }
+
+    #[test]
+    fn avatar_accent_is_stable_per_author() {
+        let keys: Vec<&str> = ACCENT_OVERRIDES.iter().map(|accent| accent.key).collect();
+        let first = avatar_accent("ada@example.com");
+        assert!(keys.contains(&first));
+        assert_eq!(avatar_accent("ada@example.com"), first);
+        // A fixed hash, not a seeded one: these values hold on every machine.
+        let spread: std::collections::HashSet<_> = (0..40)
+            .map(|n| avatar_accent(&format!("author{n}@example.com")))
+            .collect();
+        assert!(spread.len() > 3, "authors spread over the accents");
+    }
+
+    #[test]
+    fn relative_time_buckets() {
+        let now = 1_764_072_000; // 2025-11-25 12:00 UTC
+        let minute = 60;
+        let hour = 60 * minute;
+        let day = 24 * hour;
+        assert_eq!(relative_time(now - 20, now), t("time_just_now"));
+        assert_eq!(
+            relative_time(now - 5 * minute, now),
+            tf("time_minutes_ago", &[("count", "5")])
+        );
+        assert_eq!(
+            relative_time(now - 3 * hour, now),
+            tf("time_hours_ago", &[("count", "3")])
+        );
+        assert_eq!(relative_time(now - 30 * hour, now), t("time_yesterday"));
+        assert_eq!(
+            relative_time(now - 4 * day, now),
+            tf("time_days_ago", &[("count", "4")])
+        );
+        // Noon UTC is the same calendar day in every time zone within ±11 h.
+        assert_eq!(relative_time(now - 10 * day, now), "2025-11-15");
+        // A commit dated in the future, from a skewed clock.
+        assert_eq!(relative_time(now + hour, now), t("time_just_now"));
+    }
+
+    #[test]
+    fn bar_cells_scale_to_five() {
+        assert_eq!(bar_cells(0, 0), (0, 0));
+        assert_eq!(bar_cells(1, 0), (1, 0));
+        assert_eq!(bar_cells(5, 1), (4, 1));
+        assert_eq!(bar_cells(100, 0), (5, 0));
+        assert_eq!(bar_cells(100, 1), (4, 1));
+        assert_eq!(bar_cells(1, 1), (1, 1));
+    }
 
     #[test]
     fn a_full_page_means_more_commits_may_match() {
@@ -729,5 +1072,9 @@ mod tests {
         let page = read_page(path, &CommitFilter::default(), 4).unwrap();
         assert_eq!(page.commits.len(), 3);
         assert!(!page.branches.is_empty());
+
+        let head = parent.unwrap();
+        let detail = read_detail(path, &head.id().to_string()).unwrap();
+        assert_eq!(detail.parents, [head.parent_id(0).unwrap().to_string()]);
     }
 }

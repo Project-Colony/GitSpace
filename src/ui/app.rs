@@ -24,7 +24,7 @@ use crate::ui::{
     changes::{self, ChangesPanel},
     clone::{self, ClonePanel},
     context::RepoContext,
-    history::HistoryPanel,
+    history::{self, HistoryPanel},
     preferences::PreferencesPanel,
     recent::RecentList,
     repo_header::{self, RepoHeader, RepoTab, TabCounts},
@@ -99,6 +99,7 @@ enum Origin {
     Header,
     Changes,
     Branches,
+    History,
 }
 
 // ─── Message principal ─────────────────────────────────────────────────────
@@ -203,7 +204,7 @@ impl GitSpaceApp {
             clone_panel: ClonePanel::new(default_clone_path, preferences.network().clone()),
             recent_list: RecentList::new(),
             repo_header: RepoHeader::new(preferences.network().clone()),
-            history_panel: HistoryPanel::new(),
+            history_panel: HistoryPanel::default(),
             branches_panel: BranchPanel::new(preferences.pinned_branches().to_vec()),
             changes_panel: ChangesPanel::default(),
             auth_panel: AuthPanel::new(auth_manager.clone()),
@@ -327,8 +328,18 @@ impl GitSpaceApp {
 
             // ── History ────────────────────────────────────────────────
             Message::History(msg) => {
-                let task = self.history_panel.update(msg, self.current_repo.as_ref());
-                task.map(Message::History)
+                // A checkout moves HEAD and a new branch adds a ref: every panel reloads.
+                let changed = matches!(&msg, history::Message::ActionDone(_, _, Ok(_)));
+                let (task, toast) = self.history_panel.update(msg);
+                if let Some(toast) = toast {
+                    self.toasts.push(toast);
+                }
+                let mut tasks = vec![task.map(Message::History)];
+                if changed {
+                    tasks.push(self.reload_other_panels(Origin::History));
+                    tasks.push(self.refresh_statuses());
+                }
+                Task::batch(tasks)
             }
 
             // ── Branches ───────────────────────────────────────────────
@@ -738,7 +749,7 @@ impl GitSpaceApp {
             RepoTab::Changes => self.changes_panel.view().map(Message::Changes),
             // Ruling R3: the Stashes screen comes back in a later task.
             RepoTab::Stashes => Space::new().into(),
-            RepoTab::History => padded(self.history_panel.view(theme, repo).map(Message::History)),
+            RepoTab::History => self.history_panel.view().map(Message::History),
             RepoTab::Branches => {
                 padded(self.branches_panel.view(theme, repo).map(Message::Branches))
             }
