@@ -109,7 +109,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "enabled in Task 18, once every screen uses crate::i18n"]
     fn ui_has_no_literal_strings() {
         let mut files = Vec::new();
         let mut dirs = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ui")];

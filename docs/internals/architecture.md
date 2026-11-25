@@ -92,7 +92,8 @@ redirects turned off:
   An expired GitLab token is refreshed with its refresh token when it is next needed.
 
 The client IDs come from `GITSPACE_GITHUB_CLIENT_ID` and `GITSPACE_GITLAB_CLIENT_ID` at build
-time (`ui/auth.rs`), and otherwise from the IDs entered under Configure OAuth Apps.
+time (`ui/preferences/accounts.rs`), and otherwise from the IDs entered under Preferences →
+Accounts → OAuth app client IDs.
 
 ## `config`, `logging`, `error`
 

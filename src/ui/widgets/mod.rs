@@ -49,10 +49,6 @@ mod tests {
 
         let mut offenders = Vec::new();
         for file in files {
-            // Ruling R2: theme.rs is the old palette bridge, deleted in Task 18.
-            if file.file_name().is_some_and(|name| name == "theme.rs") {
-                continue;
-            }
             let source = std::fs::read_to_string(&file).unwrap();
             for (number, line) in source.lines().enumerate() {
                 // shortcut: everything after `#[cfg(test)]` counts as test code; test modules sit at the end of each file.

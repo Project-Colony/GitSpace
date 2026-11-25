@@ -8,28 +8,27 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use colony_ui::theme::Palette;
 use iced::keyboard::{key::Named, Key, Modifiers};
 use iced::widget::{column, container, row};
 use iced::{Element, Length, Subscription, Task};
 
 use crate::auth::AuthManager;
-use crate::config::{AppConfig, LoggingOptions, Preferences};
+use crate::config::{AppConfig, Preferences};
 use crate::error::logs_directory;
 use crate::git::discover::discover_repositories;
 use crate::git::status::{quick_status, QuickStatus};
 use crate::i18n::{t, tf};
 use crate::ui::{
     add_repo::{self, AddRepoPanel},
-    auth::AuthPanel,
     branches::{self, BranchPanel},
     changes::{self, ChangesPanel},
     context::RepoContext,
     history::{self, HistoryPanel},
-    preferences::PreferencesPanel,
+    preferences::{self, PreferencesPage},
     repo_header::{self, RepoHeader, RepoTab, TabCounts},
     sidebar::{self, Sidebar},
     stashes::{self, StashesPanel},
-    theme::Theme,
     widgets::toast::{Toast, ToastAction, Toasts},
 };
 
@@ -70,14 +69,6 @@ impl StatusRefresh {
     }
 }
 
-/// What the content area shows in place of the open repository.
-/// shortcut: Accounts is its own page until Preferences takes it over (Task 18).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AddPage {
-    Repository,
-    Accounts,
-}
-
 /// The panel that changed the repository, which [`GitSpaceApp::reload_other_panels`] skips.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Origin {
@@ -102,8 +93,7 @@ pub enum Message {
     History(crate::ui::history::Message),
     Branches(crate::ui::branches::Message),
     Stashes(stashes::Message),
-    Auth(crate::ui::auth::Message),
-    Preferences(crate::ui::preferences::Message),
+    Preferences(preferences::Message),
 
     // Toasts
     ToastDismissed(u64),
@@ -137,10 +127,9 @@ pub enum Message {
 
 /// Etat global de l'application GitSpace.
 pub struct GitSpaceApp {
-    theme: Theme,
     active_tab: RepoTab,
-    /// The Add repository screen, or Accounts, is shown in place of the open repository.
-    adding: Option<AddPage>,
+    /// The Add repository screen is shown in place of the open repository.
+    adding: bool,
 
     sidebar: Sidebar,
     /// Quick status of each listed repository, by path, from the last background scan.
@@ -154,8 +143,7 @@ pub struct GitSpaceApp {
     history_panel: HistoryPanel,
     branches_panel: BranchPanel,
     stashes_panel: StashesPanel,
-    auth_panel: AuthPanel,
-    preferences_panel: PreferencesPanel,
+    preferences: PreferencesPage,
 
     // Etat global
     config: AppConfig,
@@ -173,14 +161,15 @@ impl GitSpaceApp {
     pub fn new(migration_error: Option<String>) -> (Self, Task<Message>) {
         let config = AppConfig::load();
         let preferences = config.preferences().clone();
-        let logging = *config.logging();
         let default_clone_path = preferences.default_clone_path().to_string();
         preferences.standard.apply();
         colony_ui::i18n::set_locale(preferences.language().locale());
-        let theme = Theme::active();
         let auth_manager =
             AuthManager::with_encrypted_fallback(preferences.allow_encrypted_tokens());
-        let last_repo = config.last_repo().map(|entry| entry.path.clone());
+        let last_repo = config
+            .last_repo()
+            .filter(|_| preferences.reopen_last_repo())
+            .map(|entry| entry.path.clone());
 
         let mut app = Self {
             sidebar: Sidebar::default(),
@@ -192,15 +181,13 @@ impl GitSpaceApp {
             branches_panel: BranchPanel::new(preferences.pinned_branches().to_vec()),
             changes_panel: ChangesPanel::default(),
             stashes_panel: StashesPanel::default(),
-            auth_panel: AuthPanel::new(auth_manager.clone()),
-            preferences_panel: PreferencesPanel::new(preferences, logging),
-            theme,
+            preferences: PreferencesPage::new(auth_manager.clone()),
             config,
             current_repo: None,
             pending_repo: None,
             auth_manager,
             active_tab: RepoTab::Changes,
-            adding: None,
+            adding: false,
             toasts: Toasts::default(),
         };
 
@@ -211,7 +198,11 @@ impl GitSpaceApp {
             ));
         }
 
-        let accounts = app.auth_panel.refresh_accounts().map(Message::Auth);
+        let accounts = app
+            .preferences
+            .accounts
+            .refresh_accounts()
+            .map(accounts_message);
         let repo = match last_repo {
             Some(path) => app.load_repo_context_async(path),
             None => Task::none(),
@@ -229,7 +220,7 @@ impl GitSpaceApp {
 
             // ── Add repository ─────────────────────────────────────────
             Message::AddRepo(add_repo::Message::OpenAccounts) => {
-                self.adding = Some(AddPage::Accounts);
+                self.preferences.open_accounts();
                 Task::none()
             }
             Message::AddRepo(msg) => {
@@ -351,9 +342,6 @@ impl GitSpaceApp {
                     let mut prefs = self.config.preferences().clone();
                     prefs.set_pinned_branches(pinned);
                     self.config.set_preferences(prefs);
-                    // Sinon une validation ulterieure des preferences restaurerait l'ancienne liste.
-                    self.preferences_panel
-                        .set_preferences(self.config.preferences().clone());
                     self.save_config();
                 }
 
@@ -375,17 +363,26 @@ impl GitSpaceApp {
                 Task::batch(tasks)
             }
 
-            // ── Auth ───────────────────────────────────────────────────
-            Message::Auth(msg) => {
-                let task = self.auth_panel.update(msg);
-                task.map(Message::Auth)
-            }
-
             // ── Preferences ────────────────────────────────────────────
+            // Every change applies and saves at once: there is no Save button.
             Message::Preferences(msg) => {
-                let panel_task = self.preferences_panel.update(msg);
-                let extra_task = self.handle_preferences_changes();
-                Task::batch([panel_task.map(Message::Preferences), extra_task])
+                let mut prefs = self.config.preferences().clone();
+                let mut logging = *self.config.logging();
+                let (task, toast) = self.preferences.update(msg, &mut prefs, &mut logging);
+                if let Some(toast) = toast {
+                    self.toasts.push(toast);
+                }
+                let logging_changed = logging != *self.config.logging();
+                self.config.set_logging(logging);
+                let applied = if prefs != *self.config.preferences() {
+                    self.apply_preferences(prefs)
+                } else {
+                    if logging_changed {
+                        self.save_config();
+                    }
+                    Task::none()
+                };
+                Task::batch([task.map(Message::Preferences), applied])
             }
 
             // ── Toasts ─────────────────────────────────────────────────
@@ -422,7 +419,7 @@ impl GitSpaceApp {
                 if self.config.open_repo(&path, chrono::Utc::now().timestamp()) {
                     self.save_config();
                 }
-                self.adding = None;
+                self.adding = false;
                 let tasks = [
                     self.repo_header.load(&repo).map(Message::RepoHeader),
                     self.changes_panel.load(&repo).map(Message::Changes),
@@ -444,7 +441,7 @@ impl GitSpaceApp {
             Message::TabShortcut(index) => {
                 if let Some(tab) = RepoTab::ALL.get(index) {
                     self.active_tab = *tab;
-                    self.adding = None;
+                    self.adding = false;
                 }
                 Task::none()
             }
@@ -454,14 +451,14 @@ impl GitSpaceApp {
                     self.sidebar.close_search();
                 } else if self.sidebar.is_menu_open() {
                     self.sidebar.set_menu(None);
-                } else if self.preferences_panel.is_open() {
-                    self.preferences_panel.toggle();
+                } else if self.preferences.is_open() {
+                    self.preferences.toggle();
                 }
                 Task::none()
             }
 
             Message::RenameBranch => {
-                if self.active_tab == RepoTab::Branches && self.adding.is_none() {
+                if self.active_tab == RepoTab::Branches && !self.adding {
                     return self.update(Message::Branches(branches::Message::StartRename));
                 }
                 Task::none()
@@ -540,14 +537,14 @@ impl GitSpaceApp {
                 Task::none()
             }
             Side::AddRepository => {
-                if self.preferences_panel.is_open() {
-                    self.preferences_panel.toggle();
+                if self.preferences.is_open() {
+                    self.preferences.toggle();
                 }
-                self.adding = Some(AddPage::Repository);
+                self.adding = true;
                 Task::none()
             }
             Side::TogglePreferences => {
-                self.preferences_panel.toggle();
+                self.preferences.toggle();
                 Task::none()
             }
             Side::StatusesLoaded(generation, statuses) => {
@@ -561,7 +558,7 @@ impl GitSpaceApp {
 
     /// Opens `path` from the sidebar; the search and any menu close.
     fn open_repo(&mut self, path: &str) -> Task<Message> {
-        self.adding = None;
+        self.adding = false;
         self.sidebar.close_search();
         self.sidebar.set_menu(None);
         let current = self.current_repo.as_ref().map(RepoContext::path);
@@ -680,26 +677,27 @@ impl GitSpaceApp {
 
     /// Compose la vue complete de l'application.
     pub fn view(&self) -> Element<'_, Message> {
-        let theme = &self.theme;
-
         let sidebar = self
             .sidebar
             .view(
                 self.config.repos(),
                 &self.statuses,
                 self.current_repo.as_ref().map(RepoContext::path),
-                self.preferences_panel.is_open(),
+                self.preferences.is_open(),
             )
             .map(Message::Sidebar);
 
-        // Preferences take the place of the tabs while open.
-        let main_area: Element<'_, Message> = match self.preferences_panel.view(theme) {
-            Some(preferences) => container(preferences.map(Message::Preferences))
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into(),
-            None => match (&self.current_repo, self.adding) {
-                (Some(_), None) => {
+        // Preferences take the place of the content area while open; the sidebar stays.
+        let main_area: Element<'_, Message> = if self.preferences.is_open() {
+            self.preferences.view(
+                self.config.preferences(),
+                self.config.logging(),
+                Message::Preferences,
+                Message::Sidebar(sidebar::Message::TogglePreferences),
+            )
+        } else {
+            match (&self.current_repo, self.adding) {
+                (Some(_), false) => {
                     let counts = TabCounts {
                         changes: self.changes_panel.count(),
                         stashes: self.stashes_panel.count(),
@@ -713,18 +711,11 @@ impl GitSpaceApp {
                         .height(Length::Fill)
                         .into()
                 }
-                (_, Some(AddPage::Accounts)) => {
-                    container(self.auth_panel.view(theme).map(Message::Auth))
-                        .width(Length::Fill)
-                        .height(Length::Fill)
-                        .padding(16)
-                        .into()
-                }
                 (_, _) => self
                     .add_repo
-                    .view(|host| self.auth_panel.is_connected(host))
+                    .view(|host| self.preferences.accounts.is_connected(host))
                     .map(Message::AddRepo),
-            },
+            }
         };
 
         let toast_overlay = self.toast_overlay();
@@ -734,8 +725,8 @@ impl GitSpaceApp {
         let base = container(page)
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(move |_: &iced::Theme| container::Style {
-                background: Some(theme.palette.background.into()),
+            .style(|_: &iced::Theme| container::Style {
+                background: Some(Palette::BG_PRIMARY().into()),
                 ..Default::default()
             });
 
@@ -779,9 +770,19 @@ impl GitSpaceApp {
 
     // ─── Theme ─────────────────────────────────────────────────────────
 
-    /// Retourne le theme Iced natif derive de notre theme custom.
+    /// The iced theme for the built-in widgets, from the active colony-ui palette.
     pub fn theme(&self) -> iced::Theme {
-        self.theme.to_iced_theme()
+        let palette = iced::theme::Palette {
+            background: Palette::BG_PRIMARY(),
+            text: Palette::TEXT_PRIMARY(),
+            primary: Palette::ACCENT(),
+            success: Palette::SUCCESS(),
+            warning: Palette::WARNING(),
+            danger: Palette::ERROR(),
+        };
+        iced::Theme::custom_with_fn("GitSpace".to_string(), palette, |palette| {
+            iced::theme::palette::Extended::generate(palette)
+        })
     }
 
     // ─── Subscriptions ─────────────────────────────────────────────────
@@ -838,10 +839,8 @@ impl GitSpaceApp {
     /// Sauvegarde la configuration et notifie l'utilisateur en cas d'echec.
     fn save_config(&mut self) {
         if let Err(err) = self.config.save() {
-            self.toasts.push(Toast::error(
-                "Erreur de sauvegarde",
-                format!("Impossible de sauvegarder la configuration : {err}"),
-            ));
+            self.toasts
+                .push(Toast::error(t("config_save_failed"), err.to_string()));
         }
     }
 
@@ -864,27 +863,16 @@ impl GitSpaceApp {
         )
     }
 
-    /// Applique les changements de preferences depuis le panneau preferences.
-    fn handle_preferences_changes(&mut self) -> Task<Message> {
-        let mut task = Task::none();
-        if let Some(prefs) = self.preferences_panel.take_changes() {
-            task = self.apply_preferences(prefs);
-        }
-        if let Some(logging) = self.preferences_panel.take_logging_changes() {
-            self.apply_logging(logging);
-        }
-        task
-    }
-
     /// Applique un jeu de preferences mis a jour a toute l'application.
     fn apply_preferences(&mut self, preferences: Preferences) -> Task<Message> {
         let old = self.config.preferences();
         let rescan = old.scan_clone_folder() != preferences.scan_clone_folder()
             || old.default_clone_path() != preferences.default_clone_path();
+        let storage_changed = old.allow_encrypted_tokens() != preferences.allow_encrypted_tokens();
         self.config.set_preferences(preferences.clone());
+        // An import or a reset changes these too.
         preferences.standard.apply();
         colony_ui::i18n::set_locale(preferences.language().locale());
-        self.theme = Theme::active();
 
         // Propager aux panneaux
         self.add_repo
@@ -895,13 +883,16 @@ impl GitSpaceApp {
             .set_network_preferences(preferences.network().clone());
         self.branches_panel
             .set_pinned_branches(preferences.pinned_branches().to_vec());
-        self.auth_manager
-            .set_encrypted_fallback(preferences.allow_encrypted_tokens());
-        let accounts = self
-            .auth_panel
-            .set_auth_manager(self.auth_manager.clone())
-            .map(Message::Auth);
-        self.preferences_panel.set_preferences(preferences);
+        let accounts = if storage_changed {
+            self.auth_manager
+                .set_encrypted_fallback(preferences.allow_encrypted_tokens());
+            self.preferences
+                .accounts
+                .set_auth_manager(self.auth_manager.clone())
+                .map(accounts_message)
+        } else {
+            Task::none()
+        };
 
         self.save_config();
         let scan = if rescan {
@@ -910,12 +901,6 @@ impl GitSpaceApp {
             Task::none()
         };
         Task::batch([accounts, scan])
-    }
-
-    /// Applique les options de logging mises a jour.
-    fn apply_logging(&mut self, logging: LoggingOptions) {
-        self.config.set_logging(logging);
-        self.save_config();
     }
 
     fn handle_toast_action(&mut self, action: ToastAction) -> Task<Message> {
@@ -998,6 +983,10 @@ fn shortcut(key: Key, modifiers: Modifiers, captured: bool, searching: bool) -> 
         }
         _ => None,
     }
+}
+
+fn accounts_message(message: preferences::accounts::Message) -> Message {
+    Message::Preferences(preferences::Message::Accounts(message))
 }
 
 /// Returns whether `path` must be loaded. Picking the open repository again drops a slower

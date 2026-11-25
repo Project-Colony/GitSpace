@@ -535,9 +535,26 @@ impl Preferences {
         self.language
     }
 
+    pub fn set_language(&mut self, language: Language) {
+        self.language = language;
+    }
+
+    /// Whether the last opened repository is opened again at startup.
+    pub fn reopen_last_repo(&self) -> bool {
+        self.reopen_last_repo
+    }
+
+    pub fn set_reopen_last_repo(&mut self, reopen: bool) {
+        self.reopen_last_repo = reopen;
+    }
+
     /// Whether the default clone folder is searched for repositories to list.
     pub fn scan_clone_folder(&self) -> bool {
         self.scan_clone_folder
+    }
+
+    pub fn set_scan_clone_folder(&mut self, scan: bool) {
+        self.scan_clone_folder = scan;
     }
 
     pub fn default_clone_path(&self) -> &str {
