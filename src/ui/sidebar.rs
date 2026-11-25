@@ -1,6 +1,7 @@
 //! The left column: GitSpace's name, the repository list with its search, and the way to
 //! add a repository.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -55,6 +56,10 @@ pub struct Sidebar {
     /// The row Alt+Up/Down step from: the last one asked to open, even while it loads or
     /// after it failed to open.
     anchor: Option<Arc<str>>,
+    /// Each entry's last opening when a run of Alt+Up/Down began. Until another row is
+    /// picked, the list keeps that order, so the row just opened does not jump to the top
+    /// of RECENT and the next step goes on from where it is.
+    stepping: Option<HashMap<String, Option<i64>>>,
 }
 
 impl Sidebar {
@@ -82,6 +87,7 @@ impl Sidebar {
             return Task::none();
         }
         self.searching = true;
+        self.stepping = None;
         self.set_query(String::new(), entries);
         iced::widget::operation::focus(SEARCH_ID)
     }
@@ -98,14 +104,25 @@ impl Sidebar {
         self.cursor = self.paths(entries).into_iter().next();
     }
 
-    /// Records the repository just asked to open; Alt+Up/Down step from it.
+    /// Records the repository just asked to open; Alt+Up/Down step from it. Another row than
+    /// the one stepped to ends the run of steps.
     pub fn set_anchor(&mut self, path: &str) {
+        if self.anchor.as_deref() != Some(path) {
+            self.stepping = None;
+        }
         self.anchor = Some(path.into());
     }
 
     /// Moves `delta` rows from the search cursor, or from the anchor when not searching,
     /// and returns the row reached. Stops at either end of the list.
     pub fn step(&mut self, delta: i32, entries: &[RepoEntry]) -> Option<Arc<str>> {
+        if !self.searching && self.stepping.is_none() {
+            let opened = entries
+                .iter()
+                .map(|entry| (entry.path.clone(), entry.last_opened))
+                .collect();
+            self.stepping = Some(opened);
+        }
         let paths = self.paths(entries);
         let from = if self.searching {
             self.cursor.as_deref()
@@ -129,10 +146,27 @@ impl Sidebar {
 
     /// Every listed row, top to bottom.
     fn paths(&self, entries: &[RepoEntry]) -> Vec<Arc<str>> {
-        repo_list::groups(entries, &HashMap::new(), &self.query)
+        repo_list::groups(&self.listed(entries), &HashMap::new(), &self.query)
             .into_iter()
             .flat_map(|group| group.rows)
             .map(|row| row.path)
+            .collect()
+    }
+
+    /// `entries` with the last openings seen when the current run of steps began.
+    fn listed<'e>(&self, entries: &'e [RepoEntry]) -> Cow<'e, [RepoEntry]> {
+        let Some(opened) = &self.stepping else {
+            return Cow::Borrowed(entries);
+        };
+        entries
+            .iter()
+            .map(|entry| RepoEntry {
+                last_opened: opened
+                    .get(&entry.path)
+                    .copied()
+                    .unwrap_or(entry.last_opened),
+                ..entry.clone()
+            })
             .collect()
     }
 
@@ -144,7 +178,7 @@ impl Sidebar {
         preferences_open: bool,
     ) -> Element<'_, Message> {
         let typo = Typography::current();
-        let groups = repo_list::groups(entries, statuses, &self.query);
+        let groups = repo_list::groups(&self.listed(entries), statuses, &self.query);
         let selected = if self.searching {
             self.cursor.as_deref()
         } else {
@@ -494,6 +528,37 @@ mod tests {
         assert_eq!(sidebar.cursor().as_deref(), Some("/b"));
         sidebar.close_search();
         assert_eq!(sidebar.cursor(), None);
+    }
+
+    #[test]
+    fn step_walks_recent_although_each_open_moves_the_row_to_the_top() {
+        let mut config = crate::config::AppConfig::default();
+        for (path, at) in [("/d", 1), ("/c", 2), ("/b", 3), ("/a", 4)] {
+            config.open_repo(path, at);
+        }
+        let mut sidebar = Sidebar::default();
+        sidebar.set_anchor("/a");
+        let mut visited = Vec::new();
+        for (delta, now) in [(1, 10), (1, 11), (1, 12), (-1, 13)] {
+            let path = sidebar.step(delta, config.repos()).expect("a row");
+            // What opening the row does: the anchor is set again and RECENT puts it first.
+            sidebar.set_anchor(&path);
+            config.open_repo(&path, now);
+            visited.push(path.to_string());
+        }
+        assert_eq!(visited, ["/b", "/c", "/d", "/c"]);
+        let order = |sidebar: &Sidebar, config: &crate::config::AppConfig| {
+            let paths = sidebar.paths(config.repos());
+            paths
+                .iter()
+                .map(|path| path.to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(order(&sidebar, &config), ["/a", "/b", "/c", "/d"]);
+
+        // Picking another row ends the run: RECENT is by last opening again.
+        sidebar.set_anchor("/a");
+        assert_eq!(order(&sidebar, &config), ["/c", "/d", "/b", "/a"]);
     }
 
     #[test]
