@@ -40,7 +40,8 @@ pub enum Message {
     ContextMenu(Option<Arc<str>>),
     AddRepository,
     TogglePreferences,
-    StatusesLoaded(HashMap<String, QuickStatus>),
+    /// A status refresh's number and the statuses it read.
+    StatusesLoaded(u64, HashMap<String, QuickStatus>),
 }
 
 #[derive(Debug, Default)]
@@ -51,6 +52,9 @@ pub struct Sidebar {
     cursor: Option<Arc<str>>,
     /// The repository whose right-click menu is open.
     menu: Option<Arc<str>>,
+    /// The row Alt+Up/Down step from: the last one asked to open, even while it loads or
+    /// after it failed to open.
+    anchor: Option<Arc<str>>,
 }
 
 impl Sidebar {
@@ -94,19 +98,19 @@ impl Sidebar {
         self.cursor = self.paths(entries).into_iter().next();
     }
 
-    /// Moves `delta` rows from the search cursor, or from `current` when not searching,
+    /// Records the repository just asked to open; Alt+Up/Down step from it.
+    pub fn set_anchor(&mut self, path: &str) {
+        self.anchor = Some(path.into());
+    }
+
+    /// Moves `delta` rows from the search cursor, or from the anchor when not searching,
     /// and returns the row reached. Stops at either end of the list.
-    pub fn step(
-        &mut self,
-        delta: i32,
-        entries: &[RepoEntry],
-        current: Option<&str>,
-    ) -> Option<Arc<str>> {
+    pub fn step(&mut self, delta: i32, entries: &[RepoEntry]) -> Option<Arc<str>> {
         let paths = self.paths(entries);
         let from = if self.searching {
             self.cursor.as_deref()
         } else {
-            current
+            self.anchor.as_deref()
         };
         let last = paths.len().checked_sub(1)?;
         let index = match from.and_then(|from| paths.iter().position(|path| &**path == from)) {
@@ -117,6 +121,8 @@ impl Sidebar {
         let target = paths[index].clone();
         if self.searching {
             self.cursor = Some(target.clone());
+        } else {
+            self.anchor = Some(target.clone());
         }
         Some(target)
     }
@@ -474,18 +480,30 @@ mod tests {
     }
 
     #[test]
-    fn step_moves_from_the_current_row_and_stops_at_the_ends() {
+    fn step_moves_from_the_anchor_and_stops_at_the_ends() {
         let entries = [entry("/a", 3), entry("/b", 2), entry("/c", 1)];
         let mut sidebar = Sidebar::default();
-        assert_eq!(sidebar.step(1, &entries, Some("/a")).as_deref(), Some("/b"));
-        assert_eq!(sidebar.step(1, &entries, Some("/c")).as_deref(), Some("/c"));
-        assert_eq!(sidebar.step(-1, &entries, None).as_deref(), Some("/c"));
+        assert_eq!(sidebar.step(-1, &entries).as_deref(), Some("/c"));
+        assert_eq!(sidebar.step(1, &entries).as_deref(), Some("/c"));
+        sidebar.set_anchor("/a");
+        assert_eq!(sidebar.step(1, &entries).as_deref(), Some("/b"));
 
         let _ = sidebar.toggle_search(&entries);
         assert_eq!(sidebar.cursor().as_deref(), Some("/a"));
-        sidebar.step(1, &entries, Some("/a"));
+        sidebar.step(1, &entries);
         assert_eq!(sidebar.cursor().as_deref(), Some("/b"));
         sidebar.close_search();
         assert_eq!(sidebar.cursor(), None);
+    }
+
+    #[test]
+    fn step_goes_past_a_row_that_failed_or_is_still_loading() {
+        // /a is open, /b's folder is gone: its load fails and /a stays the open repository.
+        let entries = [entry("/a", 3), entry("/b", 2), entry("/c", 1)];
+        let mut sidebar = Sidebar::default();
+        sidebar.set_anchor("/a");
+        assert_eq!(sidebar.step(1, &entries).as_deref(), Some("/b"));
+        assert_eq!(sidebar.step(1, &entries).as_deref(), Some("/c"));
+        assert_eq!(sidebar.step(-1, &entries).as_deref(), Some("/b"));
     }
 }

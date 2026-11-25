@@ -37,6 +37,40 @@ use crate::ui::{
 /// Quick-status scans run at the same time, at most.
 const STATUS_SCANS: usize = 4;
 
+/// Status refreshes share one scan limit; a result older than the last one applied is dropped.
+struct StatusRefresh {
+    limit: Arc<tokio::sync::Semaphore>,
+    started: u64,
+    applied: u64,
+}
+
+impl Default for StatusRefresh {
+    fn default() -> Self {
+        Self {
+            limit: Arc::new(tokio::sync::Semaphore::new(STATUS_SCANS)),
+            started: 0,
+            applied: 0,
+        }
+    }
+}
+
+impl StatusRefresh {
+    /// Numbers a new refresh and hands it the shared limit.
+    fn start(&mut self) -> (u64, Arc<tokio::sync::Semaphore>) {
+        self.started += 1;
+        (self.started, self.limit.clone())
+    }
+
+    /// Whether the result of refresh `generation` is newer than the one on screen.
+    fn accept(&mut self, generation: u64) -> bool {
+        if generation <= self.applied {
+            return false;
+        }
+        self.applied = generation;
+        true
+    }
+}
+
 /// What Ctrl+1 to Ctrl+4 show. Stashes stay on the Stage panel until they get their own tab.
 const REPO_TABS: [MainTab; 4] = [
     MainTab::Stage,
@@ -102,6 +136,7 @@ pub struct GitSpaceApp {
     sidebar: Sidebar,
     /// Quick status of each listed repository, by path, from the last background scan.
     statuses: HashMap<String, QuickStatus>,
+    status_refresh: StatusRefresh,
 
     // Panneaux
     clone_panel: ClonePanel,
@@ -141,6 +176,7 @@ impl GitSpaceApp {
         let mut app = Self {
             sidebar: Sidebar::default(),
             statuses: HashMap::new(),
+            status_refresh: StatusRefresh::default(),
             clone_panel: ClonePanel::new(default_clone_path, preferences.network().clone()),
             recent_list: RecentList::new(),
             repo_overview: RepoOverviewPanel::new(preferences.network().clone()),
@@ -427,8 +463,7 @@ impl GitSpaceApp {
                 Task::none()
             }
             Side::MoveSelection(delta) => {
-                let current = self.current_repo.as_ref().map(RepoContext::path);
-                let target = self.sidebar.step(delta, self.config.repos(), current);
+                let target = self.sidebar.step(delta, self.config.repos());
                 match target {
                     // While searching, Up/Down only move the cursor; Enter opens.
                     Some(path) if !self.sidebar.is_searching() => self.open_repo(&path),
@@ -487,8 +522,10 @@ impl GitSpaceApp {
                 self.preferences_panel.toggle();
                 Task::none()
             }
-            Side::StatusesLoaded(statuses) => {
-                self.statuses.extend(statuses);
+            Side::StatusesLoaded(generation, statuses) => {
+                if self.status_refresh.accept(generation) {
+                    self.statuses.extend(statuses);
+                }
                 Task::none()
             }
         }
@@ -505,7 +542,7 @@ impl GitSpaceApp {
     }
 
     /// Reads the quick status of every listed repository in the background, a few at a time.
-    fn refresh_statuses(&self) -> Task<Message> {
+    fn refresh_statuses(&mut self) -> Task<Message> {
         let paths: Vec<String> = self
             .config
             .repos()
@@ -516,9 +553,9 @@ impl GitSpaceApp {
         if paths.is_empty() {
             return Task::none();
         }
+        let (generation, limit) = self.status_refresh.start();
         Task::perform(
             async move {
-                let limit = Arc::new(tokio::sync::Semaphore::new(STATUS_SCANS));
                 let mut scans = tokio::task::JoinSet::new();
                 for path in paths {
                     let limit = limit.clone();
@@ -541,7 +578,9 @@ impl GitSpaceApp {
                 }
                 statuses
             },
-            |statuses| Message::Sidebar(sidebar::Message::StatusesLoaded(statuses)),
+            move |statuses| {
+                Message::Sidebar(sidebar::Message::StatusesLoaded(generation, statuses))
+            },
         )
     }
 
@@ -763,6 +802,7 @@ impl GitSpaceApp {
     /// Les I/O git sont deplacees dans un thread bloquant pour ne pas
     /// bloquer le thread UI.
     fn load_repo_context_async(&mut self, path: String) -> Task<Message> {
+        self.sidebar.set_anchor(&path);
         self.pending_repo = Some(path.clone());
         Task::perform(
             async move {
@@ -976,5 +1016,20 @@ mod tests {
             name(shortcut(escape, Modifiers::empty(), true, true)),
             "Escape"
         );
+    }
+
+    #[test]
+    fn status_refreshes_share_one_limit_and_drop_older_results() {
+        let mut refresh = StatusRefresh::default();
+        let (first, first_limit) = refresh.start();
+        let (second, second_limit) = refresh.start();
+        assert!(Arc::ptr_eq(&first_limit, &second_limit));
+        assert_eq!(first_limit.available_permits(), STATUS_SCANS);
+
+        // The refresh started after a commit lands first; the older one must not undo it.
+        assert!(refresh.accept(second));
+        assert!(!refresh.accept(first));
+        let (third, _) = refresh.start();
+        assert!(refresh.accept(third));
     }
 }
