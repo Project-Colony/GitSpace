@@ -3,6 +3,7 @@ pub mod clone;
 pub mod commit;
 pub mod compare;
 pub mod diff;
+pub mod discover;
 pub mod log;
 pub mod merge;
 pub mod remote;

@@ -10,6 +10,7 @@ use crate::git::branch::{
     list_branch_overview, list_branches, rename_branch, set_upstream, BranchKind, BranchOverview,
 };
 use crate::git::diff::{commit_diff_file, commit_diff_summaries, diff_file};
+use crate::git::discover::discover_repositories;
 use crate::git::log::{read_commit_log, CommitFilter, RefKind};
 use crate::git::merge::detect_conflicts;
 use crate::git::remote::{fetch_remote, list_remotes, pull_branch, push_branch, PullOutcome};
@@ -17,7 +18,7 @@ use crate::git::stash::{
     apply_stash, count_stashable, create_stash, drop_stash, list_stashes, stash_file_patch,
     stash_files,
 };
-use crate::git::status::{discard_file, read_changes, read_repo_status, ChangeKind};
+use crate::git::status::{discard_file, quick_status, read_changes, read_repo_status, ChangeKind};
 
 fn init_temp_repo() -> (tempfile::TempDir, Repository) {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -1085,4 +1086,73 @@ fn log_labels_a_detached_head() {
     assert_eq!(labels.len(), 1, "{labels:?}");
     assert_eq!(labels[0].name, "HEAD");
     assert_eq!(labels[0].kind, RefKind::Head);
+}
+
+#[test]
+fn discovers_direct_children_with_a_git_dir() {
+    let root = tempfile::tempdir().expect("root");
+    Repository::init(root.path().join("zeta")).expect("init zeta");
+    Repository::init(root.path().join("alpha")).expect("init alpha");
+    // A linked worktree or submodule has a `.git` file instead of a directory.
+    fs::create_dir(root.path().join("linked")).unwrap();
+    fs::write(root.path().join("linked/.git"), "gitdir: ../elsewhere").unwrap();
+
+    let found = discover_repositories(root.path());
+    let names: Vec<_> = found
+        .iter()
+        .map(|path| path.file_name().unwrap().to_str().unwrap())
+        .collect();
+    assert_eq!(names, ["alpha", "linked", "zeta"]);
+    assert!(found.iter().all(|path| path.parent() == Some(root.path())));
+}
+
+#[test]
+fn discovery_skips_nested_and_plain_folders() {
+    let root = tempfile::tempdir().expect("root");
+    fs::create_dir_all(root.path().join("group/inner")).unwrap();
+    Repository::init(root.path().join("group/inner")).expect("init nested");
+    fs::create_dir(root.path().join("plain")).unwrap();
+    fs::write(root.path().join("file.txt"), "not a folder").unwrap();
+
+    assert!(discover_repositories(root.path()).is_empty());
+    assert!(discover_repositories(&root.path().join("does-not-exist")).is_empty());
+}
+
+#[test]
+fn quick_status_counts_changes_and_divergence() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap().to_str().unwrap().to_string();
+    let first = write_commit(&repo, "a.txt", "one", "first");
+    ensure_remote_tracking(&repo, "main", "origin/main", first);
+    write_commit(&repo, "a.txt", "two", "second");
+    fs::write(repo.path().parent().unwrap().join("a.txt"), "edited").unwrap();
+    fs::write(repo.path().parent().unwrap().join("new.txt"), "new").unwrap();
+    // An untracked folder counts once, however many files it holds.
+    fs::create_dir(repo.path().parent().unwrap().join("build")).unwrap();
+    for name in ["x", "y", "z"] {
+        fs::write(repo.path().parent().unwrap().join("build").join(name), name).unwrap();
+    }
+
+    let status = quick_status(&root);
+    assert!(!status.missing);
+    assert_eq!(status.branch.as_deref(), Some("main"));
+    assert_eq!((status.ahead, status.behind), (1, 0));
+    assert_eq!(status.changed, 3);
+}
+
+#[test]
+fn quick_status_of_a_deleted_folder_is_missing() {
+    let (dir, repo) = init_temp_repo();
+    write_commit(&repo, "a.txt", "one", "first");
+    let root = dir.path().to_str().unwrap().to_string();
+    assert!(!quick_status(&root).missing);
+    drop(repo);
+    drop(dir);
+
+    let status = quick_status(&root);
+    assert!(status.missing);
+    assert_eq!(status.branch, None);
+    assert_eq!(status.changed, 0);
+    let plain = tempfile::tempdir().unwrap();
+    assert!(quick_status(plain.path().to_str().unwrap()).missing);
 }

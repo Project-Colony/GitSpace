@@ -1,7 +1,10 @@
 use std::path::{Component, Path};
 
 use git2::build::CheckoutBuilder;
-use git2::{BranchType, Delta, Diff, DiffFindOptions, DiffOptions, ErrorCode, Patch, Status};
+use git2::{
+    BranchType, Delta, Diff, DiffFindOptions, DiffOptions, ErrorCode, Patch, Repository, Status,
+    StatusOptions,
+};
 
 use crate::git::diff::head_tree;
 // Utilise le cache thread-local pour éviter de réouvrir le dépôt à chaque appel
@@ -17,59 +20,105 @@ pub struct RepoStatus {
 
 pub fn read_repo_status<P: AsRef<Path>>(path: P) -> Result<RepoStatus, git2::Error> {
     // Lecture seule du statut — utilise le cache thread-local
-    with_cached_repo(path, |repo| {
-        let head = match repo.head() {
-            Ok(head) => head,
-            // A fresh `git init`: HEAD names a branch with no commit yet.
-            Err(err) if err.code() == ErrorCode::UnbornBranch => {
-                let head = repo.find_reference("HEAD")?;
-                let branch = head
-                    .symbolic_target()?
-                    .map(|target| target.strip_prefix("refs/heads/").unwrap_or(target));
-                return Ok(RepoStatus {
-                    branch: branch.map(str::to_string),
-                    ..RepoStatus::default()
-                });
-            }
-            Err(err) => return Err(err),
-        };
+    with_cached_repo(path, repo_status)
+}
 
-        if !head.is_branch() {
+fn repo_status(repo: &Repository) -> Result<RepoStatus, git2::Error> {
+    let head = match repo.head() {
+        Ok(head) => head,
+        // A fresh `git init`: HEAD names a branch with no commit yet.
+        Err(err) if err.code() == ErrorCode::UnbornBranch => {
+            let head = repo.find_reference("HEAD")?;
+            let branch = head
+                .symbolic_target()?
+                .map(|target| target.strip_prefix("refs/heads/").unwrap_or(target));
             return Ok(RepoStatus {
-                branch: None,
-                upstream: None,
-                ahead: None,
-                behind: None,
+                branch: branch.map(str::to_string),
+                ..RepoStatus::default()
             });
         }
+        Err(err) => return Err(err),
+    };
 
-        let branch_name = head.shorthand().ok().map(|name| name.to_string());
-        let mut status = RepoStatus {
-            branch: branch_name.clone(),
+    if !head.is_branch() {
+        return Ok(RepoStatus {
+            branch: None,
             upstream: None,
             ahead: None,
             behind: None,
-        };
+        });
+    }
 
-        if let Some(name) = branch_name {
-            let branch = repo.find_branch(&name, BranchType::Local)?;
+    let branch_name = head.shorthand().ok().map(|name| name.to_string());
+    let mut status = RepoStatus {
+        branch: branch_name.clone(),
+        upstream: None,
+        ahead: None,
+        behind: None,
+    };
 
-            if let Ok(upstream) = branch.upstream() {
-                status.upstream = upstream.name()?.map(|name| name.to_string());
+    if let Some(name) = branch_name {
+        let branch = repo.find_branch(&name, BranchType::Local)?;
 
-                if let (Some(local_oid), Some(upstream_oid)) =
-                    (branch.get().target(), upstream.get().target())
-                {
-                    if let Ok((ahead, behind)) = repo.graph_ahead_behind(local_oid, upstream_oid) {
-                        status.ahead = Some(ahead);
-                        status.behind = Some(behind);
-                    }
+        if let Ok(upstream) = branch.upstream() {
+            status.upstream = upstream.name()?.map(|name| name.to_string());
+
+            if let (Some(local_oid), Some(upstream_oid)) =
+                (branch.get().target(), upstream.get().target())
+            {
+                if let Ok((ahead, behind)) = repo.graph_ahead_behind(local_oid, upstream_oid) {
+                    status.ahead = Some(ahead);
+                    status.behind = Some(behind);
                 }
             }
         }
+    }
 
-        Ok(status)
-    })
+    Ok(status)
+}
+
+/// The cheap status shown next to a repository in the sidebar.
+#[cfg_attr(not(test), expect(dead_code, reason = "the sidebar scan will call it"))]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct QuickStatus {
+    pub branch: Option<String>,
+    pub ahead: usize,
+    pub behind: usize,
+    /// Changed and untracked entries; an untracked folder counts once.
+    pub changed: usize,
+    /// The folder is gone or no longer opens as a repository.
+    pub missing: bool,
+}
+
+/// Branch, divergence from upstream and changed-entry count, without building patches.
+/// Never fails: a path that does not open as a repository is reported as `missing`.
+#[cfg_attr(not(test), expect(dead_code, reason = "the sidebar scan will call it"))]
+pub fn quick_status(path: &str) -> QuickStatus {
+    // Opened fresh, not cached: a cached handle would outlive a deleted folder, and a scan
+    // of many repositories would only churn the small cache.
+    let Ok(repo) = Repository::open(path) else {
+        return QuickStatus {
+            missing: true,
+            ..QuickStatus::default()
+        };
+    };
+    let status = repo_status(&repo).unwrap_or_default();
+    let mut options = StatusOptions::new();
+    options
+        .include_untracked(true)
+        .recurse_untracked_dirs(false)
+        .include_ignored(false);
+    let changed = repo
+        .statuses(Some(&mut options))
+        .map(|statuses| statuses.len())
+        .unwrap_or(0);
+    QuickStatus {
+        branch: status.branch,
+        ahead: status.ahead.unwrap_or(0),
+        behind: status.behind.unwrap_or(0),
+        changed,
+        missing: false,
+    }
 }
 
 /// Untracked files above this size are listed without counting their lines.
