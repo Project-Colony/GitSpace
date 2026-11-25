@@ -535,7 +535,9 @@ impl GitSpaceApp {
     fn open_repo(&mut self, path: &str) -> Task<Message> {
         self.sidebar.close_search();
         self.sidebar.set_menu(None);
-        if self.current_repo.as_ref().map(RepoContext::path) == Some(path) {
+        let current = self.current_repo.as_ref().map(RepoContext::path);
+        if !needs_load(&mut self.pending_repo, current, path) {
+            self.sidebar.set_anchor(path);
             return Task::none();
         }
         self.load_repo_context_async(path.to_string())
@@ -966,6 +968,16 @@ fn shortcut(key: Key, modifiers: Modifiers, captured: bool, searching: bool) -> 
     }
 }
 
+/// Returns whether `path` must be loaded. Picking the open repository again drops a slower
+/// load requested before it, so that result cannot replace the repository picked last.
+fn needs_load(pending: &mut Option<String>, current: Option<&str>, path: &str) -> bool {
+    if current != Some(path) {
+        return true;
+    }
+    *pending = None;
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1016,6 +1028,18 @@ mod tests {
             name(shortcut(escape, Modifiers::empty(), true, true)),
             "Escape"
         );
+    }
+
+    #[test]
+    fn picking_the_open_repository_drops_a_slower_pending_load() {
+        // /a is open and a load of /b is still running.
+        let mut pending = Some("/b".to_string());
+        assert!(!needs_load(&mut pending, Some("/a"), "/a"));
+        // RepoContextLoaded(/b) now fails the pending check and leaves /a open.
+        assert_eq!(pending, None);
+
+        assert!(needs_load(&mut pending, Some("/a"), "/b"));
+        assert!(needs_load(&mut pending, None, "/a"));
     }
 
     #[test]
