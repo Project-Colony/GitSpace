@@ -20,7 +20,7 @@
   "add_repo_receiving": "Réception des objets · {done} / {total} · {size} · {speed}",
   "add_repo_resolving": "Résolution des deltas · {done} / {total}",
   "add_repo_search_failed": "Impossible de rechercher les dépôts",
-  "add_repo_search_github": "Nom du compte ou de l'organisation",
+  "add_repo_search_github": "Rechercher dans vos dépôts et ceux de vos organisations",
   "add_repo_search_gitlab": "Rechercher des projets GitLab",
   "add_repo_searching": "Recherche…",
   "add_repo_signed_out": "Aucun compte connecté : seuls les dépôts publics sont listés.",

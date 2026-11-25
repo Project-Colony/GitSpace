@@ -835,15 +835,9 @@ fn enforce_https_policy(url: &str, network: &NetworkOptions) -> Result<(), AppEr
 // --- Structures de désérialisation GitHub ---
 
 #[derive(Debug, Deserialize)]
-struct GithubRepoOwner {
-    login: String,
-}
-
-#[derive(Debug, Deserialize)]
 struct GithubRepoItem {
     full_name: String,
     html_url: String,
-    owner: GithubRepoOwner,
     #[serde(default)]
     description: Option<String>,
     #[serde(default)]
@@ -855,33 +849,47 @@ struct GithubRepoItem {
 }
 
 #[derive(Debug, Deserialize)]
-struct GithubUserProfile {
-    login: String,
+struct GithubSearchResponse {
+    items: Vec<GithubRepoItem>,
 }
 
-/// Recherche les dépôts d'un compte GitHub (publics + privés si authentifié).
+/// Recherche GitHub : d'abord les dépôts du compte connecté et de ses organisations qui
+/// correspondent à la requête, puis la recherche publique.
 async fn search_github(
     query: &str,
     token: Option<&str>,
     network: &NetworkOptions,
 ) -> Result<Vec<RemoteRepo>, AppError> {
-    let account = query.trim();
-    if account.is_empty() {
+    let query = query.trim();
+    if query.is_empty() {
         return Ok(Vec::new());
     }
 
     let client = client_with_headers(token, None, network).await?;
     let mut unique = HashSet::new();
 
-    let public_user_url = github_api_url(&["users", account, "repos"]);
-    let public_org_url = github_api_url(&["orgs", account, "repos"]);
-    let mut parts = vec![
-        fetch_github_repos(&client, &public_user_url, &[("type", "public")], network).await,
-        fetch_github_repos(&client, &public_org_url, &[("type", "public")], network).await,
-    ];
+    let mut parts = Vec::new();
     if token.is_some() {
-        parts.push(fetch_github_private_repos(&client, account, network).await);
+        parts.push(
+            fetch_github_repos(
+                &client,
+                "https://api.github.com/user/repos",
+                &[
+                    ("visibility", "all"),
+                    ("affiliation", "owner,collaborator,organization_member"),
+                ],
+                network,
+            )
+            .await
+            .map(|repos| {
+                repos
+                    .into_iter()
+                    .filter(|repo| matches_query(repo, query))
+                    .collect()
+            }),
+        );
     }
+    parts.push(search_github_public(&client, query, network).await);
     // Une requête refusée (limite de débit, réseau) ne masque pas les résultats des autres.
     let repositories = merge_partial_results(parts)?;
 
@@ -978,41 +986,34 @@ async fn search_gitlab(
         .collect())
 }
 
-/// Dépôts privés du compte authentifié quand il s'agit de `account`, vide sinon.
-async fn fetch_github_private_repos(
-    client: &Client,
-    account: &str,
-    network: &NetworkOptions,
-) -> Result<Vec<GithubRepoItem>, AppError> {
-    match fetch_github_login(client, network).await? {
-        Some(login) if login.eq_ignore_ascii_case(account) => {
-            let repos = fetch_github_repos(
-                client,
-                "https://api.github.com/user/repos",
-                &[
-                    ("visibility", "all"),
-                    ("affiliation", "owner,collaborator,organization_member"),
-                ],
-                network,
-            )
-            .await?;
-            Ok(repos
-                .into_iter()
-                .filter(|repo| repo.owner.login.eq_ignore_ascii_case(account))
-                .collect())
-        }
-        _ => Ok(Vec::new()),
-    }
+/// Vrai quand la requête apparaît dans "owner/name" ou la description, sans tenir compte de la
+/// casse.
+fn matches_query(repo: &GithubRepoItem, query: &str) -> bool {
+    let query = query.to_lowercase();
+    repo.full_name.to_lowercase().contains(&query)
+        || repo
+            .description
+            .as_deref()
+            .is_some_and(|description| description.to_lowercase().contains(&query))
 }
 
-/// URL de l'API GitHub dont chaque segment est encodé, pour qu'un nom saisi ne change pas le
-/// chemin appelé.
-fn github_api_url(segments: &[&str]) -> String {
-    let mut url = Url::parse("https://api.github.com").expect("static URL");
-    url.path_segments_mut()
-        .expect("https URL has a path")
-        .extend(segments);
-    url.into()
+/// Recherche publique GitHub, première page de 100 résultats.
+async fn search_github_public(
+    client: &Client,
+    query: &str,
+    network: &NetworkOptions,
+) -> Result<Vec<GithubRepoItem>, AppError> {
+    let url = "https://api.github.com/search/repositories";
+    enforce_https_policy(url, network)?;
+    let response: GithubSearchResponse = client
+        .get(url)
+        .query(&[("q", query), ("per_page", "100")])
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    Ok(response.items)
 }
 
 /// Réunit les résultats de plusieurs requêtes : les réponses obtenues sont gardées, et la
@@ -1045,25 +1046,6 @@ fn timestamp(date: &str) -> Option<i64> {
     chrono::DateTime::parse_from_rfc3339(date)
         .ok()
         .map(|date| date.timestamp())
-}
-
-/// Récupère le login de l'utilisateur GitHub authentifié.
-async fn fetch_github_login(
-    client: &Client,
-    network: &NetworkOptions,
-) -> Result<Option<String>, AppError> {
-    let url = "https://api.github.com/user";
-    enforce_https_policy(url, network)?;
-    let response = client.get(url).send().await.map_err(AppError::from)?;
-    if response.status() == StatusCode::UNAUTHORIZED {
-        return Ok(None);
-    }
-    let profile: GithubUserProfile = response
-        .error_for_status()?
-        .json()
-        .await
-        .map_err(AppError::from)?;
-    Ok(Some(profile.login))
 }
 
 /// Récupère les dépôts GitHub depuis une URL paginée.
@@ -1188,11 +1170,27 @@ mod tests {
     }
 
     #[test]
-    fn github_api_url_encodes_the_account() {
-        assert_eq!(
-            github_api_url(&["users", "a/b c?x", "repos"]),
-            "https://api.github.com/users/a%2Fb%20c%3Fx/repos"
-        );
+    fn own_repositories_are_filtered_on_name_and_description() {
+        let item = |full_name: &str, description: Option<&str>| GithubRepoItem {
+            full_name: full_name.to_string(),
+            html_url: String::new(),
+            description: description.map(str::to_string),
+            private: false,
+            stargazers_count: 0,
+            updated_at: None,
+        };
+        assert!(matches_query(
+            &item("Project-Colony/Colony-Camera", None),
+            "colony"
+        ));
+        assert!(matches_query(
+            &item("MotherSphere/Raven", Some("A COLONY tool")),
+            "colony"
+        ));
+        assert!(!matches_query(
+            &item("MotherSphere/Raven", Some("Reverse")),
+            "colony"
+        ));
     }
 
     #[test]

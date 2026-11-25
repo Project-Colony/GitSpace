@@ -20,7 +20,7 @@
   "add_repo_receiving": "Receiving objects · {done} / {total} · {size} · {speed}",
   "add_repo_resolving": "Resolving deltas · {done} / {total}",
   "add_repo_search_failed": "Could not search the repositories",
-  "add_repo_search_github": "Account or organisation name",
+  "add_repo_search_github": "Search your repositories and your organisations'",
   "add_repo_search_gitlab": "Search GitLab projects",
   "add_repo_searching": "Searching…",
   "add_repo_signed_out": "No account connected: only public repositories are listed.",
