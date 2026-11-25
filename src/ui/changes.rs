@@ -162,6 +162,7 @@ impl ChangesPanel {
             Message::Select(path, staged) => {
                 self.file_menu = None;
                 self.selected = Some((path, staged));
+                self.diff = Some(Diff::Loading);
                 (self.load_diff(), None)
             }
             Message::DiffLoaded(repo, key, result) => {
@@ -412,7 +413,6 @@ impl ChangesPanel {
         let (Some(repo), Some(key)) = (self.repo.clone(), self.selected.clone()) else {
             return Task::none();
         };
-        self.diff = Some(Diff::Loading);
         let (path, staged) = key.clone();
         git_task(
             repo,
@@ -446,7 +446,8 @@ impl ChangesPanel {
             };
             files.iter().any(|file| file.path == path)
         };
-        let selected = match self.selected.take() {
+        let previous = self.selected.take();
+        let selected = match previous.clone() {
             Some((path, staged)) if listed(&path, staged) => Some((path, staged)),
             Some((path, staged)) if listed(&path, !staged) => Some((path, !staged)),
             _ => None,
@@ -458,6 +459,10 @@ impl ChangesPanel {
             first(&snapshot.unstaged, false).or_else(|| first(&snapshot.staged, true))
         });
         self.snapshot = Some(snapshot);
+        // Reloading the shown file keeps its diff and scroll offset until the new one arrives.
+        if selected != previous {
+            self.diff = Some(Diff::Loading);
+        }
         self.selected = selected;
         if self.selected.is_some() {
             self.load_diff()
@@ -1193,6 +1198,31 @@ mod tests {
         panel.summary = "feat: add X".to_string();
         panel.busy = true;
         assert!(!panel.can_commit(), "an action is running");
+    }
+
+    #[test]
+    fn a_reload_keeps_the_shown_diff_until_the_new_one_arrives() {
+        let snapshot = || Snapshot {
+            unstaged: vec![changed_file("a.txt"), changed_file("b.txt")],
+            ..Snapshot::default()
+        };
+        let mut panel = ChangesPanel {
+            repo: Some("/repo".into()),
+            ..ChangesPanel::default()
+        };
+        let _ = panel.apply_snapshot(snapshot());
+        assert!(matches!(panel.diff, Some(Diff::Loading)));
+
+        panel.diff = Some(Diff::Empty);
+        let _ = panel.apply_snapshot(snapshot());
+        assert!(
+            matches!(panel.diff, Some(Diff::Empty)),
+            "same file selected"
+        );
+
+        panel.selected = Some(("gone.txt".to_string(), false));
+        let _ = panel.apply_snapshot(snapshot());
+        assert!(matches!(panel.diff, Some(Diff::Loading)), "selection moved");
     }
 
     #[test]

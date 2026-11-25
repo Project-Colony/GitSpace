@@ -528,14 +528,15 @@ fn restore_from_branch_takes_the_path_literally() {
     let (_dir, repo) = init_temp_repo();
     let root = repo.path().parent().unwrap();
     write_commit(&repo, "a.txt", "one", "initial");
-    let first = write_commit(&repo, "*.txt", "star", "glob name");
+    let first = write_commit(&repo, "[a].txt", "bracket", "glob name");
     repo.branch("other", &repo.find_commit(first).unwrap(), false)
         .unwrap();
     fs::write(root.join("a.txt"), "dirty").unwrap();
-    fs::write(root.join("*.txt"), "edited").unwrap();
+    fs::write(root.join("[a].txt"), "edited").unwrap();
 
-    branch::restore_file_from_branch(root, "other", "*.txt").expect("restore");
-    assert_eq!(fs::read_to_string(root.join("*.txt")).unwrap(), "star");
+    // `[a].txt` is a glob that also matches `a.txt`, and a name Windows accepts.
+    branch::restore_file_from_branch(root, "other", "[a].txt").expect("restore");
+    assert_eq!(fs::read_to_string(root.join("[a].txt")).unwrap(), "bracket");
     assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "dirty");
 }
 
