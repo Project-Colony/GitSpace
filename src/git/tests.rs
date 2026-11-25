@@ -274,8 +274,11 @@ fn pull_fast_forwards_the_checked_out_branch_only() {
         work.refname_to_id("refs/remotes/origin/main").unwrap()
     );
     assert_eq!(work.refname_to_id("refs/heads/main").unwrap(), main_before);
+    // A Windows checkout may turn line endings into CRLF (core.autocrlf).
     assert_eq!(
-        fs::read_to_string(root.join("shared.txt")).unwrap(),
+        fs::read_to_string(root.join("shared.txt"))
+            .unwrap()
+            .replace("\r\n", "\n"),
         "one\ntwo\n"
     );
 
