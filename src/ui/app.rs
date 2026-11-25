@@ -3,14 +3,20 @@
 //! Centralise le modèle, les messages, le dispatch update/view,
 //! les subscriptions (auto-fetch, notifications, clavier) et le thème.
 
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use iced::keyboard::{key::Named, Key, Modifiers};
 use iced::widget::{column, container, row};
 use iced::{Element, Length, Subscription, Task};
 
 use crate::auth::AuthManager;
 use crate::config::{AppConfig, LoggingOptions, Preferences};
 use crate::error::logs_directory;
+use crate::git::discover::discover_repositories;
+use crate::git::status::{quick_status, QuickStatus};
 use crate::i18n::{t, tf};
 use crate::ui::{
     auth::AuthPanel,
@@ -22,10 +28,22 @@ use crate::ui::{
     preferences::PreferencesPanel,
     recent::RecentList,
     repo_overview::{self, RepoOverviewPanel},
+    sidebar::{self, Sidebar},
     stage::{self, StagePanel},
     theme::Theme,
     widgets::toast::{Toast, ToastAction, Toasts},
 };
+
+/// Quick-status scans run at the same time, at most.
+const STATUS_SCANS: usize = 4;
+
+/// What Ctrl+1 to Ctrl+4 show. Stashes stay on the Stage panel until they get their own tab.
+const REPO_TABS: [MainTab; 4] = [
+    MainTab::Stage,
+    MainTab::History,
+    MainTab::Branches,
+    MainTab::Stage,
+];
 
 // ─── Message principal ─────────────────────────────────────────────────────
 
@@ -34,6 +52,8 @@ use crate::ui::{
 pub enum Message {
     // Layout / navigation
     Layout(LayoutMessage),
+
+    Sidebar(sidebar::Message),
 
     // Panneaux
     Clone(crate::ui::clone::Message),
@@ -58,8 +78,17 @@ pub enum Message {
     // Auto-fetch timer tick
     AutoFetchTick,
 
-    /// Ctrl+N (Cmd+N on macOS): show the tab at position N of the tab strip.
+    /// Ctrl+N (Cmd+N on macOS): show repository tab N, counted from 0.
     TabShortcut(usize),
+
+    /// Closes the search, a menu or Preferences, the first one open.
+    Escape,
+
+    /// The window gained focus: the repositories may have changed outside GitSpace.
+    WindowFocused,
+
+    /// Repositories found in the default clone folder.
+    CloneFolderScanned(Vec<String>),
 }
 
 // ─── Modele principal ──────────────────────────────────────────────────────
@@ -69,6 +98,10 @@ pub struct GitSpaceApp {
     theme: Theme,
     active_tab: MainTab,
     tab_order: Vec<MainTab>,
+
+    sidebar: Sidebar,
+    /// Quick status of each listed repository, by path, from the last background scan.
+    statuses: HashMap<String, QuickStatus>,
 
     // Panneaux
     clone_panel: ClonePanel,
@@ -106,6 +139,8 @@ impl GitSpaceApp {
         let last_repo = config.last_repo().map(|entry| entry.path.clone());
 
         let mut app = Self {
+            sidebar: Sidebar::default(),
+            statuses: HashMap::new(),
             clone_panel: ClonePanel::new(default_clone_path, preferences.network().clone()),
             recent_list: RecentList::new(),
             repo_overview: RepoOverviewPanel::new(preferences.network().clone()),
@@ -136,7 +171,8 @@ impl GitSpaceApp {
             Some(path) => app.load_repo_context_async(path),
             None => Task::none(),
         };
-        (app, Task::batch([accounts, repo]))
+        let scans = Task::batch([app.refresh_statuses(), app.rescan_clone_folder()]);
+        (app, Task::batch([accounts, repo, scans]))
     }
 
     // ─── Update ────────────────────────────────────────────────────────
@@ -145,32 +181,12 @@ impl GitSpaceApp {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             // ── Layout / navigation ────────────────────────────────────
-            Message::Layout(layout_msg) => {
-                match layout_msg {
-                    LayoutMessage::TabSelected(tab) => {
-                        self.active_tab = tab;
-                    }
-                    LayoutMessage::HeaderClicked => {
-                        self.preferences_panel.toggle();
-                    }
-                    LayoutMessage::OpenFileManager => {
-                        if let Some(repo) = &self.current_repo {
-                            if let Err(err) = repo_overview::open_folder(repo.path()) {
-                                self.toasts.push(Toast::error(
-                                    "Impossible d'ouvrir le dossier",
-                                    format!("{} : {err}", repo.path()),
-                                ));
-                            }
-                        }
-                    }
-                    LayoutMessage::CopyPath => {
-                        if let Some(repo) = &self.current_repo {
-                            return iced::clipboard::write(repo.path().to_string());
-                        }
-                    }
-                }
+            Message::Layout(LayoutMessage::TabSelected(tab)) => {
+                self.active_tab = tab;
                 Task::none()
             }
+
+            Message::Sidebar(msg) => self.update_sidebar(msg),
 
             // ── Clone ──────────────────────────────────────────────────
             Message::Clone(msg) => {
@@ -199,6 +215,7 @@ impl GitSpaceApp {
             Message::RepoOverview(msg) => {
                 self.notify_auto_fetch_failure(&msg);
                 let mut pulled = false;
+                let finished = matches!(msg, repo_overview::Message::ActionFinished { .. });
                 if let repo_overview::Message::ActionFinished {
                     path,
                     action,
@@ -223,26 +240,39 @@ impl GitSpaceApp {
                     .repo_overview
                     .update(msg, self.current_repo.as_ref(), &self.auth_manager)
                     .map(Message::RepoOverview);
-                if pulled {
-                    Task::batch([task, self.reload_other_panels(MainTab::RepoOverview)])
+                let reload = if pulled {
+                    self.reload_other_panels(MainTab::RepoOverview)
                 } else {
-                    task
-                }
+                    Task::none()
+                };
+                let statuses = if finished {
+                    self.refresh_statuses()
+                } else {
+                    Task::none()
+                };
+                Task::batch([task, reload, statuses])
             }
 
             // ── Stage ──────────────────────────────────────────────────
             Message::Stage(msg) => {
                 // A commit moves HEAD: the other panels show the old state until reloaded.
                 let changed = matches!(&msg, stage::Message::Committed(_, Ok(_)));
+                let acted = changed || matches!(&msg, stage::Message::ActionDone(_, Ok(_)));
                 let task = self
                     .stage_panel
                     .update(msg, self.current_repo.as_ref())
                     .map(Message::Stage);
-                if changed {
-                    Task::batch([task, self.reload_other_panels(MainTab::Stage)])
+                let reload = if changed {
+                    self.reload_other_panels(MainTab::Stage)
                 } else {
-                    task
-                }
+                    Task::none()
+                };
+                let statuses = if acted {
+                    self.refresh_statuses()
+                } else {
+                    Task::none()
+                };
+                Task::batch([task, reload, statuses])
             }
 
             // ── History ────────────────────────────────────────────────
@@ -264,6 +294,7 @@ impl GitSpaceApp {
                     .map(Message::Branches)];
                 if changed {
                     tasks.push(self.reload_other_panels(MainTab::Branches));
+                    tasks.push(self.refresh_statuses());
                 }
 
                 // Gerer la demande de navigation vers l'historique d'une branche
@@ -329,11 +360,12 @@ impl GitSpaceApp {
                 }
                 self.pending_repo = None;
                 let Some(repo) = context else {
+                    // The repository open until now stays open.
                     self.toasts.push(Toast::error(
-                        "Impossible d'ouvrir le dépôt",
-                        format!("{path} n'est pas un dépôt Git lisible."),
+                        t("repo_missing_title"),
+                        tf("repo_missing_detail", &[("path", &path)]),
                     ));
-                    return Task::none();
+                    return self.refresh_statuses();
                 };
                 if self.config.open_repo(&path, chrono::Utc::now().timestamp()) {
                     self.save_config();
@@ -349,15 +381,190 @@ impl GitSpaceApp {
             }
 
             // ── Auto-fetch ─────────────────────────────────────────────
-            Message::AutoFetchTick => self.maybe_start_auto_fetch(),
+            Message::AutoFetchTick => {
+                Task::batch([self.maybe_start_auto_fetch(), self.refresh_statuses()])
+            }
 
             Message::TabShortcut(index) => {
-                if let Some(tab) = self.tab_order.get(index) {
+                if let Some(tab) = REPO_TABS.get(index) {
                     self.active_tab = *tab;
                 }
                 Task::none()
             }
+
+            Message::Escape => {
+                if self.sidebar.is_searching() {
+                    self.sidebar.close_search();
+                } else if self.sidebar.is_menu_open() {
+                    self.sidebar.set_menu(None);
+                } else if self.preferences_panel.is_open() {
+                    self.preferences_panel.toggle();
+                }
+                Task::none()
+            }
+
+            Message::WindowFocused => self.refresh_statuses(),
+
+            Message::CloneFolderScanned(paths) => {
+                if !self.config.merge_discovered(&paths) {
+                    return Task::none();
+                }
+                self.save_config();
+                self.refresh_statuses()
+            }
         }
+    }
+
+    fn update_sidebar(&mut self, message: sidebar::Message) -> Task<Message> {
+        use sidebar::Message as Side;
+        match message {
+            Side::ToggleSearch => self
+                .sidebar
+                .toggle_search(self.config.repos())
+                .map(Message::Sidebar),
+            Side::Query(query) => {
+                self.sidebar.set_query(query, self.config.repos());
+                Task::none()
+            }
+            Side::MoveSelection(delta) => {
+                let current = self.current_repo.as_ref().map(RepoContext::path);
+                let target = self.sidebar.step(delta, self.config.repos(), current);
+                match target {
+                    // While searching, Up/Down only move the cursor; Enter opens.
+                    Some(path) if !self.sidebar.is_searching() => self.open_repo(&path),
+                    _ => Task::none(),
+                }
+            }
+            Side::Activate => match self.sidebar.cursor() {
+                Some(path) => self.open_repo(&path),
+                None => Task::none(),
+            },
+            Side::Select(path) => self.open_repo(&path),
+            Side::Pin(path, pinned) => {
+                self.sidebar.set_menu(None);
+                self.config.set_pinned(&path, pinned);
+                self.save_config();
+                Task::none()
+            }
+            Side::Hide(path) => {
+                self.sidebar.set_menu(None);
+                self.config.hide_repo(&path);
+                self.save_config();
+                Task::none()
+            }
+            Side::OpenFolder(path) => {
+                self.sidebar.set_menu(None);
+                if let Err(err) = repo_overview::open_folder(&path) {
+                    self.toasts.push(Toast::error(
+                        t("open_folder_failed"),
+                        format!("{path}: {err}"),
+                    ));
+                }
+                Task::none()
+            }
+            Side::OpenTerminal(path) => {
+                self.sidebar.set_menu(None);
+                if let Err(err) = repo_overview::open_terminal(&path) {
+                    self.toasts.push(Toast::error(
+                        t("open_terminal_failed"),
+                        format!("{path}: {err}"),
+                    ));
+                }
+                Task::none()
+            }
+            Side::ContextMenu(path) => {
+                self.sidebar.set_menu(path);
+                Task::none()
+            }
+            Side::AddRepository => {
+                if self.preferences_panel.is_open() {
+                    self.preferences_panel.toggle();
+                }
+                self.active_tab = MainTab::Clone;
+                Task::none()
+            }
+            Side::TogglePreferences => {
+                self.preferences_panel.toggle();
+                Task::none()
+            }
+            Side::StatusesLoaded(statuses) => {
+                self.statuses.extend(statuses);
+                Task::none()
+            }
+        }
+    }
+
+    /// Opens `path` from the sidebar; the search and any menu close.
+    fn open_repo(&mut self, path: &str) -> Task<Message> {
+        self.sidebar.close_search();
+        self.sidebar.set_menu(None);
+        if self.current_repo.as_ref().map(RepoContext::path) == Some(path) {
+            return Task::none();
+        }
+        self.load_repo_context_async(path.to_string())
+    }
+
+    /// Reads the quick status of every listed repository in the background, a few at a time.
+    fn refresh_statuses(&self) -> Task<Message> {
+        let paths: Vec<String> = self
+            .config
+            .repos()
+            .iter()
+            .filter(|entry| !entry.hidden)
+            .map(|entry| entry.path.clone())
+            .collect();
+        if paths.is_empty() {
+            return Task::none();
+        }
+        Task::perform(
+            async move {
+                let limit = Arc::new(tokio::sync::Semaphore::new(STATUS_SCANS));
+                let mut scans = tokio::task::JoinSet::new();
+                for path in paths {
+                    let limit = limit.clone();
+                    scans.spawn(async move {
+                        let _permit = limit.acquire_owned().await.ok()?;
+                        let status = {
+                            let path = path.clone();
+                            tokio::task::spawn_blocking(move || quick_status(&path))
+                                .await
+                                .ok()?
+                        };
+                        Some((path, status))
+                    });
+                }
+                let mut statuses = HashMap::new();
+                while let Some(scan) = scans.join_next().await {
+                    if let Ok(Some((path, status))) = scan {
+                        statuses.insert(path, status);
+                    }
+                }
+                statuses
+            },
+            |statuses| Message::Sidebar(sidebar::Message::StatusesLoaded(statuses)),
+        )
+    }
+
+    /// Looks for repositories in the default clone folder, when that option is on.
+    fn rescan_clone_folder(&self) -> Task<Message> {
+        let preferences = self.config.preferences();
+        if !preferences.scan_clone_folder() {
+            return Task::none();
+        }
+        let root = PathBuf::from(preferences.default_clone_path());
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    discover_repositories(&root)
+                        .into_iter()
+                        .map(|path| path.to_string_lossy().into_owned())
+                        .collect()
+                })
+                .await
+                .unwrap_or_default()
+            },
+            Message::CloneFolderScanned,
+        )
     }
 
     /// Reloads every repository panel except `origin` after it changed the repository.
@@ -389,45 +596,40 @@ impl GitSpaceApp {
     pub fn view(&self) -> Element<'_, Message> {
         let theme = &self.theme;
 
-        // Si le panneau de preferences est ouvert, afficher uniquement celui-ci
-        if self.preferences_panel.is_open() {
-            if let Some(prefs_view) = self.preferences_panel.view(theme) {
-                let overlay = self.toast_overlay();
-                return column![prefs_view.map(Message::Preferences), overlay,].into();
+        let sidebar = self
+            .sidebar
+            .view(
+                self.config.repos(),
+                &self.statuses,
+                self.current_repo.as_ref().map(RepoContext::path),
+                self.preferences_panel.is_open(),
+            )
+            .map(Message::Sidebar);
+
+        // Preferences take the place of the tabs while open.
+        let main_area: Element<'_, Message> = match self.preferences_panel.view(theme) {
+            Some(preferences) => container(preferences.map(Message::Preferences))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into(),
+            None => {
+                let tab_bar = layout::view_tab_bar(theme, &self.tab_order, self.active_tab)
+                    .map(Message::Layout);
+                column![tab_bar, self.view_active_tab(theme)]
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .padding(iced::Padding {
+                        top: 0.0,
+                        right: 16.0,
+                        bottom: 16.0,
+                        left: 16.0,
+                    })
+                    .into()
             }
-        }
-
-        // Header
-        let header = layout::view_header(theme).map(Message::Layout);
-
-        // Sidebar
-        let sidebar = layout::view_sidebar(theme, self.active_tab, self.current_repo.as_ref())
-            .map(Message::Layout);
-
-        // Barre d'onglets
-        let tab_bar =
-            layout::view_tab_bar(theme, &self.tab_order, self.active_tab).map(Message::Layout);
-
-        // Contenu de l'onglet actif
-        let content = self.view_active_tab(theme);
+        };
 
         let toast_overlay = self.toast_overlay();
-
-        // Assemblage : header en haut, puis sidebar + (tabs + content) en dessous
-        let main_area = column![tab_bar, content,]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .padding(iced::Padding {
-                top: 0.0,
-                right: 16.0,
-                bottom: 16.0,
-                left: 16.0,
-            });
-
-        let body = row![sidebar, main_area,].height(Length::Fill);
-
-        // Superposer les notifications en haut a droite
-        let page = column![header, body,].height(Length::Fill);
+        let page = row![sidebar, main_area].height(Length::Fill);
 
         // Utiliser un container pour le fond + overlay notifications
         let base = container(page)
@@ -524,11 +726,22 @@ impl GitSpaceApp {
             subs.push(iced::time::every(interval).map(|_| Message::AutoFetchTick));
         }
 
-        subs.push(iced::keyboard::listen().filter_map(|event| match event {
-            iced::keyboard::Event::KeyPressed { key, modifiers, .. } => {
-                tab_shortcut(key, modifiers)
-            }
-            _ => None,
+        // Every key press, with whether a widget took it: the search field takes Escape.
+        subs.push(
+            iced::event::listen_with(|event, status, _| match event {
+                iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                    key, modifiers, ..
+                }) => Some((key, modifiers, status == iced::event::Status::Captured)),
+                _ => None,
+            })
+            .with(self.sidebar.is_searching())
+            .filter_map(|(searching, (key, modifiers, captured))| {
+                shortcut(key, modifiers, captured, searching)
+            }),
+        );
+
+        subs.push(iced::window::events().filter_map(|(_, event)| {
+            matches!(event, iced::window::Event::Focused).then_some(Message::WindowFocused)
         }));
 
         Subscription::batch(subs)
@@ -578,6 +791,9 @@ impl GitSpaceApp {
 
     /// Applique un jeu de preferences mis a jour a toute l'application.
     fn apply_preferences(&mut self, preferences: Preferences) -> Task<Message> {
+        let old = self.config.preferences();
+        let rescan = old.scan_clone_folder() != preferences.scan_clone_folder()
+            || old.default_clone_path() != preferences.default_clone_path();
         self.config.set_preferences(preferences.clone());
         preferences.standard.apply();
         colony_ui::i18n::set_locale(preferences.language().locale());
@@ -601,7 +817,12 @@ impl GitSpaceApp {
         self.preferences_panel.set_preferences(preferences);
 
         self.save_config();
-        accounts
+        let scan = if rescan {
+            self.rescan_clone_folder()
+        } else {
+            Task::none()
+        };
+        Task::batch([accounts, scan])
     }
 
     /// Applique les options de logging mises a jour.
@@ -672,31 +893,88 @@ impl GitSpaceApp {
     }
 }
 
-/// Maps Ctrl+1 to Ctrl+9 (Cmd on macOS) to a tab position, counted from 0.
-fn tab_shortcut(key: iced::keyboard::Key, modifiers: iced::keyboard::Modifiers) -> Option<Message> {
-    let iced::keyboard::Key::Character(c) = key else {
+/// The window-wide shortcuts. A key a widget already `captured` does nothing, except
+/// Escape while searching: the focused search field takes it before anyone else.
+fn shortcut(key: Key, modifiers: Modifiers, captured: bool, searching: bool) -> Option<Message> {
+    if key == Key::Named(Named::Escape) {
+        return (!captured || searching).then_some(Message::Escape);
+    }
+    if captured {
         return None;
-    };
-    let digit = c.parse::<usize>().ok().filter(|d| (1..=9).contains(d))?;
-    (modifiers.command() && !modifiers.alt() && !modifiers.shift())
-        .then(|| Message::TabShortcut(digit - 1))
+    }
+    let side = |message| Some(Message::Sidebar(message));
+    match key.as_ref() {
+        Key::Named(arrow @ (Named::ArrowUp | Named::ArrowDown))
+            if modifiers == Modifiers::ALT || (searching && modifiers.is_empty()) =>
+        {
+            side(sidebar::Message::MoveSelection(
+                if arrow == Named::ArrowUp { -1 } else { 1 },
+            ))
+        }
+        Key::Character(c) if modifiers.command() && !modifiers.alt() && !modifiers.shift() => {
+            match c {
+                "k" => side(sidebar::Message::ToggleSearch),
+                "," => side(sidebar::Message::TogglePreferences),
+                _ => c
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|digit| (1..=REPO_TABS.len()).contains(digit))
+                    .map(|digit| Message::TabShortcut(digit - 1)),
+            }
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iced::keyboard::{Key, Modifiers};
+
+    fn name(message: Option<Message>) -> String {
+        message.map_or_else(|| "None".to_string(), |message| format!("{message:?}"))
+    }
 
     #[test]
-    fn ctrl_digit_selects_a_tab_position() {
+    fn keyboard_map_covers_search_tabs_and_preferences() {
         let key = |c: &str| Key::Character(c.into());
-        assert!(matches!(
-            tab_shortcut(key("3"), Modifiers::COMMAND),
-            Some(Message::TabShortcut(2))
-        ));
-        assert!(tab_shortcut(key("3"), Modifiers::empty()).is_none());
-        assert!(tab_shortcut(key("0"), Modifiers::COMMAND).is_none());
-        assert!(tab_shortcut(key("a"), Modifiers::COMMAND).is_none());
-        assert!(tab_shortcut(key("3"), Modifiers::COMMAND | Modifiers::SHIFT).is_none());
+        let up = Key::Named(Named::ArrowUp);
+        let down = Key::Named(Named::ArrowDown);
+        let escape = Key::Named(Named::Escape);
+        let cmd = Modifiers::COMMAND;
+        let free = |key, modifiers| name(shortcut(key, modifiers, false, false));
+
+        assert_eq!(free(key("k"), cmd), "Sidebar(ToggleSearch)");
+        assert_eq!(free(key(","), cmd), "Sidebar(TogglePreferences)");
+        assert_eq!(free(key("1"), cmd), "TabShortcut(0)");
+        assert_eq!(free(key("4"), cmd), "TabShortcut(3)");
+        assert_eq!(free(key("5"), cmd), "None");
+        assert_eq!(free(key("3"), cmd | Modifiers::SHIFT), "None");
+        assert_eq!(free(key("k"), Modifiers::empty()), "None");
+        assert_eq!(
+            free(up.clone(), Modifiers::ALT),
+            "Sidebar(MoveSelection(-1))"
+        );
+        assert_eq!(
+            free(down.clone(), Modifiers::ALT),
+            "Sidebar(MoveSelection(1))"
+        );
+        // Plain arrows only move through the list while the search is open.
+        assert_eq!(free(down.clone(), Modifiers::empty()), "None");
+        assert_eq!(
+            name(shortcut(down, Modifiers::empty(), false, true)),
+            "Sidebar(MoveSelection(1))"
+        );
+        assert_eq!(free(escape.clone(), Modifiers::empty()), "Escape");
+
+        // Keys typed into a field reach nothing, but the search field's Escape closes it.
+        assert_eq!(name(shortcut(key("k"), cmd, true, false)), "None");
+        assert_eq!(
+            name(shortcut(escape.clone(), Modifiers::empty(), true, false)),
+            "None"
+        );
+        assert_eq!(
+            name(shortcut(escape, Modifiers::empty(), true, true)),
+            "Escape"
+        );
     }
 }

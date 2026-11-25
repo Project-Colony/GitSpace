@@ -78,7 +78,6 @@ fn repo_status(repo: &Repository) -> Result<RepoStatus, git2::Error> {
 }
 
 /// The cheap status shown next to a repository in the sidebar.
-#[cfg_attr(not(test), expect(dead_code, reason = "the sidebar scan will call it"))]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct QuickStatus {
     pub branch: Option<String>,
@@ -92,7 +91,6 @@ pub struct QuickStatus {
 
 /// Branch, divergence from upstream and changed-entry count, without building patches.
 /// Never fails: a path that does not open as a repository is reported as `missing`.
-#[cfg_attr(not(test), expect(dead_code, reason = "the sidebar scan will call it"))]
 pub fn quick_status(path: &str) -> QuickStatus {
     // Opened fresh, not cached: a cached handle would outlive a deleted folder, and a scan
     // of many repositories would only churn the small cache.

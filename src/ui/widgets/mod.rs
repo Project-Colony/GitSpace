@@ -11,7 +11,6 @@
 pub mod button;
 #[expect(dead_code, reason = "the repository header and lists will use it")]
 pub mod chip;
-#[expect(dead_code, reason = "the \"⋯\" and right-click menus will use it")]
 pub mod menu;
 #[expect(dead_code, reason = "the add-repository page will use it")]
 pub mod segmented;

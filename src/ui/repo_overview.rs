@@ -134,8 +134,8 @@ impl RepoOverviewPanel {
             Message::Pull => self.start_action(repo, auth, RemoteAction::Pull, false),
             Message::Push => self.start_action(repo, auth, RemoteAction::Push, false),
             Message::OpenTerminal => {
-                self.action_status = Some(match self.open_terminal(repo) {
-                    Ok(msg) => msg,
+                self.action_status = Some(match open_terminal(repo.path()) {
+                    Ok(()) => "Terminal opened".to_string(),
                     Err(err) => format!("Terminal failed: {err}"),
                 });
                 Task::none()
@@ -498,31 +498,29 @@ impl RepoOverviewPanel {
             upstream_branch,
         })
     }
-
-    // ── Actions système ────────────────────────────────────────────────
-
-    /// Ouvre un terminal dans le répertoire du dépôt.
-    fn open_terminal(&self, repo: &RepoContext) -> Result<String, String> {
-        let path = Path::new(repo.path());
-        if !path.is_dir() {
-            return Err(format!("Repository folder not found: {}", repo.path()));
-        }
-
-        let mut error = None;
-        for mut command in terminal_commands(path) {
-            match command.spawn() {
-                Ok(_) => return Ok("Terminal opened".to_string()),
-                Err(err) => error = Some(err),
-            }
-        }
-        Err(match error {
-            Some(err) if err.kind() != ErrorKind::NotFound => err.to_string(),
-            _ => "No supported terminal emulator found on PATH".to_string(),
-        })
-    }
 }
 
 // ── Fonctions utilitaires ──────────────────────────────────────────────────
+
+/// Ouvre un terminal dans le dossier `path`, sans attendre sa fermeture.
+pub fn open_terminal(path: &str) -> Result<(), String> {
+    let dir = Path::new(path);
+    if !dir.is_dir() {
+        return Err(format!("Repository folder not found: {path}"));
+    }
+
+    let mut error = None;
+    for mut command in terminal_commands(dir) {
+        match command.spawn() {
+            Ok(_) => return Ok(()),
+            Err(err) => error = Some(err),
+        }
+    }
+    Err(match error {
+        Some(err) if err.kind() != ErrorKind::NotFound => err.to_string(),
+        _ => "No supported terminal emulator found on PATH".to_string(),
+    })
+}
 
 /// Ouvre un dossier dans le gestionnaire de fichiers du système, sans attendre sa fermeture.
 pub fn open_folder(path: &str) -> Result<(), String> {

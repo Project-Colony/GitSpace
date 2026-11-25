@@ -247,10 +247,6 @@ impl AppConfig {
         true
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the repository sidebar will call it")
-    )]
     pub fn set_pinned(&mut self, path: &str, pinned: bool) {
         if let Some(entry) = self.repos.iter_mut().find(|entry| entry.path == path) {
             entry.pinned = pinned;
@@ -259,10 +255,6 @@ impl AppConfig {
 
     /// Removes `path` from the list. A found repository is only hidden, so the next scan of
     /// the clone folder does not add it back.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the repository sidebar will call it")
-    )]
     pub fn hide_repo(&mut self, path: &str) {
         let Some(index) = self.repos.iter().position(|entry| entry.path == path) else {
             return;
@@ -276,10 +268,6 @@ impl AppConfig {
 
     /// Adds the repositories a scan found that are not listed yet, hidden ones included.
     /// Returns whether any was added.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the clone-folder scan will call it")
-    )]
     pub fn merge_discovered(&mut self, paths: &[String]) -> bool {
         let before = self.repos.len();
         for path in paths {
@@ -545,6 +533,11 @@ fn clamp_auto_fetch_interval(minutes: u64) -> u64 {
 impl Preferences {
     pub fn language(&self) -> Language {
         self.language
+    }
+
+    /// Whether the default clone folder is searched for repositories to list.
+    pub fn scan_clone_folder(&self) -> bool {
+        self.scan_clone_folder
     }
 
     pub fn default_clone_path(&self) -> &str {

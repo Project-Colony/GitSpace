@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 
 /// Direct sub-folders of `root` that hold a `.git` directory or file, sorted by name.
 /// Nested folders are not searched. An unreadable `root` gives an empty list.
-#[cfg_attr(not(test), expect(dead_code, reason = "the sidebar scan will call it"))]
 pub fn discover_repositories(root: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(root) else {
         return Vec::new();
