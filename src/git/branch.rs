@@ -103,6 +103,8 @@ pub fn checkout_branch<P: AsRef<Path>>(repo_path: P, name: &str) -> Result<(), E
             Err(_) => repo.revparse_ext(name)?,
         };
 
+        // The cached handle keeps its index: reload it, or libgit2 writes the old one back.
+        repo.index()?.read(false)?;
         // Safe checkout: libgit2 fails instead of overwriting a modified file.
         repo.checkout_tree(&object, Some(&mut CheckoutBuilder::new()))?;
         if let Some(reference) = reference {

@@ -155,6 +155,12 @@ pub fn push_branch<P: AsRef<Path>>(
     token: Option<String>,
 ) -> Result<(), AppError> {
     let repo = Repository::open(path)?;
+    let local_ref_name = format!("refs/heads/{local_branch}");
+    if repo.find_reference("HEAD")?.symbolic_target()? != Some(local_ref_name.as_str()) {
+        return Err(AppError::Git(format!(
+            "Push only sends the checked-out branch, and {local_branch} is not checked out."
+        )));
+    }
     let mut remote = repo.find_remote(remote_name)?;
 
     // Validate URL against network policy
