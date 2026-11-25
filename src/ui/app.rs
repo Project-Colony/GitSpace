@@ -7,7 +7,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use colony_ui::theme::Palette;
-use iced::keyboard::{key::Named, Key, Modifiers};
+use iced::keyboard::key::{Code, Named, Physical};
+use iced::keyboard::{Key, Modifiers};
 use iced::widget::{column, container, row};
 use iced::{Element, Length, Subscription, Task};
 
@@ -830,13 +831,21 @@ impl GitSpaceApp {
         subs.push(
             iced::event::listen_with(|event, status, _| match event {
                 iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
-                    key, modifiers, ..
-                }) => Some((key, modifiers, status == iced::event::Status::Captured)),
+                    key,
+                    physical_key,
+                    modifiers,
+                    ..
+                }) => Some((
+                    key,
+                    physical_key,
+                    modifiers,
+                    status == iced::event::Status::Captured,
+                )),
                 _ => None,
             })
             .with(self.sidebar.is_searching())
-            .filter_map(|(searching, (key, modifiers, captured))| {
-                shortcut(key, modifiers, captured, searching)
+            .filter_map(|(searching, (key, physical, modifiers, captured))| {
+                shortcut(key, physical, modifiers, captured, searching)
             }),
         );
 
@@ -964,7 +973,13 @@ impl GitSpaceApp {
 
 /// The window-wide shortcuts. A key a widget already `captured` does nothing, except
 /// Escape while searching: the focused search field takes it before anyone else.
-fn shortcut(key: Key, modifiers: Modifiers, captured: bool, searching: bool) -> Option<Message> {
+fn shortcut(
+    key: Key,
+    physical: Physical,
+    modifiers: Modifiers,
+    captured: bool,
+    searching: bool,
+) -> Option<Message> {
     if key == Key::Named(Named::Escape) {
         return (!captured || searching).then_some(Message::Escape);
     }
@@ -990,10 +1005,25 @@ fn shortcut(key: Key, modifiers: Modifiers, captured: bool, searching: bool) -> 
                 _ => c
                     .parse::<usize>()
                     .ok()
+                    .or_else(|| digit_key(physical))
                     .filter(|digit| (1..=RepoTab::ALL.len()).contains(digit))
                     .map(|digit| Message::TabShortcut(digit - 1)),
             }
         }
+        _ => None,
+    }
+}
+
+/// The digit of a top-row or keypad key, whatever it types: on AZERTY the 1 key types "&".
+fn digit_key(physical: Physical) -> Option<usize> {
+    let Physical::Code(code) = physical else {
+        return None;
+    };
+    match code {
+        Code::Digit1 | Code::Numpad1 => Some(1),
+        Code::Digit2 | Code::Numpad2 => Some(2),
+        Code::Digit3 | Code::Numpad3 => Some(3),
+        Code::Digit4 | Code::Numpad4 => Some(4),
         _ => None,
     }
 }
@@ -1118,6 +1148,10 @@ mod tests {
         let down = Key::Named(Named::ArrowDown);
         let escape = Key::Named(Named::Escape);
         let cmd = Modifiers::COMMAND;
+        let unknown = Physical::Unidentified(iced::keyboard::key::NativeCode::Unidentified);
+        let shortcut = |key, modifiers, captured, searching| {
+            shortcut(key, unknown, modifiers, captured, searching)
+        };
         let free = |key, modifiers| name(shortcut(key, modifiers, false, false));
 
         assert_eq!(free(key("k"), cmd), "Sidebar(ToggleSearch)");
@@ -1157,6 +1191,26 @@ mod tests {
             name(shortcut(escape, Modifiers::empty(), true, true)),
             "Escape"
         );
+    }
+
+    #[test]
+    fn tab_shortcuts_follow_the_digit_keys_on_any_layout() {
+        let azerty = |typed: &str, code| {
+            name(super::shortcut(
+                Key::Character(typed.into()),
+                Physical::Code(code),
+                Modifiers::COMMAND,
+                false,
+                false,
+            ))
+        };
+        // AZERTY: the top-row keys type "&", "é", "\"" and "'" without Shift.
+        assert_eq!(azerty("&", Code::Digit1), "TabShortcut(0)");
+        assert_eq!(azerty("é", Code::Digit2), "TabShortcut(1)");
+        assert_eq!(azerty("\"", Code::Digit3), "TabShortcut(2)");
+        assert_eq!(azerty("'", Code::Digit4), "TabShortcut(3)");
+        assert_eq!(azerty("(", Code::Digit5), "None");
+        assert_eq!(azerty("1", Code::Numpad1), "TabShortcut(0)");
     }
 
     #[test]
