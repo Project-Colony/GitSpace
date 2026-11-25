@@ -432,9 +432,11 @@ impl GitSpaceApp {
             }
 
             // ── Auto-fetch ─────────────────────────────────────────────
-            Message::AutoFetchTick => {
-                Task::batch([self.maybe_start_auto_fetch(), self.refresh_statuses()])
-            }
+            Message::AutoFetchTick => Task::batch([
+                self.maybe_start_auto_fetch(),
+                self.refresh_statuses(),
+                self.reload_changes(),
+            ]),
 
             Message::TabShortcut(index) => {
                 if let Some(tab) = RepoTab::ALL.get(index) {
@@ -455,7 +457,7 @@ impl GitSpaceApp {
                 Task::none()
             }
 
-            Message::WindowFocused => self.refresh_statuses(),
+            Message::WindowFocused => Task::batch([self.refresh_statuses(), self.reload_changes()]),
 
             Message::CloneFolderScanned(paths) => {
                 if !self.config.merge_discovered(&paths) {
@@ -623,6 +625,14 @@ impl GitSpaceApp {
             },
             Message::CloneFolderScanned,
         )
+    }
+
+    /// Rereads the open repository's changes, which other programs may have edited.
+    fn reload_changes(&mut self) -> Task<Message> {
+        match self.current_repo.clone() {
+            Some(repo) => self.changes_panel.load(&repo).map(Message::Changes),
+            None => Task::none(),
+        }
     }
 
     /// Reloads every repository panel except `origin` after it changed the repository.

@@ -524,6 +524,22 @@ fn checkout_refuses_to_overwrite_a_modified_file() {
 }
 
 #[test]
+fn restore_from_branch_takes_the_path_literally() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    write_commit(&repo, "a.txt", "one", "initial");
+    let first = write_commit(&repo, "*.txt", "star", "glob name");
+    repo.branch("other", &repo.find_commit(first).unwrap(), false)
+        .unwrap();
+    fs::write(root.join("a.txt"), "dirty").unwrap();
+    fs::write(root.join("*.txt"), "edited").unwrap();
+
+    branch::restore_file_from_branch(root, "other", "*.txt").expect("restore");
+    assert_eq!(fs::read_to_string(root.join("*.txt")).unwrap(), "star");
+    assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "dirty");
+}
+
+#[test]
 fn commit_diff_summaries_count_lines() {
     let (_dir, repo) = init_temp_repo();
     let path = repo.path().parent().unwrap().to_str().unwrap().to_string();

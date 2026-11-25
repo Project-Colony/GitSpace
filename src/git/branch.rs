@@ -231,7 +231,8 @@ pub fn restore_file_from_branch<P: AsRef<Path>>(
     path: &str,
 ) -> Result<(), String> {
     let output = Command::new("git")
-        .args(["checkout", branch, "--", path])
+        // Literal pathspecs: a file named `*.md` must not also restore README.md.
+        .args(["--literal-pathspecs", "checkout", branch, "--", path])
         .current_dir(repo_path.as_ref())
         .output()
         .map_err(|err| err.to_string())?;
