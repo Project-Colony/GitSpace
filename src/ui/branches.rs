@@ -8,6 +8,7 @@ use std::sync::Arc;
 use colony_ui::theme::Palette;
 use colony_ui::widgets::icons;
 use colony_ui::{fonts, Typography};
+use git2::Oid;
 use iced::widget::text::Wrapping;
 use iced::widget::{button, column, container, pick_list, row, scrollable, text, text_input};
 use iced::widget::{Column, Space};
@@ -15,7 +16,7 @@ use iced::{Alignment, Border, Element, Length, Task};
 
 use crate::git::branch::{
     archive_branch, checkout_branch, create_branch, create_tracking_branch, delete_branch,
-    list_branch_overview, rename_branch, set_upstream, BranchKind, BranchOverview,
+    head_commit, list_branch_overview, rename_branch, set_upstream, BranchKind, BranchOverview,
 };
 use crate::git::log::{commits_between_refs, CommitInfo};
 use crate::git::merge::{merge_branch, MergeStrategy};
@@ -212,17 +213,22 @@ pub enum Message {
     ViewInHistory,
     /// F2: renames the selected branch.
     StartRename,
-    /// A read of the branches, numbered so that only the latest one is shown.
-    Loaded(Arc<str>, u64, Result<Vec<BranchOverview>, String>),
+    /// A read of the branches and of HEAD, numbered so that only the latest one is shown.
+    Loaded(Arc<str>, u64, Result<BranchList, String>),
     /// The commits of a branch that the current one lacks.
     CommitsLoaded(Arc<str>, String, Result<Vec<CommitInfo>, String>),
     /// The key names the failure title.
     ActionDone(Arc<str>, &'static str, Result<Outcome, String>),
 }
 
+/// The branches and the commit HEAD points at.
+pub type BranchList = (Vec<BranchOverview>, Option<Oid>);
+
 pub struct BranchPanel {
     repo: Option<Arc<str>>,
     branches: Vec<BranchOverview>,
+    /// The commit HEAD pointed at when `branches` was read.
+    head: Option<Oid>,
     loading: bool,
     error: Option<String>,
     /// Number of the last branch read; older replies are dropped.
@@ -249,6 +255,7 @@ impl BranchPanel {
         Self {
             repo: None,
             branches: Vec::new(),
+            head: None,
             loading: false,
             error: None,
             request: 0,
@@ -431,21 +438,20 @@ impl BranchPanel {
         self.request += 1;
         self.loading = true;
         let request = self.request;
-        git_task(
-            repo,
-            |repo| list_branch_overview(repo).map_err(|err| err.to_string()),
-            move |repo, result| Message::Loaded(repo, request, result),
-        )
+        git_task(repo, read_branches, move |repo, result| {
+            Message::Loaded(repo, request, result)
+        })
     }
 
     /// Takes the new list; the selection falls back to the current branch when its branch
     /// is gone.
-    fn apply_list(&mut self, result: Result<Vec<BranchOverview>, String>) -> Task<Message> {
+    fn apply_list(&mut self, result: Result<BranchList, String>) -> Task<Message> {
         self.loading = false;
         match result {
-            Ok(branches) => {
+            Ok((branches, head)) => {
                 self.error = None;
                 self.branches = branches;
+                self.head = head;
                 let name = match self.selected_branch() {
                     Some(branch) => Some(branch.name.clone()),
                     None => {
@@ -561,6 +567,7 @@ impl BranchPanel {
             return Task::none();
         };
         let current = self.current_name().to_string();
+        let head = self.head;
         match band {
             Band::NewBranch(_) => Task::none(),
             Band::Rename(new) => {
@@ -607,7 +614,7 @@ impl BranchPanel {
                     .selected_branch()
                     .is_some_and(|branch| branch.merged_into_head);
                 self.run("branches_delete_failed", move |repo| {
-                    ensure_unchanged(repo, &current, &name, merged)?;
+                    ensure_unchanged(repo, &current, head, &name, merged)?;
                     delete_branch(repo, &name)
                         .map(|()| Outcome::Done(done))
                         .map_err(|err| err.to_string())
@@ -629,7 +636,7 @@ impl BranchPanel {
                 };
                 let done = tf(done, &[("branch", &name), ("current", &current)]);
                 self.run(failed, move |repo| {
-                    ensure_unchanged(repo, &current, &name, false)?;
+                    ensure_unchanged(repo, &current, head, &name, false)?;
                     let outcome = merge_branch(repo, &name, strategy)?;
                     Ok(if outcome.had_conflicts {
                         Outcome::Conflicts(outcome.conflicts)
@@ -1354,14 +1361,28 @@ fn head_name(branches: &[BranchOverview]) -> &str {
         .map_or("HEAD", |branch| branch.name.as_str())
 }
 
-/// Fails when HEAD is no longer `current`, or when `branch` was shown as merged into it and
-/// no longer is: the confirmation the user answered then describes another state.
-fn ensure_unchanged(repo: &str, current: &str, branch: &str, merged: bool) -> Result<(), String> {
+/// The branches and the commit HEAD points at, read in a background task.
+fn read_branches(repo: &str) -> Result<BranchList, String> {
     let branches = list_branch_overview(repo).map_err(|err| err.to_string())?;
+    let head = head_commit(repo).map_err(|err| err.to_string())?;
+    Ok((branches, head))
+}
+
+/// Fails when HEAD is no longer `current` at commit `head`, or when `branch` was shown as
+/// merged into it and no longer is: the confirmation the user answered then describes another
+/// state. The commit matters for a detached HEAD, whose name is always "HEAD".
+fn ensure_unchanged(
+    repo: &str,
+    current: &str,
+    head: Option<Oid>,
+    branch: &str,
+    merged: bool,
+) -> Result<(), String> {
+    let (branches, now) = read_branches(repo)?;
     let still_merged = branches.iter().any(|overview| {
         overview.kind == BranchKind::Local && overview.name == branch && overview.merged_into_head
     });
-    if head_name(&branches) != current || (merged && !still_merged) {
+    if head_name(&branches) != current || now != head || (merged && !still_merged) {
         return Err(t("branches_changed_outside").to_string());
     }
     Ok(())
@@ -1521,18 +1542,44 @@ mod tests {
             repo.branch(name, &base, false).unwrap();
         }
         let path = dir.path().to_str().unwrap();
-        assert_eq!(ensure_unchanged(path, "main", "topic", true), Ok(()));
+        let at_base = Some(base.id());
+        assert_eq!(
+            ensure_unchanged(path, "main", at_base, "topic", true),
+            Ok(())
+        );
 
         // `git checkout feature` in a terminal: a band that says "into main" is stale.
         repo.set_head("refs/heads/feature").unwrap();
-        assert!(ensure_unchanged(path, "main", "topic", false).is_err());
-        assert_eq!(ensure_unchanged(path, "feature", "topic", true), Ok(()));
+        assert!(ensure_unchanged(path, "main", at_base, "topic", false).is_err());
+        assert_eq!(
+            ensure_unchanged(path, "feature", at_base, "topic", true),
+            Ok(())
+        );
 
         // topic gets a commit of its own: it is no longer merged into feature.
-        repo.commit(Some("refs/heads/topic"), &sig, &sig, "own", &tree, &[&base])
+        let own = repo
+            .commit(Some("refs/heads/topic"), &sig, &sig, "own", &tree, &[&base])
             .unwrap();
-        assert!(ensure_unchanged(path, "feature", "topic", true).is_err());
-        assert_eq!(ensure_unchanged(path, "feature", "topic", false), Ok(()));
+        assert!(ensure_unchanged(path, "feature", at_base, "topic", true).is_err());
+        assert_eq!(
+            ensure_unchanged(path, "feature", at_base, "topic", false),
+            Ok(())
+        );
+
+        // A detached HEAD is named "HEAD" on every commit: moving it is caught by its commit.
+        repo.set_head_detached(base.id()).unwrap();
+        assert_eq!(
+            ensure_unchanged(path, "HEAD", at_base, "topic", false),
+            Ok(())
+        );
+        repo.set_head_detached(own).unwrap();
+        assert!(ensure_unchanged(path, "HEAD", at_base, "topic", false).is_err());
+
+        // A commit made on feature in a terminal moves HEAD too.
+        repo.set_head("refs/heads/feature").unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "next", &tree, &[&base])
+            .unwrap();
+        assert!(ensure_unchanged(path, "feature", at_base, "topic", false).is_err());
     }
 
     #[test]

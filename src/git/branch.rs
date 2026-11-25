@@ -2,7 +2,7 @@ use std::path::Path;
 use std::process::Command;
 
 use chrono::Utc;
-use git2::{build::CheckoutBuilder, BranchType, Error, ErrorCode, Repository};
+use git2::{build::CheckoutBuilder, BranchType, Error, ErrorCode, Oid, Repository};
 
 use crate::git::repo_cache::with_cached_repo;
 
@@ -118,6 +118,13 @@ pub fn list_branch_overview(repo_path: &str) -> Result<Vec<BranchOverview>, Erro
 
         entries.sort_by(|a, b| (kind_order(&a.kind), &a.name).cmp(&(kind_order(&b.kind), &b.name)));
         Ok(entries)
+    })
+}
+
+/// The commit HEAD points at, attached or detached; `None` before the first commit.
+pub fn head_commit(repo_path: &str) -> Result<Option<Oid>, Error> {
+    with_cached_repo(repo_path, |repo| {
+        Ok(repo.head().ok().and_then(|head| head.target()))
     })
 }
 
