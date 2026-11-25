@@ -24,13 +24,13 @@ use crate::ui::{
     clone::{self, ClonePanel},
     context::RepoContext,
     history::HistoryPanel,
-    layout::{self, LayoutMessage, MainTab},
     preferences::PreferencesPanel,
     recent::RecentList,
-    repo_overview::{self, RepoOverviewPanel},
+    repo_header::{self, RepoHeader, RepoTab, TabCounts},
     sidebar::{self, Sidebar},
     stage::{self, StagePanel},
     theme::Theme,
+    widgets::tabs::tabs,
     widgets::toast::{Toast, ToastAction, Toasts},
 };
 
@@ -71,28 +71,50 @@ impl StatusRefresh {
     }
 }
 
-/// What Ctrl+1 to Ctrl+4 show. Stashes stay on the Stage panel until they get their own tab.
-const REPO_TABS: [MainTab; 4] = [
-    MainTab::Stage,
-    MainTab::History,
-    MainTab::Branches,
-    MainTab::Stage,
-];
+/// The sections of the add-repository page.
+/// shortcut: Open and Accounts sit here until the Add repository screen and Preferences take
+/// them over (Tasks 17 and 18).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AddTab {
+    Clone,
+    Open,
+    Accounts,
+}
+
+impl AddTab {
+    const ALL: [AddTab; 3] = [AddTab::Clone, AddTab::Open, AddTab::Accounts];
+
+    fn label(self) -> &'static str {
+        match self {
+            AddTab::Clone => t("add_clone"),
+            AddTab::Open => t("add_open"),
+            AddTab::Accounts => t("add_accounts"),
+        }
+    }
+}
+
+/// The panel that changed the repository, which [`GitSpaceApp::reload_other_panels`] skips.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Origin {
+    Header,
+    Stage,
+    Branches,
+}
 
 // ─── Message principal ─────────────────────────────────────────────────────
 
 /// Message racine de l'application, enveloppe tous les sous-messages.
 #[derive(Debug, Clone)]
 pub enum Message {
-    // Layout / navigation
-    Layout(LayoutMessage),
-
     Sidebar(sidebar::Message),
+
+    /// Shows a section of the add-repository page.
+    AddTab(AddTab),
 
     // Panneaux
     Clone(crate::ui::clone::Message),
     Recent(crate::ui::recent::Message),
-    RepoOverview(crate::ui::repo_overview::Message),
+    RepoHeader(repo_header::Message),
     Stage(crate::ui::stage::Message),
     History(crate::ui::history::Message),
     Branches(crate::ui::branches::Message),
@@ -130,8 +152,9 @@ pub enum Message {
 /// Etat global de l'application GitSpace.
 pub struct GitSpaceApp {
     theme: Theme,
-    active_tab: MainTab,
-    tab_order: Vec<MainTab>,
+    active_tab: RepoTab,
+    /// The add-repository page is shown in place of the open repository.
+    adding: Option<AddTab>,
 
     sidebar: Sidebar,
     /// Quick status of each listed repository, by path, from the last background scan.
@@ -141,7 +164,7 @@ pub struct GitSpaceApp {
     // Panneaux
     clone_panel: ClonePanel,
     recent_list: RecentList,
-    repo_overview: RepoOverviewPanel,
+    repo_header: RepoHeader,
     stage_panel: StagePanel,
     history_panel: HistoryPanel,
     branches_panel: BranchPanel,
@@ -179,7 +202,7 @@ impl GitSpaceApp {
             status_refresh: StatusRefresh::default(),
             clone_panel: ClonePanel::new(default_clone_path, preferences.network().clone()),
             recent_list: RecentList::new(),
-            repo_overview: RepoOverviewPanel::new(preferences.network().clone()),
+            repo_header: RepoHeader::new(preferences.network().clone()),
             history_panel: HistoryPanel::new(),
             branches_panel: BranchPanel::new(preferences.pinned_branches().to_vec()),
             stage_panel: StagePanel::new(),
@@ -190,8 +213,8 @@ impl GitSpaceApp {
             current_repo: None,
             pending_repo: None,
             auth_manager,
-            active_tab: MainTab::Clone,
-            tab_order: MainTab::ALL.to_vec(),
+            active_tab: RepoTab::Changes,
+            adding: None,
             toasts: Toasts::default(),
         };
 
@@ -216,13 +239,12 @@ impl GitSpaceApp {
     /// Dispatch principal des messages.
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            // ── Layout / navigation ────────────────────────────────────
-            Message::Layout(LayoutMessage::TabSelected(tab)) => {
-                self.active_tab = tab;
+            Message::Sidebar(msg) => self.update_sidebar(msg),
+
+            Message::AddTab(tab) => {
+                self.adding = Some(tab);
                 Task::none()
             }
-
-            Message::Sidebar(msg) => self.update_sidebar(msg),
 
             // ── Clone ──────────────────────────────────────────────────
             Message::Clone(msg) => {
@@ -247,37 +269,28 @@ impl GitSpaceApp {
                 Task::batch([task.map(Message::Recent), load_task])
             }
 
-            // ── Repo overview ──────────────────────────────────────────
-            Message::RepoOverview(msg) => {
-                self.notify_auto_fetch_failure(&msg);
-                let mut pulled = false;
-                let finished = matches!(msg, repo_overview::Message::ActionFinished { .. });
-                if let repo_overview::Message::ActionFinished {
-                    path,
-                    action,
-                    auto: false,
-                    result,
-                } = &msg
-                {
-                    let current = self.current_repo.as_ref().map(|repo| repo.path());
-                    if current != Some(&**path) {
-                        // The panel only shows results for the open repository.
-                        let title = format!("{} sur {path}", action.label());
-                        self.toasts.push(match result {
-                            Ok(msg) => Toast::success(format!("{title} : {msg}")),
-                            Err(err) => Toast::error(title, format!("Échec : {err}")),
-                        });
-                    } else {
-                        pulled =
-                            matches!(action, repo_overview::RemoteAction::Pull) && result.is_ok();
-                    }
+            // ── Repository header ──────────────────────────────────────
+            Message::RepoHeader(repo_header::Message::SelectTab(tab)) => {
+                self.active_tab = tab;
+                Task::none()
+            }
+            Message::RepoHeader(msg) => {
+                let finished = matches!(msg, repo_header::Message::ActionFinished { .. });
+                // A pull moves HEAD and the working tree of the open repository.
+                let pulled = matches!(
+                    &msg,
+                    repo_header::Message::ActionFinished {
+                        path,
+                        action: repo_header::RemoteAction::Pull,
+                        result: Ok(_),
+                    } if self.current_repo.as_ref().map(RepoContext::path) == Some(&**path)
+                );
+                let (task, toast) = self.repo_header.update(msg, &self.auth_manager);
+                if let Some(toast) = toast {
+                    self.toasts.push(toast);
                 }
-                let task = self
-                    .repo_overview
-                    .update(msg, self.current_repo.as_ref(), &self.auth_manager)
-                    .map(Message::RepoOverview);
                 let reload = if pulled {
-                    self.reload_other_panels(MainTab::RepoOverview)
+                    self.reload_other_panels(Origin::Header)
                 } else {
                     Task::none()
                 };
@@ -286,7 +299,7 @@ impl GitSpaceApp {
                 } else {
                     Task::none()
                 };
-                Task::batch([task, reload, statuses])
+                Task::batch([task.map(Message::RepoHeader), reload, statuses])
             }
 
             // ── Stage ──────────────────────────────────────────────────
@@ -299,7 +312,7 @@ impl GitSpaceApp {
                     .update(msg, self.current_repo.as_ref())
                     .map(Message::Stage);
                 let reload = if changed {
-                    self.reload_other_panels(MainTab::Stage)
+                    self.reload_other_panels(Origin::Stage)
                 } else {
                     Task::none()
                 };
@@ -329,13 +342,13 @@ impl GitSpaceApp {
                     .update(msg, self.current_repo.as_ref())
                     .map(Message::Branches)];
                 if changed {
-                    tasks.push(self.reload_other_panels(MainTab::Branches));
+                    tasks.push(self.reload_other_panels(Origin::Branches));
                     tasks.push(self.refresh_statuses());
                 }
 
                 // Gerer la demande de navigation vers l'historique d'une branche
                 if let Some(branch) = self.branches_panel.take_history_request() {
-                    self.active_tab = MainTab::History;
+                    self.active_tab = RepoTab::History;
                     if let Some(repo) = &self.current_repo {
                         tasks.push(
                             self.history_panel
@@ -406,8 +419,9 @@ impl GitSpaceApp {
                 if self.config.open_repo(&path, chrono::Utc::now().timestamp()) {
                     self.save_config();
                 }
+                self.adding = None;
                 let tasks = [
-                    self.repo_overview.refresh(&repo).map(Message::RepoOverview),
+                    self.repo_header.load(&repo).map(Message::RepoHeader),
                     self.stage_panel.load(&repo).map(Message::Stage),
                     self.branches_panel.load(&repo).map(Message::Branches),
                     self.history_panel.load(&repo).map(Message::History),
@@ -422,8 +436,9 @@ impl GitSpaceApp {
             }
 
             Message::TabShortcut(index) => {
-                if let Some(tab) = REPO_TABS.get(index) {
+                if let Some(tab) = RepoTab::ALL.get(index) {
                     self.active_tab = *tab;
+                    self.adding = None;
                 }
                 Task::none()
             }
@@ -489,7 +504,7 @@ impl GitSpaceApp {
             }
             Side::OpenFolder(path) => {
                 self.sidebar.set_menu(None);
-                if let Err(err) = repo_overview::open_folder(&path) {
+                if let Err(err) = repo_header::open_folder(&path) {
                     self.toasts.push(Toast::error(
                         t("open_folder_failed"),
                         format!("{path}: {err}"),
@@ -499,7 +514,7 @@ impl GitSpaceApp {
             }
             Side::OpenTerminal(path) => {
                 self.sidebar.set_menu(None);
-                if let Err(err) = repo_overview::open_terminal(&path) {
+                if let Err(err) = repo_header::open_terminal(&path) {
                     self.toasts.push(Toast::error(
                         t("open_terminal_failed"),
                         format!("{path}: {err}"),
@@ -515,7 +530,7 @@ impl GitSpaceApp {
                 if self.preferences_panel.is_open() {
                     self.preferences_panel.toggle();
                 }
-                self.active_tab = MainTab::Clone;
+                self.adding = Some(AddTab::Clone);
                 Task::none()
             }
             Side::TogglePreferences => {
@@ -533,6 +548,7 @@ impl GitSpaceApp {
 
     /// Opens `path` from the sidebar; the search and any menu close.
     fn open_repo(&mut self, path: &str) -> Task<Message> {
+        self.adding = None;
         self.sidebar.close_search();
         self.sidebar.set_menu(None);
         let current = self.current_repo.as_ref().map(RepoContext::path);
@@ -609,22 +625,18 @@ impl GitSpaceApp {
     }
 
     /// Reloads every repository panel except `origin` after it changed the repository.
-    fn reload_other_panels(&mut self, origin: MainTab) -> Task<Message> {
+    fn reload_other_panels(&mut self, origin: Origin) -> Task<Message> {
         let Some(repo) = self.current_repo.clone() else {
             return Task::none();
         };
         let mut tasks = Vec::new();
-        if origin != MainTab::RepoOverview {
-            tasks.push(
-                self.repo_overview
-                    .reload_repo_state(&repo)
-                    .map(Message::RepoOverview),
-            );
+        if origin != Origin::Header {
+            tasks.push(self.repo_header.load(&repo).map(Message::RepoHeader));
         }
-        if origin != MainTab::Stage {
+        if origin != Origin::Stage {
             tasks.push(self.stage_panel.load(&repo).map(Message::Stage));
         }
-        if origin != MainTab::Branches {
+        if origin != Origin::Branches {
             tasks.push(self.branches_panel.load(&repo).map(Message::Branches));
         }
         tasks.push(self.history_panel.load(&repo).map(Message::History));
@@ -653,20 +665,23 @@ impl GitSpaceApp {
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into(),
-            None => {
-                let tab_bar = layout::view_tab_bar(theme, &self.tab_order, self.active_tab)
-                    .map(Message::Layout);
-                column![tab_bar, self.view_active_tab(theme)]
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .padding(iced::Padding {
-                        top: 0.0,
-                        right: 16.0,
-                        bottom: 16.0,
-                        left: 16.0,
-                    })
-                    .into()
-            }
+            None => match (&self.current_repo, self.adding) {
+                (Some(repo), None) => {
+                    let counts = TabCounts {
+                        changes: self.statuses.get(repo.path()).map_or(0, |s| s.changed),
+                        stashes: self.stage_panel.stash_count(),
+                    };
+                    let header = self
+                        .repo_header
+                        .view(self.active_tab, counts)
+                        .map(Message::RepoHeader);
+                    column![header, padded(self.view_active_tab(theme))]
+                        .width(Length::Fill)
+                        .height(Length::Fill)
+                        .into()
+                }
+                (_, adding) => self.view_add_page(theme, adding.unwrap_or(AddTab::Clone)),
+            },
         };
 
         let toast_overlay = self.toast_overlay();
@@ -703,32 +718,44 @@ impl GitSpaceApp {
         }
     }
 
-    /// Rendu de l'onglet actif.
+    /// The panel of the selected repository tab.
     fn view_active_tab<'a>(&'a self, theme: &'a Theme) -> Element<'a, Message> {
+        let repo = self.current_repo.as_ref();
         match self.active_tab {
-            MainTab::Clone => self.clone_panel.view(theme).map(Message::Clone),
-            MainTab::Open => self
+            // Stashes live on the Stage panel until they get their own screen (ruling R3).
+            RepoTab::Changes | RepoTab::Stashes => {
+                self.stage_panel.view(theme, repo).map(Message::Stage)
+            }
+            RepoTab::History => self.history_panel.view(theme, repo).map(Message::History),
+            RepoTab::Branches => self.branches_panel.view(theme, repo).map(Message::Branches),
+        }
+    }
+
+    /// Clone, open a local folder, or manage accounts: shown with no repository open too.
+    fn view_add_page<'a>(&'a self, theme: &'a Theme, tab: AddTab) -> Element<'a, Message> {
+        let items: Vec<(String, Option<usize>)> = AddTab::ALL
+            .iter()
+            .map(|each| (each.label().to_string(), None))
+            .collect();
+        let selected = AddTab::ALL
+            .iter()
+            .position(|&each| each == tab)
+            .unwrap_or(0);
+        let strip = tabs(&items, selected, |index| {
+            Message::AddTab(AddTab::ALL[index])
+        });
+        let body = match tab {
+            AddTab::Clone => self.clone_panel.view(theme).map(Message::Clone),
+            AddTab::Open => self
                 .recent_list
                 .view(theme, &self.config)
                 .map(Message::Recent),
-            MainTab::RepoOverview => self
-                .repo_overview
-                .view(theme, self.current_repo.as_ref())
-                .map(Message::RepoOverview),
-            MainTab::Stage => self
-                .stage_panel
-                .view(theme, self.current_repo.as_ref())
-                .map(Message::Stage),
-            MainTab::History => self
-                .history_panel
-                .view(theme, self.current_repo.as_ref())
-                .map(Message::History),
-            MainTab::Branches => self
-                .branches_panel
-                .view(theme, self.current_repo.as_ref())
-                .map(Message::Branches),
-            MainTab::Auth => self.auth_panel.view(theme).map(Message::Auth),
-        }
+            AddTab::Accounts => self.auth_panel.view(theme).map(Message::Auth),
+        };
+        column![container(strip).padding([12, 16]), padded(body)]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
     }
 
     fn toast_overlay(&self) -> Element<'_, Message> {
@@ -760,7 +787,7 @@ impl GitSpaceApp {
         // auto-fetch part un intervalle apres la derniere operation reseau ou le dernier chargement.
         if self.config.preferences().auto_fetch_enabled()
             && self.current_repo.is_some()
-            && !self.repo_overview.is_busy()
+            && !self.repo_header.is_busy()
         {
             let interval =
                 Duration::from_secs(self.config.preferences().auto_fetch_interval_minutes() * 60);
@@ -846,7 +873,7 @@ impl GitSpaceApp {
             .set_default_destination(preferences.default_clone_path().to_string());
         self.clone_panel
             .set_network_preferences(preferences.network().clone());
-        self.repo_overview
+        self.repo_header
             .set_network_preferences(preferences.network().clone());
         self.branches_panel
             .set_pinned_branches(preferences.pinned_branches().to_vec());
@@ -905,22 +932,6 @@ impl GitSpaceApp {
             .push(toast.with_action(ToastAction::CopyLogPath(logs_directory())));
     }
 
-    /// Signale l'echec d'un auto-fetch sur le depot courant.
-    fn notify_auto_fetch_failure(&mut self, message: &repo_overview::Message) {
-        if let repo_overview::Message::ActionFinished {
-            path,
-            auto: true,
-            result: Err(err),
-            ..
-        } = message
-        {
-            if self.current_repo.as_ref().map(RepoContext::path) == Some(&**path) {
-                self.toasts
-                    .push(Toast::error("Auto-fetch echoue", err.clone()));
-            }
-        }
-    }
-
     /// Demarre l'auto-fetch du depot courant si l'option est active.
     fn maybe_start_auto_fetch(&mut self) -> Task<Message> {
         if !self.config.preferences().auto_fetch_enabled() {
@@ -929,9 +940,9 @@ impl GitSpaceApp {
         let Some(repo) = self.current_repo.as_ref() else {
             return Task::none();
         };
-        self.repo_overview
+        self.repo_header
             .auto_fetch(repo, &self.auth_manager)
-            .map(Message::RepoOverview)
+            .map(Message::RepoHeader)
     }
 }
 
@@ -960,12 +971,26 @@ fn shortcut(key: Key, modifiers: Modifiers, captured: bool, searching: bool) -> 
                 _ => c
                     .parse::<usize>()
                     .ok()
-                    .filter(|digit| (1..=REPO_TABS.len()).contains(digit))
+                    .filter(|digit| (1..=RepoTab::ALL.len()).contains(digit))
                     .map(|digit| Message::TabShortcut(digit - 1)),
             }
         }
         _ => None,
     }
+}
+
+/// The content area's padding below the header or the tab strip.
+fn padded<'a>(content: Element<'a, Message>) -> Element<'a, Message> {
+    container(content)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding(iced::Padding {
+            top: 0.0,
+            right: 16.0,
+            bottom: 16.0,
+            left: 16.0,
+        })
+        .into()
 }
 
 /// Returns whether `path` must be loaded. Picking the open repository again drops a slower

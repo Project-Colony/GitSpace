@@ -89,6 +89,18 @@ fn repo_status_reports_tracking_progress() {
 }
 
 #[test]
+fn repo_status_names_the_commit_of_a_detached_head() {
+    let (_dir, repo) = init_temp_repo();
+    let first = write_commit(&repo, "f.txt", "1", "first");
+    write_commit(&repo, "f.txt", "2", "second");
+    repo.set_head_detached(first).unwrap();
+
+    let status = read_repo_status(repo.path().parent().unwrap()).expect("status");
+    assert_eq!(status.branch, None);
+    assert_eq!(status.detached_at, Some(first.to_string()[..7].to_string()));
+}
+
+#[test]
 fn branch_lifecycle_is_managed() {
     let (_dir, repo) = init_temp_repo();
     write_commit(&repo, "file.txt", "content", "base");

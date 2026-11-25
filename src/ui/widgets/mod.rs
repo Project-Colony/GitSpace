@@ -9,12 +9,15 @@
     reason = "the repository screens will use the other buttons"
 )]
 pub mod button;
-#[expect(dead_code, reason = "the repository header and lists will use it")]
+// Only the tests use every tone so far.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the lists will use the other tones")
+)]
 pub mod chip;
 pub mod menu;
 #[expect(dead_code, reason = "the add-repository page will use it")]
 pub mod segmented;
-#[expect(dead_code, reason = "the repository tabs will use it")]
 pub mod tabs;
 pub mod toast;
 

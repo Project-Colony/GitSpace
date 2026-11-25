@@ -44,6 +44,12 @@ pub fn icon<'a, M: Clone + 'a>(glyph: &str, on_press: Option<M>, tip: &str) -> E
         .on_press_maybe(on_press)
         .padding([4, 6])
         .style(style(Kind::Ghost));
+    with_tip(body, tip)
+}
+
+/// Shows `tip` below `body` on hover.
+pub fn with_tip<'a, M: 'a>(body: impl Into<Element<'a, M>>, tip: &str) -> Element<'a, M> {
+    let typo = Typography::current();
     tooltip(
         body,
         container(

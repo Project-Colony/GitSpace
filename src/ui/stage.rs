@@ -208,6 +208,11 @@ impl StagePanel {
         self.refresh()
     }
 
+    /// The number of stashes, shown on the Stashes tab.
+    pub fn stash_count(&self) -> usize {
+        self.stashes.len()
+    }
+
     /// Traite un message et retourne une commande Iced.
     pub fn update(&mut self, message: Message, _repo: Option<&RepoContext>) -> Task<Message> {
         match message {

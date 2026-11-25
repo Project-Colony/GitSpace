@@ -16,6 +16,8 @@ pub struct RepoStatus {
     pub upstream: Option<String>,
     pub ahead: Option<usize>,
     pub behind: Option<usize>,
+    /// Short hash of the commit HEAD points at when no branch is checked out.
+    pub detached_at: Option<String>,
 }
 
 pub fn read_repo_status<P: AsRef<Path>>(path: P) -> Result<RepoStatus, git2::Error> {
@@ -42,19 +44,17 @@ fn repo_status(repo: &Repository) -> Result<RepoStatus, git2::Error> {
 
     if !head.is_branch() {
         return Ok(RepoStatus {
-            branch: None,
-            upstream: None,
-            ahead: None,
-            behind: None,
+            detached_at: head
+                .target()
+                .map(|oid| oid.to_string().chars().take(7).collect()),
+            ..RepoStatus::default()
         });
     }
 
     let branch_name = head.shorthand().ok().map(|name| name.to_string());
     let mut status = RepoStatus {
         branch: branch_name.clone(),
-        upstream: None,
-        ahead: None,
-        behind: None,
+        ..RepoStatus::default()
     };
 
     if let Some(name) = branch_name {
