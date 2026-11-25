@@ -66,6 +66,7 @@
   "branches_filter_placeholder": "Filter…",
   "branches_in_sync": "in sync with its upstream",
   "branches_last_commit": "last commit {when}",
+  "branches_latest_commits": "Latest commits on {branch}",
   "branches_load_failed": "Could not read the branches: {error}",
   "branches_local_group": "LOCAL · {count}",
   "branches_merge_button": "Merge",

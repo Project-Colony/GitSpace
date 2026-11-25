@@ -18,7 +18,7 @@ use crate::git::branch::{
     archive_branch, checkout_branch, create_branch, create_tracking_branch, delete_branch,
     head_commit, list_branch_overview, rename_branch, set_upstream, BranchKind, BranchOverview,
 };
-use crate::git::log::{commits_between_refs, CommitInfo};
+use crate::git::log::{commits_between_refs, read_commit_log, CommitFilter, CommitInfo};
 use crate::git::merge::{merge_branch, MergeStrategy};
 use crate::i18n::{t, tf};
 use crate::ui::changes::{field, horizontal_divider, item, question, vertical_divider};
@@ -35,6 +35,8 @@ const STALE_DAYS: i64 = 30;
 const REMOTE_PAGE_SIZE: usize = 25;
 /// Commits listed under "Commits only on <branch>".
 const OWN_COMMITS: usize = 30;
+/// Commits listed under "Latest commits on <branch>" for the current branch.
+const LATEST_COMMITS: usize = 10;
 const LIST_WIDTH: f32 = 280.0;
 const MORE_GLYPH: &str = "\u{f141}";
 const CURRENT_GLYPH: &str = "\u{f111}";
@@ -111,13 +113,36 @@ pub struct RelationCard {
 }
 
 impl RelationCard {
-    fn new(branch: &BranchOverview, current: &str) -> Self {
-        Self {
-            ahead: branch.ahead_of_head,
-            behind: branch.behind_head,
-            against: current.to_string(),
+    /// Another branch against the current one, or the current branch against its upstream;
+    /// `None` for a current branch without an upstream.
+    fn new(branch: &BranchOverview, current: &str) -> Option<Self> {
+        if !branch.is_head {
+            return Some(Self {
+                ahead: branch.ahead_of_head,
+                behind: branch.behind_head,
+                against: current.to_string(),
+            });
         }
+        branch.upstream.as_ref().map(|upstream| Self {
+            ahead: branch.upstream_ahead,
+            behind: branch.upstream_behind,
+            against: upstream.clone(),
+        })
     }
+}
+
+/// The branch selected when none is: the first local branch other than the current one, in
+/// list order with pinned branches first, or else the current branch.
+fn initial_selection<'a>(branches: &'a [BranchOverview], pinned: &[String]) -> Option<&'a str> {
+    let local = |branch: &&BranchOverview| branch.kind == BranchKind::Local;
+    branches
+        .iter()
+        .filter(local)
+        .filter(|branch| !branch.is_head)
+        // min_by_key keeps the first of equal keys, so names stay in list order.
+        .min_by_key(|branch| !pinned.contains(&branch.name))
+        .or_else(|| branches.iter().filter(local).find(|branch| branch.is_head))
+        .map(|branch| branch.name.as_str())
 }
 
 /// The remote branches of one remote, as its list group shows them.
@@ -215,7 +240,8 @@ pub enum Message {
     StartRename,
     /// A read of the branches and of HEAD, numbered so that only the latest one is shown.
     Loaded(Arc<str>, u64, Result<BranchList, String>),
-    /// The commits of a branch that the current one lacks.
+    /// The commits of a branch that the current one lacks, or the latest ones of the current
+    /// branch.
     CommitsLoaded(Arc<str>, String, Result<Vec<CommitInfo>, String>),
     /// The key names the failure title.
     ActionDone(Arc<str>, &'static str, Result<Outcome, String>),
@@ -443,8 +469,8 @@ impl BranchPanel {
         })
     }
 
-    /// Takes the new list; the selection falls back to the current branch when its branch
-    /// is gone.
+    /// Takes the new list; when the selected branch is gone, or nothing is selected yet, the
+    /// selection moves to `initial_selection`.
     fn apply_list(&mut self, result: Result<BranchList, String>) -> Task<Message> {
         self.loading = false;
         match result {
@@ -457,10 +483,7 @@ impl BranchPanel {
                     None => {
                         self.band = None;
                         self.menu = false;
-                        self.branches
-                            .iter()
-                            .find(|branch| branch.is_head)
-                            .map(|branch| branch.name.clone())
+                        initial_selection(&self.branches, &self.pinned_branches).map(str::to_string)
                     }
                 };
                 self.selected = name;
@@ -486,24 +509,21 @@ impl BranchPanel {
         self.load_commits()
     }
 
-    /// Reads the commits of the selected branch that the current branch lacks.
+    /// Reads the commits listed under the selected branch.
     fn load_commits(&mut self) -> Task<Message> {
         self.commits.clear();
         self.commits_error = None;
         let Some(repo) = self.repo.clone() else {
             return Task::none();
         };
-        let Some(branch) = self.selected_branch().filter(|branch| !branch.is_head) else {
+        let Some(branch) = self.selected_branch() else {
             return Task::none();
         };
-        let name = branch.name.clone();
+        let (name, is_head) = (branch.name.clone(), branch.is_head);
         let job_name = name.clone();
         git_task(
             repo,
-            move |repo| {
-                commits_between_refs(repo, "HEAD", &job_name, OWN_COMMITS)
-                    .map_err(|err| err.to_string())
-            },
+            move |repo| read_commits(repo, &job_name, is_head),
             move |repo, result| Message::CommitsLoaded(repo, name.clone(), result),
         )
     }
@@ -868,8 +888,8 @@ impl BranchPanel {
         let actions = available_actions(branch);
         let current = self.current_name();
         let mut body = Column::new().spacing(14).padding([16, 18]);
-        if !branch.is_head {
-            body = body.push(relation_card(&RelationCard::new(branch, current)));
+        if let Some(card) = RelationCard::new(branch, current) {
+            body = body.push(relation_card(&card));
         }
         if actions.contains(&BranchAction::Checkout) {
             let mut buttons = row![gs_button::primary(
@@ -888,9 +908,7 @@ impl BranchPanel {
             }
             body = body.push(column![buttons, self.note_line(branch, current)].spacing(8));
         }
-        if !branch.is_head {
-            body = body.push(self.own_commits(branch, current));
-        }
+        body = body.push(self.own_commits(branch, current));
         column![
             self.header(branch, &actions),
             self.bands(Some(branch)),
@@ -1115,7 +1133,8 @@ impl BranchPanel {
         question(lines, action, Message::CloseBand)
     }
 
-    /// "Commits only on <branch>" with "View in History →", then the commits.
+    /// "Commits only on <branch>", or "Latest commits on <branch>" for the current branch,
+    /// with "View in History →", then the commits.
     fn own_commits<'a>(
         &'a self,
         branch: &'a BranchOverview,
@@ -1131,8 +1150,13 @@ impl BranchPanel {
         .padding(0)
         .style(|_, _| button::Style::default())
         .on_press(Message::ViewInHistory);
+        let heading = if branch.is_head {
+            "branches_latest_commits"
+        } else {
+            "branches_commits_only_on"
+        };
         let heading = row![
-            text(tf("branches_commits_only_on", &[("branch", &branch.name)]))
+            text(tf(heading, &[("branch", &branch.name)]))
                 .size(typo.sz(12))
                 .font(typo.bold)
                 .color(Palette::TEXT_SECONDARY())
@@ -1143,7 +1167,7 @@ impl BranchPanel {
         let mut list = Column::new().spacing(1);
         if let Some(err) = &self.commits_error {
             list = list.push(note_line(tf("branches_commits_failed", &[("error", err)])));
-        } else if self.commits.is_empty() && branch.ahead_of_head == 0 {
+        } else if self.commits.is_empty() && !branch.is_head && branch.ahead_of_head == 0 {
             list = list.push(note_line(tf(
                 "branches_no_own_commits",
                 &[("branch", &branch.name), ("current", current)],
@@ -1351,6 +1375,21 @@ fn pager<'a>(remote: &str, page: usize, pages: usize) -> Element<'a, Message> {
     .center_x(Length::Fill)
     .padding([4, 0])
     .into()
+}
+
+/// The latest commits of the current branch, or the commits of another branch that the
+/// current one lacks.
+fn read_commits(repo: &str, branch: &str, is_head: bool) -> Result<Vec<CommitInfo>, String> {
+    let commits = if is_head {
+        let filter = CommitFilter {
+            branch: Some(branch.to_string()),
+            ..CommitFilter::default()
+        };
+        read_commit_log(repo, &filter, LATEST_COMMITS, false)
+    } else {
+        commits_between_refs(repo, "HEAD", branch, OWN_COMMITS)
+    };
+    commits.map_err(|err| err.to_string())
 }
 
 /// The checked-out branch, or "HEAD" when none is.
@@ -1580,6 +1619,91 @@ mod tests {
         repo.commit(Some("HEAD"), &sig, &sig, "next", &tree, &[&base])
             .unwrap();
         assert!(ensure_unchanged(path, "feature", at_base, "topic", false).is_err());
+    }
+
+    #[test]
+    fn the_tab_opens_on_another_local_branch() {
+        let main = overview("main", BranchKind::Local, true);
+        let remote = overview("origin/main", BranchKind::Remote, false);
+        let list = vec![
+            overview("feature", BranchKind::Local, false),
+            main.clone(),
+            overview("topic", BranchKind::Local, false),
+            remote.clone(),
+        ];
+        let mut panel = BranchPanel::new(Vec::new());
+        panel.repo = Some("/repo".into());
+        let _ = panel.update(Message::Loaded("/repo".into(), 0, Ok((list.clone(), None))));
+        assert_eq!(panel.selected.as_deref(), Some("feature"));
+
+        // Pinned branches come first in the list, so the first of them is picked.
+        assert_eq!(initial_selection(&list, &["topic".into()]), Some("topic"));
+        // With no other local branch, the current one.
+        assert_eq!(initial_selection(&[main, remote], &[]), Some("main"));
+        assert_eq!(initial_selection(&[], &[]), None);
+    }
+
+    #[test]
+    fn the_current_branch_compares_with_its_upstream() {
+        let mut main = overview("main", BranchKind::Local, true);
+        assert_eq!(RelationCard::new(&main, "main"), None);
+        main.upstream = Some("origin/main".into());
+        (main.upstream_ahead, main.upstream_behind) = (2, 1);
+        let card = |ahead, behind, against: &str| RelationCard {
+            ahead,
+            behind,
+            against: against.into(),
+        };
+        assert_eq!(
+            RelationCard::new(&main, "main"),
+            Some(card(2, 1, "origin/main"))
+        );
+
+        let mut feature = overview("feature", BranchKind::Local, false);
+        (feature.ahead_of_head, feature.behind_head) = (3, 1);
+        assert_eq!(
+            RelationCard::new(&feature, "main"),
+            Some(card(3, 1, "main"))
+        );
+    }
+
+    #[test]
+    fn the_current_branch_lists_its_latest_commits() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut init = git2::RepositoryInitOptions::new();
+        init.initial_head("main");
+        let repo = git2::Repository::init_opts(dir.path(), &init).unwrap();
+        let sig = git2::Signature::now("Tester", "tester@example.com").unwrap();
+        let tree = repo
+            .find_tree(repo.index().unwrap().write_tree().unwrap())
+            .unwrap();
+        let mut parents = Vec::new();
+        for summary in ["one", "two", "three"] {
+            let parent: Vec<&git2::Commit> = parents.last().into_iter().collect();
+            let id = repo
+                .commit(Some("HEAD"), &sig, &sig, summary, &tree, &parent)
+                .unwrap();
+            parents.push(repo.find_commit(id).unwrap());
+        }
+        repo.branch("feature", &parents[1], false).unwrap();
+        repo.commit(
+            Some("refs/heads/feature"),
+            &sig,
+            &sig,
+            "own",
+            &tree,
+            &[&parents[1]],
+        )
+        .unwrap();
+        let path = dir.path().to_str().unwrap();
+        let summaries = |commits: Vec<CommitInfo>| -> Vec<String> {
+            commits.into_iter().map(|commit| commit.summary).collect()
+        };
+
+        let latest = read_commits(path, "main", true).unwrap();
+        assert_eq!(summaries(latest), ["three", "two", "one"]);
+        let own = read_commits(path, "feature", false).unwrap();
+        assert_eq!(summaries(own), ["own"]);
     }
 
     #[test]
