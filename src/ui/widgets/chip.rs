@@ -12,7 +12,6 @@ pub enum Tone {
     Accent,
     Success,
     Warning,
-    Error,
     /// Remote branches.
     Remote,
     /// Tags.
@@ -27,7 +26,6 @@ impl Tone {
             Tone::Accent => Palette::ACCENT(),
             Tone::Success => Palette::SUCCESS(),
             Tone::Warning | Tone::Tag => Palette::WARNING(),
-            Tone::Error => Palette::ERROR(),
             Tone::Remote => Palette::ACCENT_ICON(),
         }
     }
@@ -60,7 +58,6 @@ mod tests {
         assert_eq!(Tone::Remote.color(), Palette::ACCENT_ICON());
         assert_eq!(Tone::Tag.color(), Palette::WARNING());
         assert_eq!(Tone::Success.color(), Palette::SUCCESS());
-        assert_eq!(Tone::Error.color(), Palette::ERROR());
         assert_eq!(Tone::Accent.color(), Palette::ACCENT());
         assert_eq!(Tone::Neutral.color(), Palette::TEXT_SECONDARY());
     }

@@ -5,11 +5,6 @@
 //! colony-ui later without changes.
 
 pub mod button;
-// Only the tests use every tone so far.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the lists will use the other tones")
-)]
 pub mod chip;
 pub mod menu;
 pub mod segmented;
