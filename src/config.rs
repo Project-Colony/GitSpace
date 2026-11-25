@@ -169,11 +169,15 @@ impl AppConfig {
             error = %parse_error,
             backup = %backup.display(),
             backup_error = ?backup_result.as_ref().err(),
-            "failed to parse config; using defaults"
+            "failed to parse config; keeping the values that are valid"
         );
+        let config = serde_json::from_slice::<serde_json::Value>(&bytes)
+            .ok()
+            .and_then(|value| lenient(&value))
+            .unwrap_or_default();
         Self {
             keep_file_on_disk: backup_result.is_err(),
-            ..Self::default()
+            ..config
         }
     }
 
@@ -310,6 +314,45 @@ fn write_then_rename(tmp: &Path, path: &Path, contents: &[u8], private: bool) ->
 /// Deserializes a field and falls back to its default when the stored value is invalid, for
 /// example a theme name written by another release, so one bad value does not discard the
 /// whole config.
+/// Builds a `T` from `user`, keeping each value that is valid and the default for the rest.
+///
+/// Values are taken one key at a time, going into nested objects when a whole object is
+/// refused, so one wrong-typed field resets only that field.
+fn lenient<T: DeserializeOwned + Serialize + Default>(user: &serde_json::Value) -> Option<T> {
+    fn overlay(
+        root: &mut serde_json::Value,
+        pointer: &str,
+        user: &serde_json::Map<String, serde_json::Value>,
+        valid: &dyn Fn(&serde_json::Value) -> bool,
+    ) {
+        for (key, value) in user {
+            let mut trial = root.clone();
+            if let Some(object) = trial.pointer_mut(pointer).and_then(|v| v.as_object_mut()) {
+                object.insert(key.clone(), value.clone());
+            }
+            if valid(&trial) {
+                *root = trial;
+                continue;
+            }
+            let child = format!("{pointer}/{}", key.replace('~', "~0").replace('/', "~1"));
+            match (value, root.pointer(&child)) {
+                (serde_json::Value::Object(nested), Some(serde_json::Value::Object(_))) => {
+                    overlay(root, &child, nested, valid)
+                }
+                _ => {
+                    warn!(target: "gitspace::config", key = %child, "ignoring an invalid config value; using the default")
+                }
+            }
+        }
+    }
+
+    let user = user.as_object()?;
+    let mut root = serde_json::to_value(T::default()).ok()?;
+    let valid = |value: &serde_json::Value| serde_json::from_value::<T>(value.clone()).is_ok();
+    overlay(&mut root, "", user, &valid);
+    serde_json::from_value(root).ok()
+}
+
 fn default_on_error<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
     D: Deserializer<'de>,
@@ -594,6 +637,33 @@ mod tests {
         assert_eq!(fs::read_to_string(&backup).expect("read backup"), corrupt);
         let reloaded = AppConfig::load_from(&path);
         assert_eq!(reloaded.recent_repos()[0].path, "/work/other");
+    }
+
+    #[test]
+    fn a_wrong_typed_value_resets_only_that_value() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(CONFIG_FILE_NAME);
+        fs::write(
+            &path,
+            r#"{
+                "recent_repos": [{"path": "/work/repo"}],
+                "preferences": {
+                    "allow_encrypted_tokens": true,
+                    "auto_fetch_interval_minutes": "5",
+                    "network": {"allow_ssh": false, "network_timeout_secs": "slow"}
+                }
+            }"#,
+        )
+        .expect("write");
+
+        let config = AppConfig::load_from(&path);
+        assert_eq!(config.recent_repos().len(), 1);
+        assert!(config.preferences().allow_encrypted_tokens());
+        assert_eq!(
+            config.preferences().auto_fetch_interval_minutes(),
+            Preferences::default().auto_fetch_interval_minutes()
+        );
+        assert!(!config.preferences().network().allow_ssh);
     }
 
     #[test]
