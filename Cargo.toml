@@ -16,10 +16,9 @@ fake-repos = []
 mock-providers = []
 
 [dependencies]
-eframe = "0.27.2"
-egui = "0.27.2"
+iced = { version = "0.13.1", features = ["tokio", "advanced"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 git2 = { version = "0.21.0", features = ["https", "ssh", "vendored-openssl"] }
-poll-promise = "0.3.0"
 reqwest = { version = "0.13.5", features = ["blocking", "form", "json", "query"] }
 rfd = "0.18.0"
 serde = { version = "1.0.229", features = ["derive"] }
@@ -55,16 +54,3 @@ codegen-units = 1
 panic = "abort"
 strip = "symbols"
 
-# Two old objc2 releases that eframe 0.27 pulls in on macOS no longer compile on
-# Rust 1.100: 0.4.1 (through winit 0.29 and icrate) and 0.3.0-beta.3.patch-leaks.3
-# (through accesskit_macos). Forwarding methods of their `Ivar` iterator impls
-# fail to type-check: `nth` and `nth_back` in 0.4.1, and `nth_back` in
-# 0.3.0-beta.3.patch-leaks.3, which has no `nth` forwarder. Neither line has a
-# fixed release, and newer objc2 lines need an eframe upgrade, which waits for
-# the iced port (#1).
-# Each vendor/ copy is the crates.io release with only those methods removed;
-# the default `Iterator::nth` and `DoubleEndedIterator::nth_back` return the
-# same items. Remove this patch with the egui code.
-[patch.crates-io]
-objc2 = { path = "vendor/objc2-0.4.1" }
-objc2-0-3 = { package = "objc2", path = "vendor/objc2-0.3.0-beta.3.patch-leaks.3" }

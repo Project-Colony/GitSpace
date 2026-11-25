@@ -85,6 +85,29 @@ pub enum MotionIntensity {
     High,
 }
 
+/// Label shown in the theme pick list.
+impl std::fmt::Display for ThemeMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            ThemeMode::Latte => "Latte",
+            ThemeMode::Frappe => "Frappe",
+            ThemeMode::Macchiato => "Macchiato",
+            ThemeMode::Mocha => "Mocha",
+        })
+    }
+}
+
+/// Label shown in the motion intensity pick list.
+impl std::fmt::Display for MotionIntensity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            MotionIntensity::Low => "Faible",
+            MotionIntensity::Medium => "Moyenne",
+            MotionIntensity::High => "Élevée",
+        })
+    }
+}
+
 impl Default for NetworkOptions {
     fn default() -> Self {
         Self {
@@ -372,6 +395,7 @@ fn default_control_height() -> f32 {
     28.0
 }
 
+#[allow(dead_code)]
 pub const MIN_BRANCH_BOX_HEIGHT: f32 = 72.0;
 
 fn default_branch_box_height() -> f32 {
@@ -436,14 +460,6 @@ impl Preferences {
         self.default_clone_path = expanded;
     }
 
-    pub fn default_clone_path_mut(&mut self) -> &mut String {
-        &mut self.default_clone_path
-    }
-
-    pub fn keybindings_mut(&mut self) -> &mut Vec<Keybinding> {
-        &mut self.keybindings
-    }
-
     pub fn network_mut(&mut self) -> &mut NetworkOptions {
         &mut self.network
     }
@@ -468,10 +484,12 @@ impl Preferences {
         self.control_height = height.clamp(20.0, 48.0);
     }
 
+    #[allow(dead_code)]
     pub fn branch_box_height(&self) -> f32 {
         self.branch_box_height
     }
 
+    #[allow(dead_code)]
     pub fn set_branch_box_height(&mut self, height: f32) {
         self.branch_box_height = height.max(MIN_BRANCH_BOX_HEIGHT);
     }

@@ -14,8 +14,8 @@ use base64::{engine::general_purpose, Engine as _};
 use chacha20poly1305::aead::{Aead, Generate, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce};
 use keyring::Entry;
-use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, USER_AGENT};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 use url::Url;
@@ -102,7 +102,7 @@ impl AuthManager {
         self.storage.known_hosts()
     }
 
-    pub fn validate_token(&self, host: &str, token: &str) -> Result<(), String> {
+    pub async fn validate_token(&self, host: &str, token: &str) -> Result<(), String> {
         let trimmed = token.trim();
 
         // Basic format validation
@@ -133,16 +133,16 @@ impl AuthManager {
         let client = get_http_client();
 
         if normalized_host.contains("github") {
-            validate_github(client, &normalized_host, token)
+            validate_github(client, &normalized_host, token).await
         } else if normalized_host.contains("gitlab") {
-            validate_gitlab(client, &normalized_host, token)
+            validate_gitlab(client, &normalized_host, token).await
         } else {
             Ok(())
         }
     }
 
-    pub fn validate_and_store(&self, host: &str, token: &str) -> Result<(), String> {
-        self.validate_token(host, token)?;
+    pub async fn validate_and_store(&self, host: &str, token: &str) -> Result<(), String> {
+        self.validate_token(host, token).await?;
         self.storage.set_token(host, token)
     }
 
@@ -669,7 +669,7 @@ fn normalize_host(host: &str) -> Result<String, String> {
     Ok(parsed.origin().ascii_serialization())
 }
 
-fn validate_github(client: &Client, host: &str, token: &str) -> Result<(), String> {
+async fn validate_github(client: &Client, host: &str, token: &str) -> Result<(), String> {
     let api_base = if host.contains("api.github.com") {
         host.to_string()
     } else if host.contains("github.com") {
@@ -684,6 +684,7 @@ fn validate_github(client: &Client, host: &str, token: &str) -> Result<(), Strin
         .header(USER_AGENT, HeaderValue::from_static("gitspace"))
         .header(AUTHORIZATION, format!("Bearer {}", token))
         .send()
+        .await
         .map_err(|err| format!("GitHub validation failed: {err}"))?;
 
     if response.status().is_success() {
@@ -693,7 +694,7 @@ fn validate_github(client: &Client, host: &str, token: &str) -> Result<(), Strin
     }
 }
 
-fn validate_gitlab(client: &Client, host: &str, token: &str) -> Result<(), String> {
+async fn validate_gitlab(client: &Client, host: &str, token: &str) -> Result<(), String> {
     let url = format!("{}/api/v4/user", host.trim_end_matches('/'));
     let mut headers = HeaderMap::new();
     headers.insert(USER_AGENT, HeaderValue::from_static("gitspace"));
@@ -706,6 +707,7 @@ fn validate_gitlab(client: &Client, host: &str, token: &str) -> Result<(), Strin
         .get(url)
         .headers(headers)
         .send()
+        .await
         .map_err(|err| format!("GitLab validation failed: {err}"))?;
 
     if response.status().is_success() {
@@ -869,14 +871,15 @@ mod tests {
         assert!(normalize_host("ssh://gitlab.example.com").is_err());
     }
 
-    #[test]
-    fn plain_http_host_is_refused_before_any_request() {
+    #[tokio::test]
+    async fn plain_http_host_is_refused_before_any_request() {
         let dir = tempfile::tempdir().expect("tempdir");
         let auth = AuthManager {
             storage: storage_in(dir.path()),
         };
         let err = auth
             .validate_token("http://gitlab.example.com", "glpat-0123456789abcdef")
+            .await
             .expect_err("plain HTTP host");
         assert!(err.contains("https"), "{err}");
     }

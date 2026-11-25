@@ -10,6 +10,8 @@ use git2::{AnnotatedCommit, ErrorCode, FetchPrune, Repository};
 
 use crate::config::NetworkOptions;
 use crate::error::AppError;
+// Utilise le cache thread-local pour les opérations en lecture seule
+use crate::git::repo_cache::with_cached_repo;
 use crate::git::transport::{
     configure_fetch_options, configure_push_options, create_push_callbacks,
     create_remote_callbacks, validate_transport_url,
@@ -33,22 +35,24 @@ pub enum PullOutcome {
 
 /// Lists all configured remotes for a repository.
 pub fn list_remotes<P: AsRef<Path>>(path: P) -> Result<Vec<RemoteInfo>, git2::Error> {
-    let repo = Repository::open(path)?;
-    let mut remotes = Vec::new();
+    // Lecture seule des remotes — utilise le cache thread-local
+    with_cached_repo(path, |repo| {
+        let mut remotes = Vec::new();
 
-    if let Ok(names) = repo.remotes() {
-        for name in names.iter().flatten().flatten() {
-            if let Ok(remote) = repo.find_remote(name) {
-                let url = remote.url().unwrap_or("(no url)").to_string();
-                remotes.push(RemoteInfo {
-                    name: name.to_string(),
-                    url,
-                });
+        if let Ok(names) = repo.remotes() {
+            for name in names.iter().flatten().flatten() {
+                if let Ok(remote) = repo.find_remote(name) {
+                    let url = remote.url().unwrap_or("(no url)").to_string();
+                    remotes.push(RemoteInfo {
+                        name: name.to_string(),
+                        url,
+                    });
+                }
             }
         }
-    }
 
-    Ok(remotes)
+        Ok(remotes)
+    })
 }
 
 /// Fetches updates from a remote.

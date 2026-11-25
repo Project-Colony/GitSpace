@@ -1,1 +1,5 @@
 /target
+
+# .NET build output
+dotnet/GitSpace.Helper/bin/
+dotnet/GitSpace.Helper/obj/

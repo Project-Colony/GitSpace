@@ -2,12 +2,14 @@ use std::time::Instant;
 
 use tracing::info;
 
+#[allow(dead_code)]
 pub enum PerfScope {
     Enabled { label: &'static str, start: Instant },
     Disabled,
 }
 
 impl PerfScope {
+    #[allow(dead_code)]
     pub fn new(label: &'static str) -> Self {
         if std::env::var_os("GITSPACE_PROFILE_UI").is_some() {
             Self::Enabled {
