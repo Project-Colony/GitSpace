@@ -164,7 +164,8 @@ fn changed_files(diff: &Diff<'_>, workdir: Option<&Path>) -> Result<Vec<ChangedF
         let counted =
             !too_large && !matches!(delta.status(), Delta::Conflicted | Delta::Unreadable);
         let patch = if counted {
-            Patch::from_diff(diff, index)?
+            // A file that cannot be read (no permission, say) is listed without counts.
+            Patch::from_diff(diff, index).ok().flatten()
         } else {
             None
         };

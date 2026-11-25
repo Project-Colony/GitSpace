@@ -677,6 +677,35 @@ fn read_changes_skips_counting_large_untracked_files() {
     assert_eq!(changes.unstaged[0].additions, 0);
 }
 
+#[cfg(unix)]
+#[test]
+fn read_changes_lists_files_it_cannot_read() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    write_commit(&repo, "locked.txt", "one\n", "initial");
+    fs::write(root.join("locked.txt"), "one\ntwo\n").unwrap();
+    fs::write(root.join("secret.txt"), "hidden\n").unwrap();
+    fs::write(root.join("open.txt"), "a\nb\n").unwrap();
+    for name in ["locked.txt", "secret.txt"] {
+        fs::set_permissions(root.join(name), fs::Permissions::from_mode(0o000)).unwrap();
+    }
+
+    let changes = read_changes(root.to_str().unwrap()).expect("changes");
+    for name in ["locked.txt", "secret.txt"] {
+        fs::set_permissions(root.join(name), fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    let paths: Vec<_> = changes.unstaged.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(paths.len(), 3, "{paths:?}");
+    let open = changes
+        .unstaged
+        .iter()
+        .find(|f| f.path == "open.txt")
+        .unwrap();
+    assert_eq!((open.additions, open.deletions), (2, 0));
+}
+
 #[test]
 fn discard_file_restores_a_tracked_file() {
     let (_dir, repo) = init_temp_repo();
