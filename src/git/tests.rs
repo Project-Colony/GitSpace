@@ -823,6 +823,21 @@ fn overview_marks_merged_branches() {
 }
 
 #[test]
+fn overview_lists_a_branch_without_shared_history() {
+    let (_dir, repo) = init_temp_repo();
+    write_commit(&repo, "file.txt", "base", "base");
+    write_commit(&repo, "file.txt", "next", "next");
+    let orphan = commit_on_branch(&repo, "orphan", None, "orphan one");
+    commit_on_branch(&repo, "orphan", Some(orphan), "orphan two");
+    let root = repo.path().parent().unwrap().to_str().unwrap();
+
+    let list = list_branch_overview(root).expect("overview");
+    let orphan = overview_of(&list, "orphan");
+    assert!(!orphan.merged_into_head);
+    assert_eq!((orphan.ahead_of_head, orphan.behind_head), (2, 2));
+}
+
+#[test]
 fn overview_reports_upstream_divergence() {
     let (_dir, repo) = init_temp_repo();
     let first = write_commit(&repo, "file.txt", "one", "one");

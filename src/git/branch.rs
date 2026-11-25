@@ -2,7 +2,7 @@ use std::path::Path;
 use std::process::Command;
 
 use chrono::Utc;
-use git2::{build::CheckoutBuilder, BranchType, Error, Repository};
+use git2::{build::CheckoutBuilder, BranchType, Error, ErrorCode, Repository};
 
 use crate::git::repo_cache::with_cached_repo;
 
@@ -108,7 +108,13 @@ pub fn list_branch_overview(repo_path: &str) -> Result<Vec<BranchOverview>, Erro
                 if let Some(head) = head {
                     (entry.ahead_of_head, entry.behind_head) =
                         repo.graph_ahead_behind(tip, head)?;
-                    entry.merged_into_head = !is_head && repo.merge_base(tip, head)? == tip;
+                    // A branch with no history in common with HEAD (gh-pages) has no merge base.
+                    entry.merged_into_head = !is_head
+                        && match repo.merge_base(tip, head) {
+                            Ok(base) => base == tip,
+                            Err(error) if error.code() == ErrorCode::NotFound => false,
+                            Err(error) => return Err(error),
+                        };
                 }
             }
             entries.push(entry);
