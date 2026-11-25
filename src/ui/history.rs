@@ -318,6 +318,11 @@ impl HistoryPanel {
         self.repo.as_deref() == Some(repo)
     }
 
+    #[cfg(test)]
+    pub(crate) fn selected(&self) -> Option<&str> {
+        self.selected.as_deref()
+    }
+
     /// Reads the log again from the first page, with the filter and branch shown.
     fn refresh(&mut self) -> Task<Message> {
         self.error = None;

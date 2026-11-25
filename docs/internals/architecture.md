@@ -26,11 +26,12 @@ token as a plain argument from the UI.
 `ui/app.rs` holds `GitSpaceApp`, the iced application state. Its `update` routes each
 message to the screen it belongs to, saves the preferences after each change, and reloads
 the other tabs when one of them changes the repository (commit, checkout, merge, rebase,
-fetch, pull, push, a stash job). When the window gains focus it reads the header, Changes,
-Branches and Stashes again, because another program may have changed the repository;
-History is left as it is so that its selection stays. Its `view` puts the sidebar next to
-the content area: the repository header and the active tab, the Add repository screen when
-no repository is open, or Preferences while they are open (see
+pull, a stash job). A fetch or a push leaves HEAD and the working tree as they were, so it
+reloads only the header and Branches. When the window gains focus it reads the header,
+Changes, Branches and Stashes again, because another program may have changed the
+repository. In both cases History is left as it is so that its selection stays. Its `view`
+puts the sidebar next to the content area: the repository header and the active tab, the
+Add repository screen when no repository is open, or Preferences while they are open (see
 [gitkraken-layout.md](../project/gitkraken-layout.md)).
 Its subscriptions are the keyboard shortcuts, window focus, the auto-fetch timer and the
 toast timer. At startup it opens the last repository on Changes when "Reopen the last

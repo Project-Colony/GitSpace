@@ -244,7 +244,7 @@ impl GitSpaceApp {
             }
             Message::RepoHeader(msg) => {
                 let finished = matches!(msg, repo_header::Message::ActionFinished { .. });
-                let changed = remote_action_succeeded(
+                let succeeded = remote_action_succeeded(
                     &msg,
                     self.current_repo.as_ref().map(RepoContext::path),
                 );
@@ -252,10 +252,15 @@ impl GitSpaceApp {
                 if let Some(toast) = toast {
                     self.toasts.push(toast);
                 }
-                let reload = if changed {
-                    self.reload_other_panels(Origin::Header)
-                } else {
-                    Task::none()
+                let reload = match succeeded {
+                    // A pull moves HEAD and the working tree.
+                    Some(repo_header::RemoteAction::Pull) => {
+                        self.reload_other_panels(Origin::Header)
+                    }
+                    // A fetch or a push leaves HEAD and the working tree alone. Branches reloads
+                    // for its upstream counts; History keeps its selection.
+                    Some(_) => self.reload_branches(),
+                    None => Task::none(),
                 };
                 let statuses = if finished {
                     self.refresh_statuses()
@@ -665,6 +670,13 @@ impl GitSpaceApp {
         }
     }
 
+    fn reload_branches(&mut self) -> Task<Message> {
+        match self.current_repo.clone() {
+            Some(repo) => self.branches_panel.load(&repo).map(Message::Branches),
+            None => Task::none(),
+        }
+    }
+
     /// Reloads every repository panel except `origin` after it changed the repository.
     fn reload_other_panels(&mut self, origin: Origin) -> Task<Message> {
         let Some(repo) = self.current_repo.clone() else {
@@ -1028,14 +1040,21 @@ fn digit_key(physical: Physical) -> Option<usize> {
     }
 }
 
-/// Whether a fetch, pull or push on the open repository `current` succeeded: the remote
-/// branches, and after a pull HEAD and the working tree, then differ from what the panels show.
-fn remote_action_succeeded(msg: &repo_header::Message, current: Option<&str>) -> bool {
-    matches!(
-        msg,
-        repo_header::Message::ActionFinished { path, result: Ok(_), .. }
-            if current == Some(&**path)
-    )
+/// The fetch, pull or push that `msg` reports as succeeded on the open repository `current`:
+/// the remote branches, and after a pull HEAD and the working tree, then differ from what the
+/// panels show.
+fn remote_action_succeeded(
+    msg: &repo_header::Message,
+    current: Option<&str>,
+) -> Option<repo_header::RemoteAction> {
+    match msg {
+        repo_header::Message::ActionFinished {
+            path,
+            action,
+            result: Ok(_),
+        } if current == Some(&**path) => Some(*action),
+        _ => None,
+    }
 }
 
 fn accounts_message(message: preferences::accounts::Message) -> Message {
@@ -1124,7 +1143,7 @@ mod tests {
     }
 
     #[test]
-    fn every_remote_action_that_succeeded_here_reloads_the_panels() {
+    fn only_a_remote_action_that_succeeded_here_reloads_panels() {
         let finished = |path: &str, action, result| repo_header::Message::ActionFinished {
             path: Arc::from(path),
             action,
@@ -1133,12 +1152,40 @@ mod tests {
         use repo_header::RemoteAction::{AutoFetch, Fetch, Pull, Push};
         for action in [Fetch, AutoFetch, Pull, Push] {
             let done = finished("/r", action, Ok("done".into()));
-            assert!(remote_action_succeeded(&done, Some("/r")), "{action:?}");
-            assert!(!remote_action_succeeded(&done, Some("/other")));
-            assert!(!remote_action_succeeded(&done, None));
+            assert_eq!(remote_action_succeeded(&done, Some("/r")), Some(action));
+            assert_eq!(remote_action_succeeded(&done, Some("/other")), None);
+            assert_eq!(remote_action_succeeded(&done, None), None);
             let failed = finished("/r", action, Err("offline".into()));
-            assert!(!remote_action_succeeded(&failed, Some("/r")));
+            assert_eq!(remote_action_succeeded(&failed, Some("/r")), None);
         }
+    }
+
+    #[test]
+    fn a_fetch_or_a_push_keeps_the_history_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        let repo = RepoContext::from_path(dir.path()).unwrap();
+        let mut app = test_app(dir.path());
+        app.current_repo = Some(repo.clone());
+        let _ = app.history_panel.load(&repo);
+        let _ = app
+            .history_panel
+            .update(history::Message::Select("abc".into()));
+        let finished = |action| {
+            Message::RepoHeader(repo_header::Message::ActionFinished {
+                path: repo.path_arc(),
+                action,
+                result: Ok("done".into()),
+            })
+        };
+        use repo_header::RemoteAction::{AutoFetch, Fetch, Pull, Push};
+        for action in [Fetch, AutoFetch, Push] {
+            let _ = app.update(finished(action));
+            assert_eq!(app.history_panel.selected(), Some("abc"), "{action:?}");
+        }
+        // A pull moves HEAD: History reads the log again.
+        let _ = app.update(finished(Pull));
+        assert_eq!(app.history_panel.selected(), None);
     }
 
     #[test]
