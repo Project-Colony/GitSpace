@@ -4,10 +4,6 @@ use crate::git::diff::{
     commit_against_parent, commit_diff_file, commit_diff_summaries, FileDiff, FileDiffSummary,
 };
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "ruling R3: the Stashes tab returns in Task 16")
-)]
 #[derive(Debug, Clone)]
 pub struct StashEntry {
     pub index: usize,
@@ -22,10 +18,6 @@ pub struct StashEntry {
     pub file_count: usize,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "ruling R3: the Stashes tab returns in Task 16")
-)]
 pub fn list_stashes(repo_path: &str) -> Result<Vec<StashEntry>, git2::Error> {
     let mut repo = Repository::open(repo_path)?;
     let mut found = Vec::new();
@@ -52,10 +44,6 @@ pub fn list_stashes(repo_path: &str) -> Result<Vec<StashEntry>, git2::Error> {
 
 /// The branch in git's `WIP on <branch>: ...` or `On <branch>: ...` stash message. Branch
 /// names cannot contain `:`, so the first one ends the name.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "ruling R3: the Stashes tab returns in Task 16")
-)]
 fn stash_branch(message: &str) -> Option<String> {
     let rest = message
         .strip_prefix("WIP on ")
@@ -66,7 +54,6 @@ fn stash_branch(message: &str) -> Option<String> {
 
 /// Files of the stash at `index` against the commit it was made on, if it is still the
 /// stash `id`.
-#[cfg_attr(not(test), expect(dead_code, reason = "the Stashes tab will call it"))]
 pub fn stash_files(
     repo_path: &str,
     index: usize,
@@ -77,7 +64,6 @@ pub fn stash_files(
 }
 
 /// The patch of `path` in the stash at `index`, if it is still the stash `id`.
-#[cfg_attr(not(test), expect(dead_code, reason = "the Stashes tab will call it"))]
 pub fn stash_file_patch(
     repo_path: &str,
     index: usize,
@@ -89,7 +75,6 @@ pub fn stash_file_patch(
 }
 
 /// How many files a stash made now would take; ignored files never count.
-#[cfg_attr(not(test), expect(dead_code, reason = "the Stashes tab will call it"))]
 pub fn count_stashable(repo_path: &str, include_untracked: bool) -> Result<usize, git2::Error> {
     let repo = Repository::open(repo_path)?;
     let mut options = StatusOptions::new();
@@ -101,10 +86,6 @@ pub fn count_stashable(repo_path: &str, include_untracked: bool) -> Result<usize
     Ok(count)
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "ruling R3: the Stashes tab returns in Task 16")
-)]
 pub fn create_stash(
     repo_path: &str,
     message: &str,
@@ -119,16 +100,14 @@ pub fn create_stash(
         flags |= git2::StashFlags::INCLUDE_UNTRACKED;
     }
 
-    repo.stash_save2(&signature, Some(message), Some(flags))?;
+    // With no message, git writes its own "WIP on <branch>: <commit>" one.
+    let message = (!message.is_empty()).then_some(message);
+    repo.stash_save2(&signature, message, Some(flags))?;
     Ok(())
 }
 
 /// Applies the stash at `index`, if it is still the stash `id`. libgit2's default safe
 /// checkout fails instead of overwriting a modified file.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "ruling R3: the Stashes tab returns in Task 16")
-)]
 pub fn apply_stash(repo_path: &str, index: usize, id: &str) -> Result<(), git2::Error> {
     let mut repo = Repository::open(repo_path)?;
     ensure_stash_id(&mut repo, index, id)?;
@@ -136,10 +115,6 @@ pub fn apply_stash(repo_path: &str, index: usize, id: &str) -> Result<(), git2::
 }
 
 /// Drops the stash at `index`, if it is still the stash `id`.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "ruling R3: the Stashes tab returns in Task 16")
-)]
 pub fn drop_stash(repo_path: &str, index: usize, id: &str) -> Result<(), git2::Error> {
     let mut repo = Repository::open(repo_path)?;
     ensure_stash_id(&mut repo, index, id)?;

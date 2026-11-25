@@ -11,5 +11,6 @@ pub mod recent;
 pub mod repo_header;
 pub mod repo_list;
 pub mod sidebar;
+pub mod stashes;
 pub mod theme;
 pub mod widgets;

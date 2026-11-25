@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use iced::keyboard::{key::Named, Key, Modifiers};
-use iced::widget::{column, container, row, Space};
+use iced::widget::{column, container, row};
 use iced::{Element, Length, Subscription, Task};
 
 use crate::auth::AuthManager;
@@ -29,6 +29,7 @@ use crate::ui::{
     recent::RecentList,
     repo_header::{self, RepoHeader, RepoTab, TabCounts},
     sidebar::{self, Sidebar},
+    stashes::{self, StashesPanel},
     theme::Theme,
     widgets::tabs::tabs,
     widgets::toast::{Toast, ToastAction, Toasts},
@@ -100,6 +101,7 @@ enum Origin {
     Changes,
     Branches,
     History,
+    Stashes,
 }
 
 // ─── Message principal ─────────────────────────────────────────────────────
@@ -119,6 +121,7 @@ pub enum Message {
     Changes(changes::Message),
     History(crate::ui::history::Message),
     Branches(crate::ui::branches::Message),
+    Stashes(stashes::Message),
     Auth(crate::ui::auth::Message),
     Preferences(crate::ui::preferences::Message),
 
@@ -171,6 +174,7 @@ pub struct GitSpaceApp {
     changes_panel: ChangesPanel,
     history_panel: HistoryPanel,
     branches_panel: BranchPanel,
+    stashes_panel: StashesPanel,
     auth_panel: AuthPanel,
     preferences_panel: PreferencesPanel,
 
@@ -209,6 +213,7 @@ impl GitSpaceApp {
             history_panel: HistoryPanel::default(),
             branches_panel: BranchPanel::new(preferences.pinned_branches().to_vec()),
             changes_panel: ChangesPanel::default(),
+            stashes_panel: StashesPanel::default(),
             auth_panel: AuthPanel::new(auth_manager.clone()),
             preferences_panel: PreferencesPanel::new(preferences, logging),
             theme,
@@ -320,8 +325,9 @@ impl GitSpaceApp {
                 } else {
                     Task::none()
                 };
+                // A discard or stage also changes what a new stash would take.
                 let statuses = if acted {
-                    self.refresh_statuses()
+                    Task::batch([self.refresh_statuses(), self.reload_stashes()])
                 } else {
                     Task::none()
                 };
@@ -385,6 +391,22 @@ impl GitSpaceApp {
                 Task::batch(tasks)
             }
 
+            // ── Stashes ────────────────────────────────────────────────
+            Message::Stashes(msg) => {
+                // Stashing and applying change the working tree.
+                let changed = matches!(&msg, stashes::Message::Done(_, _, Ok(_)));
+                let (task, toast) = self.stashes_panel.update(msg);
+                if let Some(toast) = toast {
+                    self.toasts.push(toast);
+                }
+                let mut tasks = vec![task.map(Message::Stashes)];
+                if changed {
+                    tasks.push(self.reload_other_panels(Origin::Stashes));
+                    tasks.push(self.refresh_statuses());
+                }
+                Task::batch(tasks)
+            }
+
             // ── Auth ───────────────────────────────────────────────────
             Message::Auth(msg) => {
                 let task = self.auth_panel.update(msg);
@@ -438,6 +460,7 @@ impl GitSpaceApp {
                     self.changes_panel.load(&repo).map(Message::Changes),
                     self.branches_panel.load(&repo).map(Message::Branches),
                     self.history_panel.load(&repo).map(Message::History),
+                    self.stashes_panel.load(&repo).map(Message::Stashes),
                 ];
                 self.current_repo = Some(repo);
                 Task::batch(tasks)
@@ -646,10 +669,19 @@ impl GitSpaceApp {
         )
     }
 
-    /// Rereads the open repository's changes, which other programs may have edited.
+    /// Rereads the open repository's changes and stashes, which other programs may have
+    /// edited.
     fn reload_changes(&mut self) -> Task<Message> {
-        match self.current_repo.clone() {
+        let changes = match self.current_repo.clone() {
             Some(repo) => self.changes_panel.load(&repo).map(Message::Changes),
+            None => Task::none(),
+        };
+        Task::batch([changes, self.reload_stashes()])
+    }
+
+    fn reload_stashes(&mut self) -> Task<Message> {
+        match self.current_repo.clone() {
+            Some(repo) => self.stashes_panel.load(&repo).map(Message::Stashes),
             None => Task::none(),
         }
     }
@@ -668,6 +700,9 @@ impl GitSpaceApp {
         }
         if origin != Origin::Branches {
             tasks.push(self.branches_panel.load(&repo).map(Message::Branches));
+        }
+        if origin != Origin::Stashes {
+            tasks.push(self.stashes_panel.load(&repo).map(Message::Stashes));
         }
         tasks.push(self.history_panel.load(&repo).map(Message::History));
         Task::batch(tasks)
@@ -699,8 +734,7 @@ impl GitSpaceApp {
                 (Some(_), None) => {
                     let counts = TabCounts {
                         changes: self.changes_panel.count(),
-                        // Ruling R3: no stash list until the Stashes tab returns.
-                        stashes: 0,
+                        stashes: self.stashes_panel.count(),
                     };
                     let header = self
                         .repo_header
@@ -754,8 +788,7 @@ impl GitSpaceApp {
         match self.active_tab {
             // The Changes columns run to the window edges, as in the mockup.
             RepoTab::Changes => self.changes_panel.view().map(Message::Changes),
-            // Ruling R3: the Stashes screen comes back in a later task.
-            RepoTab::Stashes => Space::new().into(),
+            RepoTab::Stashes => self.stashes_panel.view().map(Message::Stashes),
             RepoTab::History => self.history_panel.view().map(Message::History),
             RepoTab::Branches => self.branches_panel.view().map(Message::Branches),
         }

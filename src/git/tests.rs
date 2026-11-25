@@ -395,6 +395,20 @@ fn stash_drop_refuses_a_changed_stash_list() {
 }
 
 #[test]
+fn stash_without_a_message_gets_git_s_own() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    let path = root.to_str().unwrap();
+    write_commit(&repo, "a.txt", "base", "initial");
+    fs::write(root.join("a.txt"), "edited").unwrap();
+    create_stash(path, "", false).expect("stash");
+
+    let stash = list_stashes(path).unwrap().remove(0);
+    assert!(stash.message.starts_with("WIP on "), "{}", stash.message);
+    assert!(stash.branch.is_some());
+}
+
+#[test]
 fn stash_apply_keeps_edits_in_other_files() {
     let (_dir, repo) = init_temp_repo();
     let root = repo.path().parent().unwrap();
