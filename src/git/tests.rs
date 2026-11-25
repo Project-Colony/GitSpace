@@ -12,7 +12,7 @@ use crate::git::log::{read_commit_log, CommitFilter};
 use crate::git::merge::detect_conflicts;
 use crate::git::remote::{fetch_remote, list_remotes, pull_branch, push_branch, PullOutcome};
 use crate::git::stash::{apply_stash, create_stash, drop_stash, list_stashes};
-use crate::git::status::read_repo_status;
+use crate::git::status::{discard_file, read_changes, read_repo_status, ChangeKind};
 
 fn init_temp_repo() -> (tempfile::TempDir, Repository) {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -568,4 +568,158 @@ fn conflicts_written_by_another_handle_are_detected() {
     repo.merge(&[&annotated], None, None).unwrap();
 
     assert_eq!(detect_conflicts(root).unwrap(), vec!["c.txt".to_string()]);
+}
+
+#[test]
+fn read_changes_counts_lines_per_file() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    write_commit(&repo, "f.txt", "one\ntwo\nthree\nfour\nfive\n", "initial");
+    // Three lines changed and two appended: 5 added, 3 removed.
+    fs::write(
+        root.join("f.txt"),
+        "ONE\nTWO\nTHREE\nfour\nfive\nsix\nseven\n",
+    )
+    .unwrap();
+    fs::write(root.join("new.txt"), "a\nb\nc\nd\n").unwrap();
+
+    let changes = read_changes(root.to_str().unwrap()).expect("changes");
+    assert!(changes.staged.is_empty());
+    let file = changes.unstaged.iter().find(|f| f.path == "f.txt").unwrap();
+    assert_eq!(file.kind, ChangeKind::Modified);
+    assert_eq!((file.additions, file.deletions), (5, 3));
+    assert!(!file.binary);
+    let new = changes
+        .unstaged
+        .iter()
+        .find(|f| f.path == "new.txt")
+        .unwrap();
+    assert_eq!(new.kind, ChangeKind::Untracked);
+    assert_eq!((new.additions, new.deletions), (4, 0));
+}
+
+#[test]
+fn read_changes_splits_staged_and_unstaged() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    write_commit(&repo, "b.txt", "b\n", "add b");
+    write_commit(&repo, "c.txt", "same content\nfor the rename\n", "add c");
+
+    fs::write(root.join("a.txt"), "a\n").unwrap();
+    fs::write(root.join("b.txt"), "b\nstaged\n").unwrap();
+    fs::rename(root.join("c.txt"), root.join("d.txt")).unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_path(Path::new("a.txt")).unwrap();
+    index.add_path(Path::new("b.txt")).unwrap();
+    index.remove_path(Path::new("c.txt")).unwrap();
+    index.add_path(Path::new("d.txt")).unwrap();
+    index.write().unwrap();
+    fs::write(root.join("b.txt"), "b\nstaged\nunstaged\n").unwrap();
+
+    let changes = read_changes(root.to_str().unwrap()).expect("changes");
+    let staged: Vec<_> = changes
+        .staged
+        .iter()
+        .map(|f| (f.path.as_str(), f.kind, f.additions, f.deletions))
+        .collect();
+    assert!(
+        staged.contains(&("a.txt", ChangeKind::Added, 1, 0)),
+        "{staged:?}"
+    );
+    assert!(
+        staged.contains(&("b.txt", ChangeKind::Modified, 1, 0)),
+        "{staged:?}"
+    );
+    let renamed = changes.staged.iter().find(|f| f.path == "d.txt").unwrap();
+    assert_eq!(renamed.kind, ChangeKind::Renamed);
+    assert_eq!(renamed.old_path.as_deref(), Some("c.txt"));
+    assert_eq!(changes.staged.len(), 3);
+
+    assert_eq!(changes.unstaged.len(), 1, "{:?}", changes.unstaged);
+    let unstaged = &changes.unstaged[0];
+    assert_eq!(
+        (unstaged.path.as_str(), unstaged.kind),
+        ("b.txt", ChangeKind::Modified)
+    );
+    assert_eq!((unstaged.additions, unstaged.deletions), (1, 0));
+}
+
+#[test]
+fn read_changes_handles_two_thousand_untracked_files() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    write_commit(&repo, "README.md", "hello\n", "initial");
+    fs::create_dir(root.join("many")).unwrap();
+    for i in 0..2000 {
+        fs::write(root.join("many").join(format!("{i}.txt")), "line\n").unwrap();
+    }
+
+    let started = std::time::Instant::now();
+    let changes = read_changes(root.to_str().unwrap()).expect("changes");
+    let elapsed = started.elapsed();
+    assert_eq!(changes.unstaged.len(), 2000);
+    assert!(changes
+        .unstaged
+        .iter()
+        .all(|f| f.kind == ChangeKind::Untracked && f.additions == 1));
+    assert!(elapsed < std::time::Duration::from_secs(5), "{elapsed:?}");
+}
+
+#[test]
+fn read_changes_skips_counting_large_untracked_files() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    write_commit(&repo, "README.md", "hello\n", "initial");
+    fs::write(root.join("big.txt"), "x\n".repeat(600 * 1024)).unwrap();
+
+    let changes = read_changes(root.to_str().unwrap()).expect("changes");
+    assert_eq!(changes.unstaged.len(), 1);
+    assert_eq!(changes.unstaged[0].additions, 0);
+}
+
+#[test]
+fn discard_file_restores_a_tracked_file() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    write_commit(&repo, "a.txt", "original\n", "add a");
+    write_commit(&repo, "b.txt", "b\n", "add b");
+    fs::write(root.join("a.txt"), "edited\n").unwrap();
+    fs::write(root.join("b.txt"), "kept edit\n").unwrap();
+
+    discard_file(root.to_str().unwrap(), "a.txt").expect("discard");
+
+    assert_eq!(
+        fs::read_to_string(root.join("a.txt")).unwrap(),
+        "original\n"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("b.txt")).unwrap(),
+        "kept edit\n"
+    );
+}
+
+#[test]
+fn discard_file_removes_an_untracked_file() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    write_commit(&repo, "a.txt", "a\n", "add a");
+    fs::write(root.join("scratch.txt"), "temp\n").unwrap();
+
+    discard_file(root.to_str().unwrap(), "scratch.txt").expect("discard");
+
+    assert!(!root.join("scratch.txt").exists());
+    assert!(root.join("a.txt").exists());
+}
+
+#[test]
+fn discard_file_refuses_a_path_outside_the_repo() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    write_commit(&repo, "a.txt", "a\n", "add a");
+
+    let path = root.to_str().unwrap();
+    assert!(discard_file(path, "../x").is_err());
+    assert!(discard_file(path, "/etc/hostname").is_err());
+    assert!(discard_file(path, ".git/config").is_err());
+    assert!(root.join(".git/config").exists());
 }

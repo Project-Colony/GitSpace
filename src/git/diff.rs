@@ -120,7 +120,7 @@ fn collect_diff_summaries(diff: &Diff) -> Result<Vec<FileDiffSummary>, git2::Err
     Ok(summaries)
 }
 
-fn head_tree(repo: &Repository) -> Result<Option<Tree<'_>>, git2::Error> {
+pub(crate) fn head_tree(repo: &Repository) -> Result<Option<Tree<'_>>, git2::Error> {
     let head = match repo.head() {
         Ok(head) => head,
         Err(_) => return Ok(None),
