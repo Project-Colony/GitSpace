@@ -13,7 +13,10 @@ use crate::git::diff::{commit_diff_file, commit_diff_summaries, diff_file};
 use crate::git::log::{read_commit_log, CommitFilter, RefKind};
 use crate::git::merge::detect_conflicts;
 use crate::git::remote::{fetch_remote, list_remotes, pull_branch, push_branch, PullOutcome};
-use crate::git::stash::{apply_stash, create_stash, drop_stash, list_stashes};
+use crate::git::stash::{
+    apply_stash, count_stashable, create_stash, drop_stash, list_stashes, stash_file_patch,
+    stash_files,
+};
 use crate::git::status::{discard_file, read_changes, read_repo_status, ChangeKind};
 
 fn init_temp_repo() -> (tempfile::TempDir, Repository) {
@@ -410,6 +413,86 @@ fn stash_uses_the_configured_signature() {
     let stash = repo.refname_to_id("refs/stash").unwrap();
     let commit = repo.find_commit(stash).unwrap();
     assert_eq!(commit.author().email().unwrap(), "ada@example.com");
+}
+
+#[test]
+fn stash_entry_has_branch_time_and_file_count() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    let path = root.to_str().unwrap();
+    write_commit(&repo, "a.txt", "a", "add a");
+    write_commit(&repo, "b.txt", "b", "add b");
+    fs::write(root.join("a.txt"), "changed a").unwrap();
+    fs::write(root.join("b.txt"), "changed b").unwrap();
+    create_stash(path, "two files", false).expect("stash");
+
+    let stash = list_stashes(path).unwrap().remove(0);
+    assert_eq!(stash.branch.as_deref(), Some("main"));
+    assert_eq!(stash.file_count, 2);
+    let stash_commit = repo.find_commit(Oid::from_str(&stash.id).unwrap()).unwrap();
+    assert_eq!(stash.time, stash_commit.time().seconds());
+    assert!(stash.time > 0);
+}
+
+#[test]
+fn stash_files_lists_changed_paths() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    let path = root.to_str().unwrap();
+    write_commit(&repo, "a.txt", "a\n", "add a");
+    write_commit(&repo, "b.txt", "b\n", "add b");
+    fs::write(root.join("a.txt"), "a\nmore\n").unwrap();
+    create_stash(path, "one file", false).expect("stash");
+
+    let stash = list_stashes(path).unwrap().remove(0);
+    let files = stash_files(path, stash.index, &stash.id).expect("files");
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].path, "a.txt");
+    assert_eq!((files[0].additions, files[0].deletions), (1, 0));
+
+    let patch = stash_file_patch(path, stash.index, &stash.id, "a.txt")
+        .expect("patch")
+        .expect("a.txt changed");
+    assert!(patch.patch.contains("+more"), "{}", patch.patch);
+    assert!(stash_file_patch(path, stash.index, &stash.id, "b.txt")
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn stash_files_refuses_a_changed_list() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    let path = root.to_str().unwrap();
+    write_commit(&repo, "a.txt", "base", "initial");
+    fs::write(root.join("a.txt"), "first").unwrap();
+    create_stash(path, "first", false).expect("stash");
+    let first = list_stashes(path).unwrap().remove(0);
+    fs::write(root.join("a.txt"), "second").unwrap();
+    create_stash(path, "second", false).expect("stash");
+
+    let err = stash_files(path, first.index, &first.id).expect_err("stale index");
+    assert!(err.message().contains("refresh"), "{}", err.message());
+    assert!(stash_file_patch(path, first.index, &first.id, "a.txt").is_err());
+}
+
+#[test]
+fn count_stashable_respects_untracked() {
+    let (_dir, repo) = init_temp_repo();
+    let root = repo.path().parent().unwrap();
+    let path = root.to_str().unwrap();
+    write_commit(&repo, ".gitignore", "*.log\n", "ignore logs");
+    write_commit(&repo, "a.txt", "a", "add a");
+    assert_eq!(count_stashable(path, true).unwrap(), 0);
+
+    fs::write(root.join("a.txt"), "changed").unwrap();
+    fs::create_dir(root.join("new")).unwrap();
+    fs::write(root.join("new/one.txt"), "1").unwrap();
+    fs::write(root.join("new/two.txt"), "2").unwrap();
+    fs::write(root.join("debug.log"), "ignored").unwrap();
+
+    assert_eq!(count_stashable(path, false).unwrap(), 1);
+    assert_eq!(count_stashable(path, true).unwrap(), 3);
 }
 
 #[test]
