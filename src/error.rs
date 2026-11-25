@@ -113,8 +113,7 @@ impl From<&str> for AppError {
 
 /// Returns the application logs directory, creating it if necessary.
 pub fn logs_directory() -> PathBuf {
-    let base = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
-    let path = base.join("gitspace").join("logs");
+    let path = crate::paths::effective_dirs().1.join("logs");
     if let Err(err) = std::fs::create_dir_all(&path) {
         tracing::warn!(error = %err, "failed to create logs directory");
     }

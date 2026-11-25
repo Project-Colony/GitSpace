@@ -5,6 +5,7 @@ mod config;
 mod error;
 mod git;
 mod logging;
+mod paths;
 mod ui;
 
 use colony_ui::fonts;
@@ -22,13 +23,20 @@ fn main() {
         return;
     }
 
+    // Before logging starts: logging reads the config and opens the logs folder.
+    let migration = paths::init_at_startup();
     logging::init_tracing();
     log_dev_feature_flags();
+    let migration_error = log_migration(migration);
 
     let result = fonts::BYTES
         .into_iter()
         .fold(
-            iced::application(GitSpaceApp::new, GitSpaceApp::update, GitSpaceApp::view),
+            iced::application(
+                move || GitSpaceApp::new(migration_error.clone()),
+                GitSpaceApp::update,
+                GitSpaceApp::view,
+            ),
             |app, font| app.font(font),
         )
         .title("GitSpace")
@@ -43,6 +51,21 @@ fn main() {
         eprintln!("Erreur: Impossible de lancer GitSpace: {err}");
         eprintln!("Verifiez que votre serveur d'affichage est lance et accessible.");
         std::process::exit(1);
+    }
+}
+
+/// Logs the outcome of the legacy folder move and returns the error to show, if any.
+fn log_migration(outcome: paths::MigrationOutcome) -> Option<String> {
+    match outcome {
+        paths::MigrationOutcome::NothingToDo => None,
+        paths::MigrationOutcome::Moved(files) => {
+            tracing::info!(target: "gitspace::paths", count = files.len(), files = ?files, "moved files from the legacy gitspace folders");
+            None
+        }
+        paths::MigrationOutcome::Failed { error } => {
+            tracing::error!(target: "gitspace::paths", %error, "could not move files from the legacy gitspace folders; using them for this run");
+            Some(error)
+        }
     }
 }
 

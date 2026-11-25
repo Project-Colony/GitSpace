@@ -8,7 +8,6 @@ use tracing::{error, warn};
 
 const MAX_RECENT: usize = 15;
 const CONFIG_FILE_NAME: &str = "config.json";
-const APP_CONFIG_DIR: &str = "gitspace";
 pub const MIN_LOG_RETENTION_FILES: usize = 1;
 pub const MAX_LOG_RETENTION_FILES: usize = 30;
 /// Auto-fetch interval bounds, in minutes. Zero would make `iced::time::every` panic, and the
@@ -237,8 +236,7 @@ impl AppConfig {
 }
 
 fn config_path() -> PathBuf {
-    let base = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
-    base.join(APP_CONFIG_DIR).join(CONFIG_FILE_NAME)
+    crate::paths::effective_dirs().0.join(CONFIG_FILE_NAME)
 }
 
 fn backup_path(path: &Path) -> PathBuf {

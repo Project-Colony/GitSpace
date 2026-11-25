@@ -578,9 +578,7 @@ fn decrypt_tokens(blob: &EncryptedTokenFile, key: &[u8; 32]) -> Result<TokenMap,
 
 /// The settings folder that holds the token files.
 fn config_dir() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(SERVICE_NAME)
+    crate::paths::effective_dirs().0
 }
 
 /// Loads or creates the local encryption key, used when the keyring cannot hold the key.

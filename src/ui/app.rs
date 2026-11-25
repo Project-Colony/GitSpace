@@ -89,7 +89,9 @@ pub struct GitSpaceApp {
 
 impl GitSpaceApp {
     /// Construit l'etat initial et retourne les taches de demarrage.
-    pub fn new() -> (Self, Task<Message>) {
+    ///
+    /// `migration_error` is set when the files of an older build could not be moved.
+    pub fn new(migration_error: Option<String>) -> (Self, Task<Message>) {
         let config = AppConfig::load();
         let preferences = config.preferences().clone();
         let logging = *config.logging();
@@ -120,6 +122,14 @@ impl GitSpaceApp {
             tab_order: MainTab::ALL.to_vec(),
             notifications: NotificationCenter::new(),
         };
+
+        if let Some(error) = migration_error {
+            // i18n key: startup_migration_failed (Task 4 moves this text to crate::i18n).
+            app.notifications.push(Notification::error(
+                "Could not move your settings to the new folder",
+                format!("GitSpace is using the old folder for now. {error}"),
+            ));
+        }
 
         let accounts = app.auth_panel.refresh_accounts().map(Message::Auth);
         let repo = match last_repo {

@@ -107,9 +107,11 @@ files past the configured retention at startup.
 
 ## Files and paths
 
-All locations come from the `dirs` crate: settings and token files in
-`<config dir>/gitspace/`, logs in `<data dir>/gitspace/logs/`. Each module builds its own path
-from those two roots; there is no central paths module yet.
+`paths.rs` owns every location: settings and token files in `colony_ui::paths::config_dir("GitSpace")`,
+logs in `logs/` under `colony_ui::paths::data_dir("GitSpace")`. `main` calls
+`paths::init_at_startup` before logging starts; it moves the files of the old
+`<config dir>/gitspace/` and `<data dir>/gitspace/` folders once and fixes the folders that
+`paths::effective_dirs` returns for the run (the old ones when the move failed).
 
 ## Features
 

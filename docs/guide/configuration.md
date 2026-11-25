@@ -1,12 +1,13 @@
 # Settings, tokens and logs
 
-GitSpace keeps its files in a `gitspace` folder inside the system configuration directory:
+GitSpace keeps its files in a `Colony/GitSpace` folder inside the system configuration directory,
+the layout shared by every Colony program:
 
 | Platform | Folder |
 |---|---|
-| Linux | `~/.config/gitspace/` (`$XDG_CONFIG_HOME/gitspace/` when that variable is set) |
-| macOS | `~/Library/Application Support/gitspace/` |
-| Windows | `%APPDATA%\gitspace\` |
+| Linux | `~/.config/Colony/GitSpace/` (`$XDG_CONFIG_HOME/Colony/GitSpace/` when that variable is set) |
+| macOS | `~/Library/Application Support/Colony/GitSpace/` |
+| Windows | `%LOCALAPPDATA%\Colony\GitSpace\` |
 
 | File | What it holds |
 |---|---|
@@ -18,6 +19,17 @@ GitSpace keeps its files in a `gitspace` folder inside the system configuration 
 
 Settings and token files are written to a temporary file that is then renamed into place, so a
 crash or a full disk never leaves a half-written file.
+
+## Moving from an older version
+
+Older versions used a `gitspace` folder instead: `~/.config/gitspace/` and
+`~/.local/share/gitspace/logs/` on Linux, `~/Library/Application Support/gitspace/` on macOS,
+`%APPDATA%\gitspace\` on Windows. On the first start without a `config.json` in the new
+folder, GitSpace moves the files listed above and the logs there, `config.json` last, and keeps
+the owner-only permissions of the token files. If GitSpace stops during the move, the next start
+finishes it. When a file exists in both folders with different content, GitSpace moves nothing,
+uses the old folder for that run and shows an error; move or delete one of the two copies, then
+restart.
 
 ## When a file cannot be read
 
@@ -67,9 +79,9 @@ The network preferences apply to clone, fetch, pull and push:
 
 ## Logs
 
-GitSpace writes JSON logs to a `gitspace/logs` folder inside the system data directory
-(`~/.local/share/gitspace/logs/` on Linux, `~/Library/Application Support/gitspace/logs/` on
-macOS, `%APPDATA%\gitspace\logs\` on Windows), one file per day. Files past the retention
+GitSpace writes JSON logs to a `Colony/GitSpace/logs` folder inside the system data directory
+(`~/.local/share/Colony/GitSpace/logs/` on Linux, `~/Library/Application Support/Colony/GitSpace/logs/`
+on macOS, `%LOCALAPPDATA%\Colony\GitSpace\logs\` on Windows), one file per day. Files past the retention
 count set in Preferences are deleted at startup. Logs never contain a token.
 
 ## Environment variables
