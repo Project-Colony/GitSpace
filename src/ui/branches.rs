@@ -9,7 +9,6 @@ use colony_ui::theme::Palette;
 use colony_ui::widgets::icons;
 use colony_ui::{fonts, Typography};
 use git2::Oid;
-use iced::widget::text::Wrapping;
 use iced::widget::{button, column, container, pick_list, row, scrollable, text, text_input};
 use iced::widget::{Column, Space};
 use iced::{Alignment, Border, Element, Length, Task};
@@ -25,6 +24,7 @@ use crate::ui::changes::{field, horizontal_divider, item, question, vertical_div
 use crate::ui::context::{git_task, RepoContext};
 use crate::ui::history::relative_time;
 use crate::ui::widgets::button as gs_button;
+use crate::ui::widgets::ellipsis::ellipsis;
 use crate::ui::widgets::menu::{self, Entry, MenuItem};
 use crate::ui::widgets::segmented::segmented;
 use crate::ui::widgets::toast::Toast;
@@ -823,15 +823,14 @@ impl BranchPanel {
                     .color(color)
             )
             .center_x(Length::Fixed(14.0)),
-            container(
-                text(branch.name.as_str())
-                    .size(typo.sz(12))
-                    .font(typo.regular)
-                    .color(Palette::TEXT_PRIMARY())
-                    .wrapping(Wrapping::None),
-            )
-            .width(Length::Fill)
-            .clip(true),
+            // The container keeps the badges at the right end of the row.
+            container(ellipsis(
+                branch.name.as_str(),
+                typo.sz(12),
+                typo.regular,
+                Palette::TEXT_PRIMARY(),
+            ))
+            .width(Length::Fill),
         ]
         .spacing(8)
         .align_y(Alignment::Center);
@@ -1181,15 +1180,13 @@ impl BranchPanel {
                         .size(typo.sz(11))
                         .font(typo.regular)
                         .color(Palette::ACCENT()),
-                    container(
-                        text(commit.summary.as_str())
-                            .size(typo.sz(12))
-                            .font(typo.regular)
-                            .color(Palette::TEXT_PRIMARY())
-                            .wrapping(Wrapping::None),
-                    )
-                    .width(Length::Fill)
-                    .clip(true),
+                    container(ellipsis(
+                        commit.summary.as_str(),
+                        typo.sz(12),
+                        typo.regular,
+                        Palette::TEXT_PRIMARY(),
+                    ))
+                    .width(Length::Fill),
                     text(relative_time(commit.time.seconds(), now))
                         .size(typo.sz(11))
                         .font(typo.regular)
