@@ -31,7 +31,7 @@ pub enum RemoteAction {
 }
 
 impl RemoteAction {
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::Fetch => "Fetch",
             Self::Pull => "Pull",

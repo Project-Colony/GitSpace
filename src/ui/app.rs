@@ -188,10 +188,39 @@ impl GitSpaceApp {
             // ── Repo overview ──────────────────────────────────────────
             Message::RepoOverview(msg) => {
                 self.notify_auto_fetch_failure(&msg);
-                let task =
-                    self.repo_overview
-                        .update(msg, self.current_repo.as_ref(), &self.auth_manager);
-                task.map(Message::RepoOverview)
+                let mut pulled = false;
+                if let repo_overview::Message::ActionFinished {
+                    path,
+                    action,
+                    auto: false,
+                    result,
+                } = &msg
+                {
+                    let current = self.current_repo.as_ref().map(|repo| repo.path());
+                    if current != Some(&**path) {
+                        // The panel only shows results for the open repository.
+                        let detail = match result {
+                            Ok(msg) => msg.clone(),
+                            Err(err) => format!("Échec : {err}"),
+                        };
+                        self.notifications.push(Notification::error(
+                            format!("{} sur {path}", action.label()),
+                            detail,
+                        ));
+                    } else {
+                        pulled =
+                            matches!(action, repo_overview::RemoteAction::Pull) && result.is_ok();
+                    }
+                }
+                let task = self
+                    .repo_overview
+                    .update(msg, self.current_repo.as_ref(), &self.auth_manager)
+                    .map(Message::RepoOverview);
+                if pulled {
+                    Task::batch([task, self.reload_other_panels(MainTab::RepoOverview)])
+                } else {
+                    task
+                }
             }
 
             // ── Stage ──────────────────────────────────────────────────
@@ -325,7 +354,14 @@ impl GitSpaceApp {
         let Some(repo) = self.current_repo.clone() else {
             return Task::none();
         };
-        let mut tasks = vec![self.repo_overview.refresh(&repo).map(Message::RepoOverview)];
+        let mut tasks = Vec::new();
+        if origin != MainTab::RepoOverview {
+            tasks.push(
+                self.repo_overview
+                    .reload_repo_state(&repo)
+                    .map(Message::RepoOverview),
+            );
+        }
         if origin != MainTab::Stage {
             tasks.push(self.stage_panel.load(&repo).map(Message::Stage));
         }

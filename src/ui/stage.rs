@@ -191,11 +191,21 @@ impl StagePanel {
     }
 
     /// Oublie le dépôt précédent et charge `repo` en tâche de fond.
+    /// Reloading the same repository keeps the commit and stash drafts.
     pub fn load(&mut self, repo: &RepoContext) -> Task<Message> {
-        *self = Self {
+        let fresh = Self {
             repo: Some(repo.path_arc()),
             ..Self::new()
         };
+        let previous = std::mem::replace(self, fresh);
+        if previous.repo.as_deref() == Some(repo.path()) {
+            self.commit_message = previous.commit_message;
+            self.include_signoff = previous.include_signoff;
+            self.selected_template = previous.selected_template;
+            self.signoff_line = previous.signoff_line;
+            self.stash_message = previous.stash_message;
+            self.include_untracked_in_stash = previous.include_untracked_in_stash;
+        }
         self.refresh()
     }
 
