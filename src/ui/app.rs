@@ -243,20 +243,15 @@ impl GitSpaceApp {
             }
             Message::RepoHeader(msg) => {
                 let finished = matches!(msg, repo_header::Message::ActionFinished { .. });
-                // A pull moves HEAD and the working tree of the open repository.
-                let pulled = matches!(
+                let changed = remote_action_succeeded(
                     &msg,
-                    repo_header::Message::ActionFinished {
-                        path,
-                        action: repo_header::RemoteAction::Pull,
-                        result: Ok(_),
-                    } if self.current_repo.as_ref().map(RepoContext::path) == Some(&**path)
+                    self.current_repo.as_ref().map(RepoContext::path),
                 );
                 let (task, toast) = self.repo_header.update(msg, &self.auth_manager);
                 if let Some(toast) = toast {
                     self.toasts.push(toast);
                 }
-                let reload = if pulled {
+                let reload = if changed {
                     self.reload_other_panels(Origin::Header)
                 } else {
                     Task::none()
@@ -463,7 +458,18 @@ impl GitSpaceApp {
                 Task::none()
             }
 
-            Message::WindowFocused => Task::batch([self.refresh_statuses(), self.reload_changes()]),
+            // A commit, a checkout or a fetch made elsewhere changes what every panel shows;
+            // History is left alone so that switching windows keeps its selection.
+            Message::WindowFocused => {
+                let panels = match self.current_repo.clone() {
+                    Some(repo) => Task::batch([
+                        self.repo_header.load(&repo).map(Message::RepoHeader),
+                        self.branches_panel.load(&repo).map(Message::Branches),
+                    ]),
+                    None => Task::none(),
+                };
+                Task::batch([self.refresh_statuses(), self.reload_changes(), panels])
+            }
 
             Message::CloneFolderScanned(paths) => {
                 if !self.config.merge_discovered(&paths) {
@@ -803,7 +809,7 @@ impl GitSpaceApp {
         }
 
         // Timer auto-fetch. Il est recree apres chaque operation du panneau, donc le prochain
-        // auto-fetch part un intervalle apres la derniere operation reseau ou le dernier chargement.
+        // auto-fetch part un intervalle apres la derniere operation reseau ou l'ouverture du depot.
         if self.config.preferences().auto_fetch_enabled()
             && self.current_repo.is_some()
             && !self.repo_header.is_busy()
@@ -985,6 +991,16 @@ fn shortcut(key: Key, modifiers: Modifiers, captured: bool, searching: bool) -> 
     }
 }
 
+/// Whether a fetch, pull or push on the open repository `current` succeeded: the remote
+/// branches, and after a pull HEAD and the working tree, then differ from what the panels show.
+fn remote_action_succeeded(msg: &repo_header::Message, current: Option<&str>) -> bool {
+    matches!(
+        msg,
+        repo_header::Message::ActionFinished { path, result: Ok(_), .. }
+            if current == Some(&**path)
+    )
+}
+
 fn accounts_message(message: preferences::accounts::Message) -> Message {
     Message::Preferences(preferences::Message::Accounts(message))
 }
@@ -1022,6 +1038,24 @@ mod tests {
 
     fn name(message: Option<Message>) -> String {
         message.map_or_else(|| "None".to_string(), |message| format!("{message:?}"))
+    }
+
+    #[test]
+    fn every_remote_action_that_succeeded_here_reloads_the_panels() {
+        let finished = |path: &str, action, result| repo_header::Message::ActionFinished {
+            path: Arc::from(path),
+            action,
+            result,
+        };
+        use repo_header::RemoteAction::{AutoFetch, Fetch, Pull, Push};
+        for action in [Fetch, AutoFetch, Pull, Push] {
+            let done = finished("/r", action, Ok("done".into()));
+            assert!(remote_action_succeeded(&done, Some("/r")), "{action:?}");
+            assert!(!remote_action_succeeded(&done, Some("/other")));
+            assert!(!remote_action_succeeded(&done, None));
+            let failed = finished("/r", action, Err("offline".into()));
+            assert!(!remote_action_succeeded(&failed, Some("/r")));
+        }
     }
 
     #[test]

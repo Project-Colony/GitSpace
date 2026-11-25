@@ -270,22 +270,17 @@ impl BranchPanel {
         }
     }
 
-    /// Reads the branches of `repo` in the background. Pinned branches stay; the filter,
-    /// the groups and the selection stay too when `repo` is already the open one.
+    /// Reads the branches of `repo` in the background. Another repository starts from an
+    /// empty panel with the pinned branches kept. The open one keeps everything, an open band
+    /// and a running action included: the window regaining focus reloads it.
     pub fn load(&mut self, repo: &RepoContext) -> Task<Message> {
-        let same = self.is_current(repo.path());
-        let pinned = std::mem::take(&mut self.pinned_branches);
-        let old = std::mem::replace(self, Self::new(pinned));
-        self.repo = Some(repo.path_arc());
-        // Keep request numbers growing so a reply from before the reset is dropped.
-        self.request = old.request;
-        if same {
-            self.filter = old.filter;
-            self.stale_only = old.stale_only;
-            self.collapsed = old.collapsed;
-            self.remote_pages = old.remote_pages;
-            self.selected = old.selected;
-            self.strategy = old.strategy;
+        if !self.is_current(repo.path()) {
+            let pinned = std::mem::take(&mut self.pinned_branches);
+            // Keep request numbers growing so a reply from before the reset is dropped.
+            let request = self.request;
+            *self = Self::new(pinned);
+            self.repo = Some(repo.path_arc());
+            self.request = request;
         }
         self.refresh()
     }
@@ -422,10 +417,7 @@ impl BranchPanel {
 
     /// The checked-out branch, or "HEAD" when none is.
     fn current_name(&self) -> &str {
-        self.branches
-            .iter()
-            .find(|branch| branch.is_head && branch.kind == BranchKind::Local)
-            .map_or("HEAD", |branch| branch.name.as_str())
+        head_name(&self.branches)
     }
 
     fn is_pinned(&self, name: &str) -> bool {
@@ -611,7 +603,11 @@ impl BranchPanel {
             }),
             Band::Delete => {
                 let done = tf("branches_deleted", &[("name", &name)]);
+                let merged = self
+                    .selected_branch()
+                    .is_some_and(|branch| branch.merged_into_head);
                 self.run("branches_delete_failed", move |repo| {
+                    ensure_unchanged(repo, &current, &name, merged)?;
                     delete_branch(repo, &name)
                         .map(|()| Outcome::Done(done))
                         .map_err(|err| err.to_string())
@@ -633,6 +629,7 @@ impl BranchPanel {
                 };
                 let done = tf(done, &[("branch", &name), ("current", &current)]);
                 self.run(failed, move |repo| {
+                    ensure_unchanged(repo, &current, &name, false)?;
                     let outcome = merge_branch(repo, &name, strategy)?;
                     Ok(if outcome.had_conflicts {
                         Outcome::Conflicts(outcome.conflicts)
@@ -1349,6 +1346,27 @@ fn pager<'a>(remote: &str, page: usize, pages: usize) -> Element<'a, Message> {
     .into()
 }
 
+/// The checked-out branch, or "HEAD" when none is.
+fn head_name(branches: &[BranchOverview]) -> &str {
+    branches
+        .iter()
+        .find(|branch| branch.is_head && branch.kind == BranchKind::Local)
+        .map_or("HEAD", |branch| branch.name.as_str())
+}
+
+/// Fails when HEAD is no longer `current`, or when `branch` was shown as merged into it and
+/// no longer is: the confirmation the user answered then describes another state.
+fn ensure_unchanged(repo: &str, current: &str, branch: &str, merged: bool) -> Result<(), String> {
+    let branches = list_branch_overview(repo).map_err(|err| err.to_string())?;
+    let still_merged = branches.iter().any(|overview| {
+        overview.kind == BranchKind::Local && overview.name == branch && overview.merged_into_head
+    });
+    if head_name(&branches) != current || (merged && !still_merged) {
+        return Err(t("branches_changed_outside").to_string());
+    }
+    Ok(())
+}
+
 fn note<'a>(label: String) -> Element<'a, Message> {
     container(note_line(label))
         .padding([12, 16])
@@ -1483,6 +1501,38 @@ mod tests {
             ]
         );
         assert!(remote_groups(&refs[..1]).is_empty());
+    }
+
+    #[test]
+    fn a_confirmed_action_stops_when_the_repository_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut init = git2::RepositoryInitOptions::new();
+        init.initial_head("main");
+        let repo = git2::Repository::init_opts(dir.path(), &init).unwrap();
+        let sig = git2::Signature::now("Tester", "tester@example.com").unwrap();
+        let tree = repo
+            .find_tree(repo.index().unwrap().write_tree().unwrap())
+            .unwrap();
+        let base = repo
+            .commit(Some("HEAD"), &sig, &sig, "base", &tree, &[])
+            .unwrap();
+        let base = repo.find_commit(base).unwrap();
+        for name in ["feature", "topic"] {
+            repo.branch(name, &base, false).unwrap();
+        }
+        let path = dir.path().to_str().unwrap();
+        assert_eq!(ensure_unchanged(path, "main", "topic", true), Ok(()));
+
+        // `git checkout feature` in a terminal: a band that says "into main" is stale.
+        repo.set_head("refs/heads/feature").unwrap();
+        assert!(ensure_unchanged(path, "main", "topic", false).is_err());
+        assert_eq!(ensure_unchanged(path, "feature", "topic", true), Ok(()));
+
+        // topic gets a commit of its own: it is no longer merged into feature.
+        repo.commit(Some("refs/heads/topic"), &sig, &sig, "own", &tree, &[&base])
+            .unwrap();
+        assert!(ensure_unchanged(path, "feature", "topic", true).is_err());
+        assert_eq!(ensure_unchanged(path, "feature", "topic", false), Ok(()));
     }
 
     #[test]

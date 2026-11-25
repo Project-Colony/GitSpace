@@ -40,6 +40,7 @@
   "branches_archived": "{branch} archivée sous {tag}",
   "branches_behind": "de retard sur {branch}",
   "branches_change_upstream": "Changer d'upstream…",
+  "branches_changed_outside": "Le dépôt a changé hors de GitSpace depuis cet affichage : rien n'a été fait. Vérifiez les branches et réessayez.",
   "branches_checked_out": "Basculé sur {name}",
   "branches_checkout": "Basculer dessus",
   "branches_checkout_failed": "Impossible de basculer sur la branche",

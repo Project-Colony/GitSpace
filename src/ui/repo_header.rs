@@ -156,7 +156,8 @@ pub struct RepoHeader {
     status: Option<RepoStatus>,
     remotes: Vec<RemoteInfo>,
     network: NetworkOptions,
-    /// The status and remotes are being read.
+    /// The status and remotes of a newly opened repository are being read; nothing runs
+    /// before they are known.
     loading: bool,
     /// The network operation running on `repo`.
     running: Option<RemoteAction>,
@@ -186,13 +187,14 @@ impl RepoHeader {
     }
 
     /// Reads the status and remotes of `repo` off the UI thread. Another repository starts
-    /// from an empty state.
+    /// from an empty state. Reading the open one again keeps the buttons usable and leaves
+    /// the auto-fetch timer running, so a reload on window focus does not delay auto-fetch.
     pub fn load(&mut self, repo: &RepoContext) -> Task<Message> {
         if self.repo.as_ref().map(RepoContext::path) != Some(repo.path()) {
             *self = Self::new(self.network.clone());
             self.repo = Some(repo.clone());
+            self.loading = true;
         }
-        self.loading = true;
 
         let path = repo.path_arc();
         Task::perform(

@@ -40,6 +40,7 @@
   "branches_archived": "Archived {branch} as {tag}",
   "branches_behind": "behind {branch}",
   "branches_change_upstream": "Change upstream…",
+  "branches_changed_outside": "The repository changed outside GitSpace after this was shown, so nothing was done. Check the branches and try again.",
   "branches_checked_out": "Checked out {name}",
   "branches_checkout": "Check out",
   "branches_checkout_failed": "Could not check out the branch",
