@@ -46,11 +46,7 @@ mod tests {
         let mut offenders = Vec::new();
         for file in files {
             let source = std::fs::read_to_string(&file).unwrap();
-            for (number, line) in source.lines().enumerate() {
-                // shortcut: everything after `#[cfg(test)]` counts as test code; test modules sit at the end of each file.
-                if line.trim_start().starts_with("#[cfg(test)]") {
-                    break;
-                }
+            for (number, line) in crate::ui::non_test_lines(&source) {
                 if line.contains("Color::from_rgb")
                     || has_hex_after(line, "0x")
                     || has_hex_after(line, "#")
